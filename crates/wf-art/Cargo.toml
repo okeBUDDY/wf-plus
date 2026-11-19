@@ -1,0 +1,8 @@
+[package]
+name = "wf-art"
+description = "The cooked art format: Slug curve/band data (GPU half) and the sprite tables (CPU half)."
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bytemuck.workspace = true

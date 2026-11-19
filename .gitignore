@@ -1,0 +1,8 @@
+/target
+# Original game files are never committed.
+/game/
+data.bin
+*.exe
+*.sco
+*.rec
+/.progress*

@@ -1267,11 +1267,25 @@ fn draw_actor(cx: &mut Cx, a: Aid) -> Aid {
 
 /// ActorSystem::DrawAll (0x4081f0).
 pub fn draw_all(cx: &mut Cx) {
+    draw_all_moved(cx, &[]);
+}
+
+/// DrawAll with the draws of some actors moved by an offset (display
+/// only: their positions and the hit image are left as they are).
+pub fn draw_all_moved(cx: &mut Cx, moved: &[(Aid, [f32; 2])]) {
     cx.actors.hit.clear();
     for layer in 0..ActorSystem::LAYERS {
         let mut a = cx.actors.layers[layer];
         while a != NIL {
-            a = draw_actor(cx, a);
+            let offset = moved.iter().find(|m| m.0 == a).map(|m| m.1);
+            if let Some(o) = offset {
+                cx.draw.set_origin(o);
+            }
+            let next = draw_actor(cx, a);
+            if offset.is_some() {
+                cx.draw.set_origin([0.0, 0.0]);
+            }
+            a = next;
         }
     }
 }

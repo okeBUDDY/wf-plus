@@ -3,6 +3,7 @@
 use super::Cx;
 use super::actor::{self, ActorDesc, Aid, Obj, sheet};
 use super::app::Stage;
+use super::arena;
 use super::background::BackgroundGrid;
 use super::fn_game::{self, FnGame, FnGameState};
 use super::input;
@@ -153,7 +154,7 @@ impl Stage for FnTitle {
         }
         // The menu keeps to the window's bottom-left corner and the scores
         // to its top-left; the logo and the hexagon stay centred.
-        let [vx, vy, _, vh] = cx.screen_view();
+        let [vx, vy, vw, vh] = cx.screen_view();
         cx.draw.set_origin([vx, vy + vh - 480.0]);
         if self.flags & FLAG_MENU_CURSOR != 0 {
             let t = Transform::translation(128.0, 408.0);
@@ -180,7 +181,21 @@ impl Stage for FnTitle {
             cx.fonts.small_text.print(&mut cx.draw, 32.0, 24.0, mode, None, palette[0], self.scores_shown.min(mode.len() as i16) as i32, Blend::Normal);
         }
         cx.draw.set_origin([0.0, 0.0]);
-        actor::draw_all(cx);
+        // The big W and F wait just outside the 640x480 screen (x 800 and
+        // -160) and slide in to 320 +- an offset that falls from 480 to 0.
+        // A wider window shows that margin, so until they arrive their
+        // draws are spread by the extra margin, in proportion to the
+        // offset: hidden while parked, at rest where the original puts
+        // them. Display only.
+        let margin = (vw - arena::W) * 0.5;
+        let mut moved = Vec::new();
+        if margin > 0.0 && self.time < STEP_INTRO + 2 {
+            for a in self.sweeps {
+                let dx = (cx.actors.get(a).x() - 320.0) / 480.0 * margin;
+                moved.push((a, [dx, 0.0]));
+            }
+        }
+        actor::draw_all_moved(cx, &moved);
     }
 
     fn is_menu(&self) -> bool {

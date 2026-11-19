@@ -19,6 +19,12 @@ frame-exact (see [Verification](#verification)).
 | ![options: game](docs/options.png) | ![options: display](docs/options-display.png) |
 | ![options: controls](docs/options-controls.png) | ![fonts](docs/viewer-fonts.png) |
 
+The menus fill the window at any aspect, here 2000x1253:
+
+| | |
+|---|---|
+| ![title, 2000x1253](docs/title-2000x1253.png) | ![options, 2000x1253](docs/options-2000x1253.png) |
+
 The Classic arena in a 21:9 window, with its border:
 ![classic arena border](docs/arena-border.png)
 

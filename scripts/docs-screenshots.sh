@@ -44,6 +44,9 @@ shot name-entry 9400 --size 1280x720 --arena hd --script "$play"
 shot options 640 --size 1280x720 --script "$options"
 shot options-display 640 --size 1280x720 --script "$options,520:e"
 shot options-controls 640 --size 1280x720 --script "$options,520:e,540:e,560:e"
+# The menus lay out to the whole window: a 16:10 one.
+shot title-2000x1253 300 --size 2000x1253 --script 60:z
+shot options-2000x1253 640 --size 2000x1253 --script "$options"
 replay boss "$REC_DIR/01-normal-bot-stage8/stage07.rec" 600
 replay explosions "$REC_DIR/01-normal-bot-stage8/stage07.rec" 1800
 shot viewer-fonts 120 --size 1280x720 --viewer

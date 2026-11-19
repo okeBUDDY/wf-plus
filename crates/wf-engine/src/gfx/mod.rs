@@ -138,6 +138,9 @@ pub struct DrawList {
     /// The screen fade: this colour at its alpha over the whole finished
     /// frame (alpha 0: none).
     pub fade: Argb,
+    /// A menu screen, laid out to the whole window: the arena pass is not
+    /// clipped to the arena, there is no arena border and no render scale.
+    pub menu: bool,
 }
 
 impl DrawList {
@@ -153,6 +156,7 @@ impl DrawList {
         self.pass = Pass::Arena;
         self.origin = [0.0; 2];
         self.fade = Argb(0);
+        self.menu = false;
     }
 
     /// Moves the draws that follow by `origin` (0, 0 to stop).

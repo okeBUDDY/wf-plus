@@ -573,6 +573,13 @@ impl FnOption {
         (row < Self::tab_items(cx).len()).then_some(row)
     }
 
+    /// Where the tabs and items are drawn from: kept to the window's right
+    /// edge, as they keep to the 640x480 screen's in the original.
+    fn block_origin(cx: &Cx) -> [f32; 2] {
+        let [vx, _, vw, _] = cx.screen_view();
+        [vx + vw - 640.0, 0.0]
+    }
+
     /// The tab-switch prompt for the device used last.
     fn hint(cx: &Cx) -> &'static str {
         match cx.ui.device {
@@ -586,7 +593,12 @@ impl FnOption {
     /// The pointer and the tab keys (display only: the options are not
     /// recorded). Returns the menu bits a click makes.
     fn pointer(&mut self, cx: &mut Cx, remap: Option<Kind>) -> u16 {
-        let ui = cx.ui.clone();
+        let mut ui = cx.ui.clone();
+        // Into the block's own units (it is drawn moved by `block_origin`).
+        let o = Self::block_origin(cx);
+        let local = |p: [f32; 2]| [p[0] - o[0], p[1] - o[1]];
+        ui.cursor = ui.cursor.map(local);
+        ui.click = ui.click.map(local);
         let tab = cx.options.tab;
         let n = TABS.len();
         // A key or button being remapped wins over the tab keys it shares.
@@ -835,6 +847,7 @@ impl Stage for FnOption {
         cx.draw.sprite(cx.art.shapes.hexagon, &t, Argb(0x6400_ff80), Blend::Normal);
 
         let id = Transform::IDENTITY;
+        cx.draw.set_origin(Self::block_origin(cx));
         // The tab strip: the current tab boxed and underlined.
         let tab = cx.options.tab;
         for (i, (name, _)) in TABS.iter().enumerate() {
@@ -879,9 +892,22 @@ impl Stage for FnOption {
             let y = ROW_Y + row as f32 * ROW_H;
             cx.fonts.small_text.print(&mut cx.draw, 320.0 + dx, y.trunc(), &self.items[item as usize], None, text, -1, Blend::Normal);
         }
-        let mut t = Transform::IDENTITY;
-        t.m[2][0] = -(((cx.app.frame_count & 0x3f) * 2) as f32);
-        t.m[2][1] = 450.0;
-        texels::draw(cx, &texels::font2_strip(1), &t, &TITLE_BAR, &TITLE_BAR_TEXELS, 0xc800_ff80);
+        // The band, at the window's bottom and repeated across its width
+        // (the text repeats every 64 units, so the copies join seamlessly).
+        cx.draw.set_origin([0.0, 0.0]);
+        let [vx, vy, vw, vh] = cx.screen_view();
+        let scroll = ((cx.app.frame_count & 0x3f) * 2) as f32;
+        let mut x = -scroll + ((vx + scroll) / 768.0).floor() * 768.0;
+        while x < vx + vw {
+            let mut t = Transform::IDENTITY;
+            t.m[2][0] = x;
+            t.m[2][1] = vy + vh - 30.0;
+            texels::draw(cx, &texels::font2_strip(1), &t, &TITLE_BAR, &TITLE_BAR_TEXELS, 0xc800_ff80);
+            x += 768.0;
+        }
+    }
+
+    fn is_menu(&self) -> bool {
+        true
     }
 }

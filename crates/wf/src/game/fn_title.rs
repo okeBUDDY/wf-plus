@@ -151,6 +151,10 @@ impl Stage for FnTitle {
             t.m[2][1] += 320.0;
             cx.draw.sprite(cx.art.shapes.hexagon, &t, Argb(0x8000_ff80), Blend::Normal);
         }
+        // The menu keeps to the window's bottom-left corner and the scores
+        // to its top-left; the logo and the hexagon stay centred.
+        let [vx, vy, _, vh] = cx.screen_view();
+        cx.draw.set_origin([vx, vy + vh - 480.0]);
         if self.flags & FLAG_MENU_CURSOR != 0 {
             let t = Transform::translation(128.0, 408.0);
             cx.draw.sprite(cx.art.shapes.menu_cursor, &t, Argb(((self.cursor_alpha as u32) << 24) | 0xffdd00), Blend::Normal);
@@ -165,6 +169,7 @@ impl Stage for FnTitle {
             cx.fonts.small_text.print(&mut cx.draw, 48.0, 436.0, note.as_bytes(), None, Argb(0x8000_ff80), -1, Blend::Normal);
             cx.fonts.small_text.print(&mut cx.draw, 48.0, 380.0, b"SELECT ARENA", None, Argb(0x80ff_c800), -1, Blend::Normal);
         }
+        cx.draw.set_origin([vx, vy]);
         if self.time >= 301 {
             let alpha = (-1i32).wrapping_sub(cx.app.frame_count.wrapping_mul(4) as i32) & 0xff;
             let mut palette = [Argb(0); 10];
@@ -174,7 +179,12 @@ impl Stage for FnTitle {
             let mode: &[u8] = if cx.scores.is_hd() { b"HD SCORES" } else { b"CLASSIC SCORES" };
             cx.fonts.small_text.print(&mut cx.draw, 32.0, 24.0, mode, None, palette[0], self.scores_shown.min(mode.len() as i16) as i32, Blend::Normal);
         }
+        cx.draw.set_origin([0.0, 0.0]);
         actor::draw_all(cx);
+    }
+
+    fn is_menu(&self) -> bool {
+        true
     }
 
     /// Move (0x41e300).

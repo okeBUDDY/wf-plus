@@ -108,7 +108,8 @@ impl Scaler {
 
     /// Draws `list` for a window of `size` into `out` at `scale`.
     pub fn render(&mut self, r: &mut Renderer, list: &DrawList, out: &wgpu::TextureView, size: (u32, u32), scale: f32) {
-        if (scale - 1.0).abs() < 1e-3 {
+        // Menus are always drawn at the window's resolution.
+        if (scale - 1.0).abs() < 1e-3 || list.menu {
             self.target = None;
             r.render(list, out, size);
             return;

@@ -17,6 +17,11 @@ pub trait Stage {
     fn update(&mut self, _cx: &mut Cx) {}
     /// Called every frame after the tasks ran, before the overlays.
     fn draw(&mut self, _cx: &mut Cx) {}
+    /// A menu screen (the port's): laid out to the whole window rather
+    /// than the 640x480 arena (see `Cx::screen_view`).
+    fn is_menu(&self) -> bool {
+        false
+    }
 }
 
 /// Application flags (AppSettings::Flags).
@@ -155,6 +160,7 @@ impl App {
             task::remove_up_to(cx, ListId::Overlays, 2);
         }
         cx.draw.reset();
+        cx.draw.menu = stage.is_menu();
         task::run_all(cx, ListId::Tasks);
         stage.draw(cx);
         task::run_all(cx, ListId::Overlays);

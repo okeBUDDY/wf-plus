@@ -600,7 +600,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
-            let [ax, ay, aw, ah] = layout.arena_px;
+            let [ax, ay, aw, ah] = if list.menu { [0, 0, size.0, size.1] } else { layout.arena_px };
             let instances = self.instance_buffer.slice(ring_offset..);
             let mut scissor = None;
             for batch in &self.batches {

@@ -201,7 +201,7 @@ impl Snapshots {
     /// The frame to show at `alpha`.
     pub fn frame(&mut self, alpha: f32, layout: &Layout, border: bool) -> &DrawList {
         gfx::interpolate(&self.prev, &self.cur, alpha, &mut self.shown);
-        if border {
+        if border && !self.shown.menu {
             add_border(&mut self.shown, layout);
         }
         &self.shown

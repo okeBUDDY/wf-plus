@@ -210,6 +210,16 @@ impl Cx {
         }
     }
 
+    /// The window as a rect (x, y, width, height) in the units of the
+    /// 640x480 arena it is centred on: 480 high and as wide as the window's
+    /// aspect, or 640 wide and taller for a window narrower than 4:3. The
+    /// menus lay out to it (display only).
+    pub fn screen_view(&self) -> [f32; 4] {
+        let wa = self.window_arena_width.max(1.0);
+        let (w, h) = if wa >= arena::W { (wa, 480.0) } else { (arena::W, 480.0 * arena::W / wa) };
+        [(arena::W - w) * 0.5, (480.0 - h) * 0.5, w, h]
+    }
+
     /// The arena a game started now gets.
     pub fn chosen_arena(&self) -> arena::Arena {
         match self.arena_choice {

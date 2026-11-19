@@ -25,6 +25,8 @@ pub mod texels;
 pub mod text;
 pub mod time;
 pub mod viewer;
+#[cfg(all(test, target_arch = "x86_64"))]
+mod x87_tests;
 
 use crate::art::Art;
 use crate::gfx::DrawList;

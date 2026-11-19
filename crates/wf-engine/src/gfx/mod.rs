@@ -8,13 +8,12 @@
 //!   tinted, normal or additive), now drawn from cooked Slug art;
 //! * [`DrawList::shape`] = `HL3D::DrawPoints` (untextured strips, fans,
 //!   lines) whose points come from game logic. The constant shapes (see
-//!   [`shape_table`]) are cooked sprites, drawn with [`DrawList::sprite`].
+//!   the game's shape table) are cooked sprites, drawn with [`DrawList::sprite`].
 //!
 //! Shapes are Slug layers too: filled triangles, and lines one screen pixel
 //! wide whatever the transform, as Direct3D 7 drew them.
 
 pub mod gpu;
-pub mod shape_table;
 pub mod transform;
 
 pub use wf_art::shape::Primitive;

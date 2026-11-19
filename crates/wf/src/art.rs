@@ -12,7 +12,7 @@ pub fn pack() -> Pack<'static> {
 /// Sprite lookups by name.
 pub struct Art {
     pub pack: Pack<'static>,
-    /// The cooked constant shapes (`gfx::shape_table`).
+    /// The cooked constant shapes (`crate::shape_table`).
     pub shapes: Shapes,
 }
 

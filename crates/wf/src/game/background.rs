@@ -7,7 +7,7 @@ use super::Cx;
 use super::input;
 use super::math::sin;
 use super::task::Task;
-use crate::gfx::shape_table::GRID_HALF_TILE as HALF_TILE;
+use crate::shape_table::GRID_HALF_TILE as HALF_TILE;
 use crate::gfx::{Argb, Blend, Transform};
 
 pub struct BackgroundGrid {

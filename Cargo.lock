@@ -1201,6 +1201,7 @@ dependencies = [
  "sdl3",
  "wf-art",
  "wf-cook",
+ "wf-engine",
  "wgpu",
 ]
 
@@ -1219,6 +1220,19 @@ dependencies = [
  "png",
  "roxmltree",
  "wf-art",
+]
+
+[[package]]
+name = "wf-engine"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "lewton",
+ "pollster",
+ "raw-window-handle",
+ "sdl3",
+ "wf-art",
+ "wgpu",
 ]
 
 [[package]]

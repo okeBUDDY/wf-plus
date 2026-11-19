@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 #[allow(dead_code)]
 mod shape_table {
-    include!("src/gfx/shape_table.rs");
+    include!("src/shape_table.rs");
 }
 
 fn main() {
@@ -32,7 +32,7 @@ fn main() {
         config.glyph_patterns = p.split(';').filter(|s| !s.is_empty()).map(str::to_string).collect();
     }
     config.shapes = shape_table::SHAPES;
-    println!("cargo:rerun-if-changed=src/gfx/shape_table.rs");
+    println!("cargo:rerun-if-changed=src/shape_table.rs");
     let (blob, report) = wf_cook::cook(&config).unwrap_or_else(|e| panic!("cooking the art failed: {e}"));
     // New vector glyphs appear as new files: watch the directories too.
     for w in &report.warnings {

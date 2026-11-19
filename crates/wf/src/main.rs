@@ -25,10 +25,9 @@
 mod art;
 mod data;
 mod game;
-mod gfx;
-mod log;
-mod platform;
-mod sound;
+mod shape_table;
+
+pub use wf_engine::{audio as sound, gfx, log, platform};
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

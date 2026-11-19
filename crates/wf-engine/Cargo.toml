@@ -1,0 +1,14 @@
+[package]
+name = "wf-engine"
+description = "The engine under the Warning Forever port: app loop, time, Slug renderer, assets, audio, input, config and the SDL3 platform."
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+wf-art.workspace = true
+bytemuck.workspace = true
+sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"] }
+wgpu = "30"
+pollster = "1"
+lewton = "0.10"
+raw-window-handle = "0.6"

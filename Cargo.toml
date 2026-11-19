@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wf-art", "crates/wf-cook", "crates/wf"]
+members = ["crates/wf-art", "crates/wf-cook", "crates/wf-engine", "crates/wf"]
 default-members = ["crates/wf"]
 
 [workspace.package]
@@ -10,6 +10,7 @@ version = "0.1.0"
 [workspace.dependencies]
 wf-art = { path = "crates/wf-art" }
 wf-cook = { path = "crates/wf-cook" }
+wf-engine = { path = "crates/wf-engine" }
 bytemuck = { version = "1.25", features = ["derive"] }
 
 [profile.dev.package."*"]

@@ -10,7 +10,7 @@ use super::score_table::RANK_NAMES;
 use super::sounds;
 use super::task::Task;
 use super::texels;
-use crate::gfx::shape_table::HEXAGON;
+use crate::shape_table::HEXAGON;
 use crate::gfx::{Argb, Blend, Primitive, Transform};
 
 pub const MODE_NONE: i32 = 0;

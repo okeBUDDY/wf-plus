@@ -2,7 +2,7 @@
 //! (SDL_Gamepad) and audio output.
 
 use super::{Event, GamepadState, Key, PadButton, RawInput};
-use crate::sound::{Mixer, OUTPUT_RATE};
+use crate::audio::{Mixer, OUTPUT_RATE};
 use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream, AudioStreamWithCallback};
 use sdl3::event::{Event as SdlEvent, WindowEvent};
 use sdl3::gamepad::{Axis, Button, Gamepad};

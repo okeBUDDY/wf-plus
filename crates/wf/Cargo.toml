@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 wf-art.workspace = true
+wf-engine.workspace = true
 bytemuck.workspace = true
 sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"] }
 wgpu = "30"

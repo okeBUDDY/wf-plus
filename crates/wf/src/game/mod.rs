@@ -278,3 +278,84 @@ pub(crate) mod tests {
         assert_eq!(cx.draw.draws.len(), 2);
     }
 }
+
+/// Slug coverage checks on the GPU (skipped when no adapter is found).
+#[cfg(test)]
+mod coverage_tests {
+    use crate::gfx::{Argb, Blend, DrawList, Transform};
+
+    fn renderer(art: &crate::art::Art) -> Option<crate::gfx::gpu::Renderer> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let (_, device, queue) = crate::gfx::gpu::create_device(&instance, None).ok()?;
+        Some(crate::gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &art.pack))
+    }
+
+    /// Pixels inside `rect` (x0, y0, x1, y1) of an RGBA image that are not
+    /// black.
+    fn holes(rgba: &[u8], width: u32, rect: [u32; 4]) -> usize {
+        let mut n = 0;
+        for y in rect[1]..rect[3] {
+            for x in rect[0]..rect[2] {
+                let p = &rgba[((y * width + x) * 4) as usize..][..3];
+                if p.iter().any(|&c| c != 0) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// An opaque black fill over white must leave no pixel inside it
+    /// uncovered, at any scale. The fill is the screen rectangle: two
+    /// triangles whose shared diagonal is stored once each way and must
+    /// cancel exactly.
+    #[test]
+    fn filled_quad_has_no_holes() {
+        let art = crate::art::Art::load();
+        let Some(mut r) = renderer(&art) else { return };
+        let mut failed = Vec::new();
+        for (w, h) in [(1280, 720), (640, 480), (2000, 1253), (1000, 1000)] {
+            let mut list = DrawList::new();
+            list.clear = Argb(0xffff_ffff);
+            list.sprite(art.shapes.screen, &Transform::IDENTITY, Argb(0xff00_0000), Blend::Normal);
+            let layout = crate::gfx::Layout::new(list.arena, (w, h));
+            let [ax, ay, aw, ah] = layout.arena_px;
+            let rgba = r.render_to_rgba(&list, w, h);
+            // One pixel in from the arena's edges (they are antialiased).
+            let n = holes(&rgba, w, [ax + 1, ay + 1, ax + aw - 1, ay + ah - 1]);
+            if n != 0 {
+                failed.push(format!("{n} at {w}x{h}"));
+            }
+        }
+        assert!(failed.is_empty(), "uncovered pixels: {}", failed.join(", "));
+    }
+
+    /// Not a check: renders every sprite and glyph, white-tinted over black,
+    /// into 1280x720 pages written as raw RGBA to `$WF_COVERAGE_DUMP` (for
+    /// comparing coverage across shader changes).
+    #[test]
+    #[ignore]
+    fn contact_sheet() {
+        let Some(dir) = std::env::var_os("WF_COVERAGE_DUMP") else { return };
+        let art = crate::art::Art::load();
+        let Some(mut r) = renderer(&art) else { return };
+        const COLS: usize = 16;
+        const ROWS: usize = 12;
+        const CELL: f32 = 40.0;
+        let ids: Vec<u32> = (0..art.count() as u32).collect();
+        for (page, chunk) in ids.chunks(COLS * ROWS).enumerate() {
+            let mut list = DrawList::new();
+            list.clear = Argb(0xff00_0000);
+            for (i, &id) in chunk.iter().enumerate() {
+                let b = art.pack.sprites[id as usize].bounds;
+                let s = ((CELL - 4.0) / (b[2] - b[0]).max(b[3] - b[1]).max(1.0)).min(4.0);
+                let mut t = Transform::translation(-(b[0] + b[2]) * 0.5, -(b[1] + b[3]) * 0.5);
+                t.scale(s, s);
+                t.translate((i % COLS) as f32 * CELL + CELL * 0.5, (i / COLS) as f32 * CELL + CELL * 0.5);
+                list.sprite(crate::gfx::SpriteId(id), &t, Argb(0xffff_ffff), Blend::Normal);
+            }
+            let rgba = r.render_to_rgba(&list, 1280, 720);
+            std::fs::write(std::path::Path::new(&dir).join(format!("sheet_{page}.rgba")), &rgba).unwrap();
+        }
+    }
+}

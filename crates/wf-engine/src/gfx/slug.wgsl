@@ -100,10 +100,23 @@ fn solve(p1: vec2<f32>, p2: vec2<f32>, p3: vec2<f32>) -> vec2<f32> {
         t1 = p1.y * 0.5 / b.y;
         t2 = t1;
     } else {
-        let ra = 1.0 / a.y;
+        // The roots are (b.y -+ d) / a.y. One of the two differences
+        // cancels when a.y is small next to b.y, as it is for a straight
+        // edge whose a.y is only the rounding left by subtracting the
+        // sample (an ulp of a 640-unit coordinate is far above 1/65536), so
+        // that root comes from the product of the roots, p1.y / a.y,
+        // instead.
         let d = sqrt(max(b.y * b.y - a.y * p1.y, 0.0));
-        t1 = (b.y - d) * ra;
-        t2 = (b.y + d) * ra;
+        let q = b.y + select(-d, d, b.y >= 0.0);
+        let near = p1.y / q;
+        let far = q / a.y;
+        if (b.y >= 0.0) {
+            t1 = near;
+            t2 = far;
+        } else {
+            t1 = far;
+            t2 = near;
+        }
     }
     return vec2<f32>((a.x * t1 - b.x * 2.0) * t1 + p1.x, (a.x * t2 - b.x * 2.0) * t2 + p1.x);
 }

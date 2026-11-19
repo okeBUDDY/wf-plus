@@ -22,6 +22,7 @@
 // Much of the game-facing API is ported ahead of the stages that use it.
 #![allow(dead_code)]
 
+mod app_info;
 mod art;
 mod data;
 mod game;
@@ -366,7 +367,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         display_cfg.render_scale = k;
     }
     game.cx.settings.display = display_cfg;
-    let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
+    let mut platform = platform::sdl::Platform::new(app_info::NAME, display_cfg.width, display_cfg.height)?;
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
     if let Some((w, h, rgba)) = icon() {
         platform.set_icon(w, h, &rgba);
@@ -407,6 +408,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn app_version_is_the_crate_version() {
+        let v = super::app_info::VERSION;
+        assert_eq!(env!("CARGO_PKG_VERSION"), format!("{}.{}.{}", v[0], v[1], v[2]));
+        assert_eq!(super::app_info::VERSION_TEXT, format!("{}.{}.{}.{}", v[0], v[1], v[2], v[3]));
+    }
+
     #[test]
     fn window_icon_decodes() {
         let (w, h, rgba) = super::icon().expect("assets/icon/windows/wf_256.png");

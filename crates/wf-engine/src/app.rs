@@ -248,7 +248,8 @@ pub fn run_windowed(
         fps.frame(now);
         game.set_fps(fps.fps as f32);
         if cfg.show_fps && now.duration_since(title_at).as_secs_f32() > 0.5 {
-            platform.set_title(&format!("WARNING FOREVER - {:.0} fps", fps.fps));
+            let title = format!("{} - {:.0} fps", platform.title, fps.fps);
+            platform.set_title(&title);
             title_at = now;
         }
         limiter.wait(cfg.fps_cap);

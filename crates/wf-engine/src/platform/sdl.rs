@@ -22,6 +22,8 @@ pub struct Platform {
     last_device: Device,
     mouse_inside: bool,
     wheel: f32,
+    /// The window's title as created (the FPS display appends to it).
+    pub title: String,
 }
 
 pub struct MixerCallback {
@@ -152,6 +154,7 @@ impl Platform {
         let audio_sys = sdl.audio().ok();
         let events = sdl.event_pump().map_err(|e| e.to_string())?;
         Ok(Platform {
+            title: title.to_string(),
             _sdl: sdl,
             _video: video,
             gamepad_sys,

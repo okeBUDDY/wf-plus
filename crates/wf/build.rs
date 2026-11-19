@@ -15,17 +15,30 @@ mod shape_table {
     include!("src/shape_table.rs");
 }
 
-/// Embeds assets/icon/wf.ico as the exe's icon when building for Windows
-/// on Windows (winresource needs the Windows resource compiler).
+#[allow(dead_code)]
+mod app_info {
+    include!("src/app_info.rs");
+}
+
+#[cfg(target_os = "windows")]
+mod windows_resource {
+    use super::app_info;
+    include!("windows_resource.rs");
+}
+
+/// Embeds the version resource, the icon (assets/icon/wf.ico) and the
+/// manifest when building for Windows on Windows (winresource needs the
+/// Windows resource compiler).
 #[cfg(target_os = "windows")]
 fn embed_icon(manifest: &std::path::Path) {
     let ico = manifest.join("../../assets/icon/wf.ico");
     println!("cargo:rerun-if-changed={}", ico.display());
+    println!("cargo:rerun-if-changed=src/app_info.rs");
+    println!("cargo:rerun-if-changed=windows_resource.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let mut res = winresource::WindowsResource::new();
-        res.set_icon(&ico.to_string_lossy());
+        let res = windows_resource::windows_resource(&ico.to_string_lossy());
         if let Err(e) = res.compile() {
-            println!("cargo:warning=icon: {e}");
+            println!("cargo:warning=windows resource: {e}");
         }
     }
 }

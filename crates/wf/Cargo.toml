@@ -2,7 +2,8 @@
 name = "wf"
 description = "Warning Forever, ported to Rust."
 edition.workspace = true
-version.workspace = true
+# The original's version (see src/app_info.rs).
+version = "1.0.8"
 build = "build.rs"
 
 [dependencies]

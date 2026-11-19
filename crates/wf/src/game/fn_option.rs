@@ -157,7 +157,7 @@ const TABS: [(&str, &[Item]); 5] = {
 const TAB_Y: f32 = 104.0;
 const TAB_X: [f32; 5] = [320.0, 368.0, 440.0, 496.0, 576.0];
 /// The gamepad buttons' names, by `PadButton::TRIGGERS` index.
-const PAD_NAMES: [&str; 10] = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS"];
+pub const PAD_NAMES: [&str; 10] = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS"];
 
 /// Seconds of each START TIME, 0: none (0x45da00).
 const START_TIMES: [i16; 10] = [0, 10, 30, 60, 120, 180, 240, 300, 600, 999];
@@ -839,6 +839,7 @@ impl Stage for FnOption {
 
     /// Draw (0x41d880), with the tab strip over the items.
     fn draw(&mut self, cx: &mut Cx) {
+        cx.guide = Some(super::guide::Guide::Options);
         let mut t = Transform::IDENTITY;
         t.scale(65.0, 65.0);
         let t = super::background::rotate(&t, cx.app.frame_count.wrapping_mul(3) as i32);

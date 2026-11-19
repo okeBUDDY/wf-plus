@@ -42,6 +42,10 @@ pub struct Settings {
     pub input_dirty: bool,
     /// The display rate measured last, for SHOW FPS.
     pub fps: f32,
+    /// When the input guide shows (`ui.input_guide`).
+    pub input_guide: super::guide::Policy,
+    /// The device the guide names, when forced (`--guide`, screenshots).
+    pub guide_device: Option<Device>,
 }
 
 impl Default for Settings {
@@ -56,6 +60,8 @@ impl Default for Settings {
             touch_scale: 1.0,
             input_dirty: true,
             fps: 0.0,
+            input_guide: Default::default(),
+            guide_device: None,
         }
     }
 }
@@ -75,6 +81,7 @@ impl Settings {
     pub fn load(c: &Config) -> Self {
         let mut s = Settings { display: DisplayConfig::from_config(c), ..Default::default() };
         s.fps_custom = c.get_or("display.fps_custom", s.fps_custom).clamp(1.0, 1000.0);
+        s.input_guide = c.get("ui.input_guide").and_then(super::guide::Policy::parse).unwrap_or_default();
         let b = Bindings::from_config(c);
         s.mouse_steering = b.mouse_steering;
         s.dead_zone = b.dead_zone;
@@ -92,6 +99,7 @@ impl Settings {
     pub fn store(&self, c: &mut Config) {
         self.display.store(c);
         c.set("display.fps_custom", self.fps_custom);
+        c.set("ui.input_guide", self.input_guide.name());
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
         }

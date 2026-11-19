@@ -144,6 +144,7 @@ impl Stage for FnTitle {
 
     /// Draw (0x41eae0).
     fn draw(&mut self, cx: &mut Cx) {
+        cx.guide = Some(if self.choosing { super::guide::Guide::ArenaSelect } else { super::guide::Guide::Menu });
         if self.hex_scale > 0.0 {
             let mut t = Transform::IDENTITY;
             t.scale(self.hex_scale, self.hex_scale);
@@ -164,11 +165,13 @@ impl Stage for FnTitle {
         if self.choosing {
             let a = cx.chosen_arena();
             let note = match a.mode {
-                super::arena::Mode::Classic => "640x480 ARENA".to_string(),
-                super::arena::Mode::Hd => format!("{}x{} ARENA, FITS THE WINDOW", a.width, a.height),
+                super::arena::Mode::Classic => "640X480 ARENA".to_string(),
+                super::arena::Mode::Hd => format!("{}X{} ARENA, FITS THE WINDOW", a.width, a.height),
             };
-            cx.fonts.small_text.print(&mut cx.draw, 48.0, 436.0, note.as_bytes(), None, Argb(0x8000_ff80), -1, Blend::Normal);
-            cx.fonts.small_text.print(&mut cx.draw, 48.0, 380.0, b"SELECT ARENA", None, Argb(0x80ff_c800), -1, Blend::Normal);
+            // Even 8-unit gaps: heading (368-376), up chevron (384-392),
+            // name (400-416), down chevron (424-432), description (440-448).
+            cx.fonts.small_text.print(&mut cx.draw, 48.0, 440.0, note.as_bytes(), None, Argb(0x8000_ff80), -1, Blend::Normal);
+            cx.fonts.small_text.print(&mut cx.draw, 48.0, 368.0, b"SELECT ARENA", None, Argb(0x80ff_c800), -1, Blend::Normal);
         }
         cx.draw.set_origin([vx, vy]);
         if self.time >= 301 {

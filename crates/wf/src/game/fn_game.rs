@@ -271,6 +271,10 @@ impl Stage for FnGame {
                     if cx.fn_game.flags & FnGameState::PLAYBACK == 0 {
                         records::save_replay(cx, false);
                         cx.hud.request_mode(hud::MODE_RESULT);
+                    } else if cx.settings.guide_device.is_some() {
+                        // --guide: the result screen in a replay too (for
+                        // screenshots of the input guide; display only).
+                        cx.hud.request_mode(hud::MODE_RESULT);
                     }
                     cx.actors.flags &= !1;
                     cx.fn_game.state += 1;
@@ -391,6 +395,20 @@ impl Stage for FnGame {
 
     /// Draw (0x41bea0).
     fn draw(&mut self, cx: &mut Cx) {
+        // The input guide, off active play only: the arena keeps its size.
+        // (In a replay too when forced, for screenshots.)
+        if cx.fn_game.flags & FnGameState::PLAYBACK == 0 || cx.settings.guide_device.is_some() {
+            use super::guide::Guide;
+            cx.guide = if cx.app.flags & super::AppFlags::TIME_STOPPED != 0 {
+                Some(Guide::Paused)
+            } else {
+                match cx.hud.mode {
+                    super::hud::MODE_RESULT | super::hud::MODE_GAME_OVER => Some(Guide::Skip),
+                    super::hud::MODE_NAME_ENTRY => Some(Guide::NameEntry),
+                    _ => None,
+                }
+            };
+        }
         actor::draw_all(cx);
     }
 }

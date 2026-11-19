@@ -161,6 +161,7 @@ impl App {
         }
         cx.draw.reset();
         cx.draw.menu = stage.is_menu();
+        cx.guide = None;
         task::run_all(cx, ListId::Tasks);
         stage.draw(cx);
         task::run_all(cx, ListId::Overlays);

@@ -33,6 +33,9 @@ const TEXT_COLOR: u32 = 0xc8ff_c800;
 pub struct HudState {
     pub mode: i32,
     pub next_mode: i32,
+    /// Display only: where the replay's date starts on the bottom row (the
+    /// FPS counter keeps left of it), when it is there.
+    pub corner: Option<f32>,
 }
 
 impl HudState {
@@ -324,6 +327,8 @@ impl GameHud {
             y += 36.0;
         }
 
+        // Above the input guide's strip when it shows (display only).
+        cx.draw.set_origin([0.0, -super::guide::lift(cx)]);
         let t = Transform::translation(self.title_slide + 360.0, 404.0);
         self.title_pos.0 = self.title_slide as i32 + 360;
         cx.draw.sprite(cx.art.shapes.title_line, &t, Argb(0xc8ff_c800), Blend::Normal);
@@ -334,6 +339,7 @@ impl GameHud {
         let font = if english { &cx.fonts.title } else { &cx.fonts.kana };
         font.print(&mut cx.draw, px + 20.0, py, &self.texts[2], None, c, -1, Blend::Normal);
         cx.fonts.text.print(&mut cx.draw, px + 144.0, 408.0, &self.texts[1], None, c, -1, Blend::Normal);
+        cx.draw.set_origin([0.0; 2]);
     }
 
     /// EnterName (0x41f600): true once the name is ended.
@@ -587,7 +593,9 @@ impl GameHud {
     fn draw_result(&mut self, cx: &mut Cx) {
         let mut t = Transform::IDENTITY;
         t.scale(1.0, self.result_bar);
-        t.translate(-(((cx.app.frame_count & 0x3f) * 2) as f32), 460.0);
+        // Above the input guide's strip when it shows (display only).
+        let lift = super::guide::lift(cx);
+        t.translate(-(((cx.app.frame_count & 0x3f) * 2) as f32), 460.0 - lift);
         for k in band_copies(cx) {
             texels::draw(cx, &texels::font2_strip(0), &along(&t, k), &RESULT_BAR, &RESULT_BAR_TEXELS, 0xc800_ff80);
         }
@@ -596,7 +604,7 @@ impl GameHud {
         palette[1] = Argb(alpha(self.result_alpha, 200.0) | 0xffc800);
         let len = (self.result_length as i32).max(1);
         let y = 448 - self.result_height * self.result_shown as i32 / len;
-        cx.draw.set_origin([cx.hud_view().0, 0.0]);
+        cx.draw.set_origin([cx.hud_view().0, -lift]);
         cx.fonts.small_text.print(&mut cx.draw, 16.0, y as f32, &self.texts[0], Some(&palette), palette[0], self.result_shown as i32, Blend::Normal);
         cx.draw.set_origin([0.0; 2]);
     }
@@ -698,10 +706,22 @@ impl Task for GameHud {
         if self.flags & FLAG_REPLAY == 0 {
             cx.draw.set_origin([0.0; 2]);
         }
+        cx.hud.corner = None;
         if self.flags & FLAG_REPLAY != 0 {
+            // Above the input guide's strip when it shows; otherwise the
+            // FPS counter keeps left of the date (display only).
+            let mut lift = super::guide::lift(cx);
+            if cx.hud.mode == MODE_RESULT {
+                // Clear of the result's band (a forced guide's screenshots).
+                lift += 32.0;
+            }
+            if lift == 0.0 {
+                cx.hud.corner = Some(left + width - 640.0 + 512.0);
+            }
+            cx.draw.set_origin([left + width - 640.0, -lift]);
             cx.fonts.small_text.print(&mut cx.draw, self.replay_name_x as f32, 456.0, &self.replay_name, None, c, -1, Blend::Normal);
             cx.fonts.small_text.print(&mut cx.draw, 512.0, 468.0, &self.replay_date, None, c, -1, Blend::Normal);
-            cx.draw.set_origin([left, 0.0]);
+            cx.draw.set_origin([left, -lift]);
             if cx.fn_game.mode == 1 {
                 let help = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
                 cx.fonts.small_text.print(&mut cx.draw, 0.0, 460.0, help, None, c, -1, Blend::Normal);

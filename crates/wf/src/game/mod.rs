@@ -14,6 +14,7 @@ pub mod fade;
 pub mod fn_game;
 pub mod fn_option;
 pub mod fn_title;
+pub mod guide;
 pub mod hud;
 pub mod game_state;
 pub mod input;
@@ -108,6 +109,9 @@ pub struct Cx {
     pub settings: settings::Settings,
     /// The menus' pointer and tab input.
     pub ui: settings::UiInput,
+    /// The input guide this frame's screen asks for (`guide`; display
+    /// only, cleared each frame).
+    pub guide: Option<guide::Guide>,
 }
 
 impl Cx {
@@ -152,6 +156,7 @@ impl Cx {
             port: Default::default(),
             settings: Default::default(),
             ui: Default::default(),
+            guide: None,
         };
         actor::controls::register_all(&mut cx);
         let Cx { enm, rng, .. } = &mut cx;
@@ -214,10 +219,20 @@ impl Cx {
     /// 640x480 arena it is centred on: 480 high and as wide as the window's
     /// aspect, or 640 wide and taller for a window narrower than 4:3. The
     /// menus lay out to it (display only).
+    ///
+    /// With an input guide the menus' screen is `guide::STRIP` taller
+    /// (below 480); this is the part above the strip.
     pub fn screen_view(&self) -> [f32; 4] {
-        let wa = self.window_arena_width.max(1.0);
-        let (w, h) = if wa >= arena::W { (wa, 480.0) } else { (arena::W, 480.0 * arena::W / wa) };
-        [(arena::W - w) * 0.5, (480.0 - h) * 0.5, w, h]
+        let [x, y, w, h] = self.window_view();
+        [x, y, w, h - guide::menu_strip(self)]
+    }
+
+    /// The whole window in the same units, guide strip included.
+    pub fn window_view(&self) -> [f32; 4] {
+        let aspect = self.window_arena_width.max(1.0) / 480.0;
+        let bh = 480.0 + guide::menu_strip(self);
+        let (w, h) = if bh * aspect >= arena::W { (bh * aspect, bh) } else { (arena::W, arena::W / aspect) };
+        [(arena::W - w) * 0.5, (bh - h) * 0.5, w, h]
     }
 
     /// The arena a game started now gets.

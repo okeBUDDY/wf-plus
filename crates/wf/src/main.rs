@@ -50,6 +50,8 @@ struct Options {
     render_scale: Option<f32>,
     /// The arena of new games (else the last choice).
     arena: Option<game::arena::Mode>,
+    /// Always show the input guide, for this device (screenshots).
+    guide: Option<platform::Device>,
     /// Measure the uncapped frame rate for this many seconds (headless).
     bench: Option<f64>,
     /// Headless input: keys held on given frames.
@@ -86,7 +88,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|touch]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -106,6 +108,7 @@ fn options() -> Options {
         render_scale: None,
         bench: None,
         arena: None,
+        guide: None,
         script: Vec::new(),
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
         viewer: false,
@@ -142,6 +145,14 @@ fn options() -> Options {
                     _ => usage(),
                 })
             }
+            "--guide" => {
+                o.guide = Some(match value().as_str() {
+                    "keyboard" => platform::Device::Keyboard,
+                    "gamepad" => platform::Device::Gamepad,
+                    "touch" => platform::Device::Touch,
+                    _ => usage(),
+                })
+            }
             "--bench" => o.bench = Some(value().parse().unwrap_or_else(|_| usage())),
             "--script" => {
                 for item in value().split(',') {
@@ -170,6 +181,10 @@ fn startup(o: &Options) -> Result<(Cx, App), String> {
     let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
     game::time::set_utc_offset(platform::sdl::local_utc_offset());
     cx.open_home(o.home.clone());
+    if let Some(device) = o.guide {
+        cx.settings.input_guide = game::guide::Policy::Always;
+        cx.settings.guide_device = Some(device);
+    }
     if let Some(path) = &o.hash_log {
         game::debug::start_hash_log(&mut cx, path).map_err(|e| format!("{}: {e}", path.display()))?;
     }
@@ -223,12 +238,9 @@ impl wf_engine::app::Game for WfGame {
             self.cx.ui.update(actions);
         }
         let made = self.app.frame(&mut self.cx);
-        if made && self.cx.settings.display.show_fps {
-            // SHOW FPS: the display rate, bottom right (display only).
-            let text = format!("{:.0} FPS", self.cx.settings.fps);
-            let x = self.cx.arena.width - 8.0 * text.len() as f32 - 6.0;
-            let y = self.cx.arena.height - 14.0;
-            self.cx.fonts.small_text.print(&mut self.cx.draw, x, y, text.as_bytes(), None, gfx::Argb(0xa0ff_ffff), -1, gfx::Blend::Normal);
+        if made {
+            // The input guide and SHOW FPS along the bottom (display only).
+            game::guide::draw(&mut self.cx);
         }
         made
     }
@@ -301,6 +313,7 @@ fn script_input(o: &Options, frame: u32) -> RawInput {
 fn run_headless(o: &Options) -> Result<(), String> {
     let (cx, app) = startup(o)?;
     let mut game = WfGame { cx, app, synced: None };
+    game.cx.settings.display.show_fps |= o.show_fps;
     let size = o.size.unwrap_or((1280, 720));
     game.cx.window_arena_width = wf_engine::app::window_arena(size)[0];
     if let Some(mode) = o.arena {

@@ -309,12 +309,11 @@ impl Renderer {
     }
 
     fn push_batch(&mut self, kind: BatchKind, blend: Blend, start: u32, end: u32) {
-        if let Some(last) = self.batches.last_mut() {
-            if last.kind == kind && last.blend == blend && last.end == start {
+        if let Some(last) = self.batches.last_mut()
+            && last.kind == kind && last.blend == blend && last.end == start {
                 last.end = end;
                 return;
             }
-        }
         self.batches.push(Batch { kind, blend, start, end });
     }
 

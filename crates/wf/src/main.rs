@@ -8,6 +8,17 @@
 //! * backends: `gfx::gpu` (wgpu, Slug rendering of the cooked art) and
 //!   `platform::sdl` (SDL3 window, keyboard, gamepads, audio).
 
+// The port keeps the decomp's shapes: its argument lists, index loops over
+// parallel tables, constants written as the original's literals and
+// negated float comparisons (which differ from their opposites on NaN).
+#![allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::type_complexity
+)]
+
 // Much of the game-facing API is ported ahead of the stages that use it.
 #![allow(dead_code)]
 
@@ -111,14 +122,13 @@ fn options() -> Options {
             _ => usage(),
         }
     }
-    if !o.data.exists() {
-        if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+    if !o.data.exists()
+        && let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
             let beside = exe_dir.join("data.bin");
             if beside.exists() {
                 o.data = beside;
             }
         }
-    }
     o
 }
 
@@ -287,14 +297,13 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         if drew {
             display.renderer.time = cx.app.frame_count as f32 / 58.8;
             display.present(&cx.draw);
-            if let (Some(path), false) = (&o.screenshot, screenshot_taken) {
-                if cx.app.frame_count >= o.frames {
+            if let (Some(path), false) = (&o.screenshot, screenshot_taken)
+                && cx.app.frame_count >= o.frames {
                     let (w, h) = (display.config.width, display.config.height);
                     let rgba = display.renderer.render_to_rgba(&cx.draw, w, h);
                     save_png(path, w, h, &rgba)?;
                     screenshot_taken = true;
                 }
-            }
         }
     }
     drop(display);

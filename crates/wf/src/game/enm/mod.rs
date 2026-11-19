@@ -149,11 +149,10 @@ impl EnmPlan {
         if kind != 0 && kind != WEAPON_KIND {
             return self.parts.iter().rposition(|p| p.item.code == code && p.item.kind == kind).map(|i| PartRef::Part(i as u16));
         }
-        if kind == 0 {
-            if let Some(i) = self.parts.iter().rposition(|p| p.item.code == code) {
+        if kind == 0
+            && let Some(i) = self.parts.iter().rposition(|p| p.item.code == code) {
                 return Some(PartRef::Part(i as u16));
             }
-        }
         self.weapons.iter().rposition(|w| w.item.code == code).map(|i| PartRef::Weapon(i as u16))
     }
 
@@ -237,12 +236,7 @@ pub struct DestroyRecord {
 
 /// Adds `delta`, keeping the value within 0..0x400 (AddClamped).
 pub fn add_clamped(value: &mut i16, delta: i32) {
-    *value = value.wrapping_add(delta as i16);
-    if *value > 0x400 {
-        *value = 0x400;
-    } else if *value < 0 {
-        *value = 0;
-    }
+    *value = value.wrapping_add(delta as i16).clamp(0, 0x400);
 }
 
 /// Destructions counted for one side of the boss (EnmSideStats, 10 bytes).

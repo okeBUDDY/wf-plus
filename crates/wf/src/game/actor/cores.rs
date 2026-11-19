@@ -190,7 +190,7 @@ pub fn core_move(cx: &mut Cx, id: i16, a: Aid) -> bool {
             d.y = sy;
             d.speed = speed;
             d.work = slot;
-            let mut angle = cx.actors.screen_angle(a) as i16 as i32 - ((count - 1) * spread >> 1);
+            let mut angle = cx.actors.screen_angle(a) as i16 as i32 - (((count - 1) * spread) >> 1);
             for _ in 0..count {
                 cx.ctl.desc41.start_angle = angle as u16;
                 let d = cx.ctl.desc41;
@@ -399,7 +399,7 @@ pub fn laser_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
         cx.ctl.beam_desc.y -= 42.0;
         x += dx;
         y += dy;
-        if i > 8 && (x < -120.0 || x > 760.0 || y < -120.0 || y > 600.0) {
+        if i > 8 && (!(-120.0..=760.0).contains(&x) || !(-120.0..=600.0).contains(&y)) {
             break;
         }
     }

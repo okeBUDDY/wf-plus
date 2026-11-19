@@ -210,7 +210,7 @@ pub fn cos(angle: i32) -> f32 {
 /// gives 0x80000000 like the x87 integer indefinite.
 #[inline]
 pub fn ftol(f: f32) -> i32 {
-    if f.is_nan() || f >= 2147483648.0 || f < -2147483648.0 { i32::MIN } else { f as i32 }
+    if f.is_nan() || !(-2147483648.0..2147483648.0).contains(&f) { i32::MIN } else { f as i32 }
 }
 
 /// `static_cast<short>(f)`.

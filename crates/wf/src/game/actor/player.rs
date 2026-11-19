@@ -267,12 +267,11 @@ pub fn on_move(cx: &mut Cx, a: Aid) -> bool {
                 x.color = 0xffff_ffff;
             }
         }
-    } else if cx.actors.flags & 1 != 0 {
-        if let Some(hit) = cx.actors.hit_test(a) {
+    } else if cx.actors.flags & 1 != 0
+        && let Some(hit) = cx.actors.hit_test(a) {
             crate::game::enm::on_actor_destroyed(cx, hit, a);
             return false;
         }
-    }
     if firing {
         fire(cx, a);
         cx.actors.w::<PlayerWork>(a).shots += 1;

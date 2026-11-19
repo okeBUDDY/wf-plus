@@ -274,7 +274,7 @@ pub fn c19_create(cx: &mut Cx, a: Aid) -> bool {
 }
 
 fn grey(alpha: i32) -> u32 {
-    (((((alpha as u32 | 0xffff_ff00) << 8) | alpha as u32) << 8) | alpha as u32) as u32
+    ((((alpha as u32 | 0xffff_ff00) << 8) | alpha as u32) << 8) | alpha as u32
 }
 
 /// Turns the rings and sets their colour.

@@ -118,6 +118,7 @@ pub struct Mixer(Arc<Mutex<MixerState>>);
 impl Mixer {
     /// Mixes interleaved stereo samples at [`OUTPUT_RATE`] into `out`
     /// (overwriting it).
+    #[allow(clippy::mut_range_bound)]
     pub fn mix(&self, out: &mut [f32]) {
         out.fill(0.0);
         let mut s = self.0.lock().unwrap();
@@ -166,6 +167,8 @@ impl Mixer {
                                 Some(n) if n.len() >= 4 => {
                                     v.pos = (v.pos - src_frames as f64).max(0.0);
                                     v.samples = Some(n);
+                                    // The next piece starts at this frame: the
+                                    // outer loop builds a new range from it.
                                     start = f;
                                     continue 'piece;
                                 }

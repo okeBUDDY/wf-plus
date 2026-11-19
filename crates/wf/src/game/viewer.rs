@@ -84,7 +84,7 @@ impl Stage for Viewer {
             self.page = (self.page + pages - 1) % pages;
             self.selected = 0;
         }
-        let on_page = self.sprites.len().saturating_sub(self.page * PER_PAGE).min(PER_PAGE).max(1);
+        let on_page = self.sprites.len().saturating_sub(self.page * PER_PAGE).clamp(1, PER_PAGE);
         if pressed & DOWN != 0 {
             self.selected = (self.selected + 1) % on_page;
         }

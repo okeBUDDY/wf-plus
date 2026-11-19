@@ -74,13 +74,12 @@ pub fn trace(bitmap: &Bitmap, rect: &Rect, alpha_levels: u32) -> Vec<TracedLayer
                     } else {
                         0
                     };
-                    if let Some((start, d)) = run {
-                        if d != dir {
+                    if let Some((start, d)) = run
+                        && d != dir {
                             let (a, b) = (Vec2::new(start as f32, y as f32), Vec2::new(x as f32, y as f32));
                             curves.push(if d > 0 { Curve::line(a, b) } else { Curve::line(b, a) });
                             run = None;
                         }
-                    }
                     if dir != 0 && run.is_none() {
                         run = Some((x, dir));
                     }
@@ -98,13 +97,12 @@ pub fn trace(bitmap: &Bitmap, rect: &Rect, alpha_levels: u32) -> Vec<TracedLayer
                     } else {
                         0
                     };
-                    if let Some((start, d)) = run {
-                        if d != dir {
+                    if let Some((start, d)) = run
+                        && d != dir {
                             let (a, b) = (Vec2::new(x as f32, start as f32), Vec2::new(x as f32, y as f32));
                             curves.push(if d > 0 { Curve::line(a, b) } else { Curve::line(b, a) });
                             run = None;
                         }
-                    }
                     if dir != 0 && run.is_none() {
                         run = Some((y, dir));
                     }

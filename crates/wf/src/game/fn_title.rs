@@ -303,8 +303,8 @@ impl Stage for FnTitle {
                     }
                 }
             }
-            t if t == STEP_SELECTED + 1 => {
-                if !fading {
+            t if t == STEP_SELECTED + 1
+                && !fading => {
                     match self.menu {
                         MENU_REPLAY => cx.app.finish(Some(Box::new(FnGame::new()))),
                         MENU_OPTION => cx.app.finish(Some(Box::new(super::fn_option::FnOption::new()))),
@@ -312,7 +312,6 @@ impl Stage for FnTitle {
                         _ => {}
                     }
                 }
-            }
             _ => {}
         }
         if self.flags & FLAG_TITLE_SHOWN == 0 && cx.input.pad(0).pressed & SKIP_KEYS != 0 {

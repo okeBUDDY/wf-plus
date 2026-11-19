@@ -275,8 +275,7 @@ mod tests {
         t.entries[0].score = 123;
         assert!(t.store());
         assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, 12 + 2 * RECORD_SIZE);
-        let mut u = ScoreTable::default();
-        u.path = Some(path);
+        let mut u = ScoreTable { path: Some(path), ..Default::default() };
         u.set_rules(&GameRules { stock: 3, ..Default::default() });
         assert!(u.load());
         assert_eq!(u.entries[0].score, 123);

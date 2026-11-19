@@ -1038,16 +1038,14 @@ pub fn move_actor(cx: &mut Cx, a: Aid) -> bool {
         }
     }
     let t = cx.actors.get(a).team;
-    if t & (team::HITS | team::HIT_BY_OTHERS) != 0 && cx.actors.flags & 1 != 0 {
-        if let Some(other) = cx.actors.hit_test(a) {
-            if cx.actors.get(other).team & team::DAMAGE_MASK != 0 {
+    if t & (team::HITS | team::HIT_BY_OTHERS) != 0 && cx.actors.flags & 1 != 0
+        && let Some(other) = cx.actors.hit_test(a)
+            && cx.actors.get(other).team & team::DAMAGE_MASK != 0 {
                 let hp = cx.actors.get(a).hit_points.abs();
                 if damage(cx, other, hp, a) != 0 || (t & (team::HITS | team::HIT_BY_OTHERS)) == team::HITS {
                     return false;
                 }
             }
-        }
-    }
     let bounds = cx.ctl.boss_bounds;
     let (left, top, right, bottom) = (cx.actors.left, cx.actors.top, cx.actors.right, cx.actors.bottom);
     {

@@ -180,11 +180,10 @@ impl Platform {
                     _ => {}
                 },
                 SdlEvent::GamepadAdded { which, .. } => {
-                    if let Some(sys) = &self.gamepad_sys {
-                        if let Ok(pad) = sys.open(which) {
+                    if let Some(sys) = &self.gamepad_sys
+                        && let Ok(pad) = sys.open(which) {
                             self.gamepads.push(pad);
                         }
-                    }
                 }
                 SdlEvent::GamepadRemoved { which, .. } => {
                     self.gamepads.retain(|p| p.id().ok() != Some(which));

@@ -438,11 +438,10 @@ impl Stage for FnOption {
                             cx.options.values[Item::Ships as usize] = 1;
                         }
                     }
-                    x if x == Item::Ships as usize => {
-                        if value == 0 && cx.options.values[Item::StartTime as usize] == 0 {
+                    x if x == Item::Ships as usize
+                        && value == 0 && cx.options.values[Item::StartTime as usize] == 0 => {
                             cx.options.values[Item::StartTime as usize] = 1;
                         }
-                    }
                     _ => {}
                 }
                 if OPTION_ITEMS[c].kind == Kind::Formatted {

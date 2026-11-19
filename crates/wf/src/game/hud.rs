@@ -281,6 +281,8 @@ impl GameHud {
         let mut t = Transform::IDENTITY;
         t.scale(1.0, self.frame_open);
         t.translate(-(((cx.app.frame_count & 0x3f) * 4) as f32), -200.0);
+        // The original's literal (pi / 6 rounded to f32).
+        #[allow(clippy::approx_constant)]
         t.rotate_z(0.523_598_8);
         let mut band = t;
         band.m[2][0] += 160.0;
@@ -473,11 +475,10 @@ impl GameHud {
                     self.step += 1;
                 }
             }
-            21 => {
-                if lerp(&mut self.open, 1.0, 0.0, 10, self.mode_time) {
+            21
+                if lerp(&mut self.open, 1.0, 0.0, 10, self.mode_time) => {
                     return true;
                 }
-            }
             _ => {}
         }
         self.end_step(step);
@@ -561,11 +562,10 @@ impl GameHud {
                     self.step += 1;
                 }
             }
-            21 => {
-                if self.mode_time > 30 {
+            21
+                if self.mode_time > 30 => {
                     return true;
                 }
-            }
             _ => {}
         }
         self.end_step(step);
@@ -593,8 +593,8 @@ impl Task for GameHud {
         self.flags = 0xff_0000;
         cx.hud = HudState::default();
         self.chart = [[0.0; 2]; 8];
-        if cx.replay.mode == super::replay::Mode::Play {
-            if let Ok(meta) = std::fs::metadata(cx.replay.path()) {
+        if cx.replay.mode == super::replay::Mode::Play
+            && let Ok(meta) = std::fs::metadata(cx.replay.path()) {
                 let mut name: Vec<u8> = cx.replay.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into_bytes();
                 self.replay_name_x = (80 - name.len() as i32) * 8;
                 for c in &mut name {
@@ -607,7 +607,6 @@ impl Task for GameHud {
                 self.replay_date = meta.modified().ok().map(super::time::format_local).unwrap_or_default().into_bytes();
                 self.flags |= FLAG_REPLAY;
             }
-        }
         true
     }
 

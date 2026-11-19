@@ -92,11 +92,10 @@ impl EnmParam {
                 if let Some(w) = mode_word(s[0].mode, [0xb, 0xc, 0xd]) {
                     title.words[1] = w;
                 }
-            } else if s[0].mode != 0 {
-                if let Some(w) = mode_word(s[0].mode, [4, 5, 6]) {
+            } else if s[0].mode != 0
+                && let Some(w) = mode_word(s[0].mode, [4, 5, 6]) {
                     title.words[1] = w;
                 }
-            }
             if s[1].progress >= 0x41 {
                 if let Some(w) = mode_word(s[1].mode, [8, 9, 0xa]) {
                     title.words[0] = w;

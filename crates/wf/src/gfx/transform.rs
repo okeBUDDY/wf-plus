@@ -1,6 +1,6 @@
 //! The game's 2D transform (hl_3d.h): a 3x3 matrix applied to row vectors,
-//! x' = x * m[0][0] + y * m[1][0] + m[2][0], y' = x * m[0][1] + y * m[1][1]
-//! + m[2][1]. The helpers keep the original operation order so results
+//! x' = x * m[0][0] + y * m[1][0] + m[2][0] and
+//! y' = x * m[0][1] + y * m[1][1] + m[2][1]. The helpers keep the original operation order so results
 //! match the original's float behaviour as closely as f32 allows.
 
 #[derive(Clone, Copy, Debug, PartialEq)]

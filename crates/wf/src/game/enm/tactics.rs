@@ -44,8 +44,8 @@ fn t4161d0(cx: &mut Cx) -> bool {
             cx.enm.list_9c.start(0x10002, 0);
             cx.enm.list_218.step += 1;
         }
-        1 => {
-            if cx.enm.list_9c.op == 0 {
+        1
+            if cx.enm.list_9c.op == 0 => {
                 if is_side_beaten(cx, 0) {
                     return true;
                 }
@@ -59,7 +59,6 @@ fn t4161d0(cx: &mut Cx) -> bool {
                     cx.enm.list_9c.start(0x10005, 0);
                 }
             }
-        }
         _ => {}
     }
     false
@@ -127,11 +126,10 @@ fn run_opening(cx: &mut Cx, next_step: i32) {
                 e.list_218.wait(60);
             }
         }
-        3 => {
-            if e.list_218.time <= 0 {
+        3
+            if e.list_218.time <= 0 => {
                 e.list_218.step = next_step;
             }
-        }
         _ => {}
     }
 }
@@ -148,11 +146,10 @@ fn t416560(cx: &mut Cx) -> bool {
             e.list_b0.start(0x20002, 0);
             e.list_218.step += 1;
         }
-        11 => {
-            if e.list_9c.op == 0 && e.list_b0.op == 0 {
+        11
+            if e.list_9c.op == 0 && e.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -194,11 +191,10 @@ fn t416630(cx: &mut Cx) -> bool {
                 }
             }
         }
-        4 => {
-            if e.list_b0.op == 0 {
+        4
+            if e.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -232,11 +228,10 @@ fn t4167a0(cx: &mut Cx) -> bool {
                 e.list_218.step += 1;
             }
         }
-        2 => {
-            if e.list_9c.op == 0 {
+        2
+            if e.list_9c.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -326,11 +321,10 @@ fn t416ac0(cx: &mut Cx) -> bool {
                 e.list_218.step = 11;
             }
         }
-        21 => {
-            if e.list_9c.op == 0 && e.list_b0.op == 0 {
+        21
+            if e.list_9c.op == 0 && e.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -361,11 +355,10 @@ fn t416cb0(cx: &mut Cx) -> bool {
                 e.list_218.step = 20;
             }
         }
-        21 => {
-            if e.list_9c.op == 0 && e.list_b0.op == 0 {
+        21
+            if e.list_9c.op == 0 && e.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -411,11 +404,10 @@ fn t416e10(cx: &mut Cx) -> bool {
                 }
             }
         }
-        4 => {
-            if e.list_9c.op == 0 && e.list_b0.op == 0 {
+        4
+            if e.list_9c.op == 0 && e.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false
@@ -430,11 +422,10 @@ fn t417010(cx: &mut Cx) -> bool {
             cx.enm.list_b0.start(0x20003, arg);
             cx.enm.list_218.step += 1;
         }
-        1 => {
-            if cx.enm.list_9c.op == 0 && cx.enm.list_b0.op == 0 {
+        1
+            if cx.enm.list_9c.op == 0 && cx.enm.list_b0.op == 0 => {
                 return true;
             }
-        }
         _ => {}
     }
     false

@@ -145,7 +145,7 @@ pub struct Sprite {
     pub bitmap: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<Sprite>() % 16 == 0);
+const _: () = assert!(std::mem::size_of::<Sprite>().is_multiple_of(16));
 
 /// A texture image of the GPU half.
 #[derive(Clone, Copy, Debug)]
@@ -206,7 +206,7 @@ fn section(blob: &[u8], offset: u32, len: u32) -> Result<&[u8], FormatError> {
 impl<'a> Pack<'a> {
     /// Parses `blob`, which must be 16-byte aligned (see [`AlignedBlob`]).
     pub fn parse(blob: &'a [u8]) -> Result<Self, FormatError> {
-        if blob.as_ptr() as usize % 16 != 0 {
+        if !(blob.as_ptr() as usize).is_multiple_of(16) {
             return Err(FormatError("blob not 16-byte aligned"));
         }
         let header: &Header = bytemuck::try_from_bytes(
@@ -292,7 +292,7 @@ impl Writer {
             rows
         }
         fn align(out: &mut Vec<u8>) {
-            while out.len() % 16 != 0 {
+            while !out.len().is_multiple_of(16) {
                 out.push(0);
             }
         }

@@ -100,11 +100,10 @@ impl Pad {
                 b |= RIGHT;
             }
             for i in 0..self.trigger_count {
-                if let Some(&button) = PadButton::TRIGGERS.get(self.button_map[i] as usize) {
-                    if g.held(button) {
+                if let Some(&button) = PadButton::TRIGGERS.get(self.button_map[i] as usize)
+                    && g.held(button) {
                         b |= TRIGGER << i;
                     }
-                }
             }
         }
         self.buttons = b;
@@ -169,18 +168,16 @@ impl Pad {
     /// HLInpDev::LoadTriggerMap: reads the maps written by `trigger_maps`.
     pub fn set_trigger_maps(&mut self, keys: &str, buttons: &str) {
         for (i, v) in keys.split_whitespace().take(MAX_TRIGGERS).enumerate() {
-            if let Ok(c) = v.parse::<i32>() {
-                if (0..MAX_TRIGGERS as i32).contains(&c) {
+            if let Ok(c) = v.parse::<i32>()
+                && (0..MAX_TRIGGERS as i32).contains(&c) {
                     self.set_trigger(i, c);
                 }
-            }
         }
         for (i, v) in buttons.split_whitespace().take(MAX_TRIGGERS).enumerate() {
-            if let Ok(b) = v.parse::<u8>() {
-                if (b as usize) < PadButton::TRIGGERS.len() {
+            if let Ok(b) = v.parse::<u8>()
+                && (b as usize) < PadButton::TRIGGERS.len() {
                     self.button_map[i] = b;
                 }
-            }
         }
     }
 

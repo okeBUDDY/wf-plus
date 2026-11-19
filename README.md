@@ -2,12 +2,38 @@
 
 A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust, 64-bit and
 platform independent: SDL3 for the window, input and audio, wgpu for the GPU.
-The decompilation in `../decomp` is the reference for behaviour; no Win32,
-DirectX or HL-library code is emulated. The port starts above those layers,
-at what the game asked of them.
+The decompilation of the original is the reference for behaviour (read only,
+not part of this repository). No Win32, DirectX or HL-library code is
+emulated: the port starts above those layers, at what the game asked of them.
+
+The whole game is ported: title, options, the game with every boss part and
+the boss generator, the HUD, game over and name entry, the score table,
+replays, and the music sequencer. It plays the original's own replays back
+frame-exact (see [Verification](#verification)).
+
+| | |
+|---|---|
+| ![title](docs/title.png) | ![game](docs/game.png) |
+| ![boss](docs/boss.png) | ![explosions](docs/explosions.png) |
+| ![game over](docs/game-over.png) | ![name entry](docs/name-entry.png) |
+| ![options](docs/options.png) | ![fonts](docs/viewer-fonts.png) |
+
+## The game data
 
 The original game data is not part of this repository. You need `data.bin`
-from the 1.08 release (in `wf108.zip`).
+from the 1.08 release (`wf108.zip`). It is the only runtime input; `wf.exe`
+is never read, at run time or at build time. Constants that came from
+`wf.exe` (tables, literals) are in the source as `const` tables with their
+address cited.
+
+`data.bin` is looked up in this order: `--data <path>`, `WF_DATA`,
+`./data.bin`, then next to the executable. Music is `bgm.seq`, `bgm.ogg` or
+`bgm.wav` next to `data.bin`, as in the original.
+
+Settings (`wf.ini`), the score table (`wf.sco`, the original's format) and
+replays (`rec/*.rec`, the original's format) live in the home folder:
+`--home <dir>`, else `WF_HOME`, else the working directory. The original's
+own `wf.ini`, `wf.sco` and `.rec` files work as they are.
 
 ## Build and run
 
@@ -16,77 +42,101 @@ cargo build --release
 target/release/wf --data path/to/data.bin
 ```
 
-`data.bin` can also be given with `WF_DATA`, or put in the working directory
-or next to the executable. `bgm.ogg` next to `data.bin` is played as the
-music, as in the original.
+SDL3 is built from source (`sdl3` crate, static), which needs CMake and a C
+compiler; on Linux also the X11/Wayland/PulseAudio development headers.
 
-Building needs the vector art and the font sheets. They are cooked into the
-executable by `crates/wf/build.rs`. By default they are taken from the
-project folder next to this repository (`../software/warning-forever/1.08`).
-Override with `WF_ART_DIR` (the vector art: `<sheet>/<sheet>_<id>.svg`),
-`WF_FONT_DIR` (`font0.png` .. `font2.png`) and `WF_BITMAP_DIR` (the cut
-sprites, for the art that is still a bitmap). SDL3 is built from source
-(`sdl3` crate, static), which needs CMake and a C compiler. On Linux it also
-needs the X11/Wayland/PulseAudio development headers.
+Building needs the vector art and the font sheets, which `crates/wf/build.rs`
+cooks into the executable. By default they come from the project folder next
+to this repository (`../software/warning-forever/1.08`). Overrides:
 
-Other options: `--size WxH` (window size), `--frames N --screenshot out.png`
-(save frame N), and `--headless --script FRAME:KEY,...` (no window: run N
-frames with scripted keys and save the last one, used for the images in
-`docs/`).
-
-Controls: arrows or numpad to move. Z, X, S, D, A, W, E and F are logical
-triggers 0-7 (Z shot, X slow, D weapon select, F pause). On a gamepad, the
-left stick or d-pad moves and the face buttons, shoulders, Back and Start are
-triggers 0-7. Esc quits and F12 resets.
-
-## Layout
-
-| Crate | What it is |
+| Variable | What |
 |---|---|
-| `crates/wf-art` | The cooked art format: the GPU half (texture images uploaded as they are) and the CPU half (sprite table). |
-| `crates/wf-cook` | The build-time cooker: SVG art -> Slug curves and bands, font sheets -> traced glyph outlines, bitmaps -> atlas. Also a `wf-cook` binary for inspecting a pack. |
+| `WF_ART_DIR` | The vector art, `<sheet>/<sheet>_<id>.svg`. |
+| `WF_FONT_DIR` | `font0.png` .. `font2.png`, traced when a glyph has no SVG. |
+| `WF_BITMAP_DIR` | The cut sprites, for the art that stays a bitmap (the title character). |
+| `WF_GLYPH_DIR`, `WF_GLYPH_PATTERNS`, `WF_GLYPH_CSV` | Where the vector glyph SVGs are and how they are named (`;`-separated patterns using `{font}`, `{index}`, `{sheet}`, `{x}`, `{y}`, `{csv}`). |
+
+Options:
+
+| | |
+|---|---|
+| `--size WxH` | Window size (the 640x480 screen is letterboxed and scaled). |
+| `--replay rec/<file>.rec` | Play a replay (relative to the home folder). |
+| `--headless` | No window and no audio device: run frames as fast as possible. |
+| `--frames N --screenshot out.png` | Stop after frame N and save it. |
+| `--script FRAME:KEY,...` | Press keys at given frames (up, down, left, right, z, x, d, f, esc, f12). |
+| `--hash-log out.txt` | Write a hash of the game state after every game frame (desync hunting). |
+| `--viewer` | The art and sound viewer instead of the game. |
+| `WF_LOG=error\|warn\|info\|debug` | Log level (stage results, game over, file errors). |
+
+## Controls
+
+Arrows (or numpad) move. Z shoots, X moves slowly, D selects the weapon and
+F pauses (when pausing is enabled in the options); these are the original's
+triggers and can be remapped in the options screen. On a gamepad
+(SDL_Gamepad), the left stick or d-pad moves and the buttons are triggers,
+mapped in the options too. Esc quits and F12 resets to the title.
+
+## Architecture and seams
+
+| Crate | |
+|---|---|
+| `crates/wf-art` | The cooked art format: a GPU half (texture images uploaded as they are) and a CPU half (the sprite table). |
+| `crates/wf-cook` | The build-time cooker: SVG art to Slug curves and bands, vector or traced glyphs, the bitmap atlas, the baked feTurbulence lattice. |
 | `crates/wf` | The game. |
 
-Inside `crates/wf/src`:
+Inside `crates/wf/src`, platform code sits behind seams that the game uses,
+never the other way round:
 
 | Module | |
 |---|---|
-| `game/` | The port. `app.rs` is Application::Run's frame. `task.rs` is TaskList with its RemoveUpTo/RemoveFrom sweeps. `fade.rs` is the screen-fade overlay, `text.rs` is HLSTxtSys, `input.rs` is the pads (HLInpDev) and `assets.rs` is what cGlobal loads. `viewer.rs` is a temporary first stage. |
-| `gfx/` | **Seam**: `DrawList` (sprites under a 2D transform with an ARGB tint and normal/additive blend, untextured shapes, screen fill) in 640x480 space. `gpu.rs` + `slug.wgsl` is the wgpu backend. |
-| `platform/` | **Seam**: `RawInput` (keys and gamepads held), `Event`. `sdl.rs` is the SDL3 backend (window, keyboard, SDL_Gamepad, audio stream). |
-| `sound/` | The sound system (channels, groups, fades, the original's volume and pan curves) on a software mixer that the audio callback pulls from. Ogg via lewton. |
+| `game/` | The port, file by file from the decompilation: `app.rs` (Application::Run), `task.rs` (task lists), the stages `fn_title.rs`, `fn_game.rs`, `fn_option.rs`, `hud.rs` (game HUD, game over, name entry, results), `actor/` (actor system and every control), `enm/` (boss generator), `replay.rs`, `records.rs`, `score_table.rs`, `profile.rs` (portable ini), `math.rs` (the f32/x87 maths), `debug.rs` (state hash). |
+| `gfx/` | **Seam**: `DrawList`: sprites under a 2D transform with an ARGB tint, normal or additive blend, optional texel-region clip; untextured shapes. `gpu.rs` + `slug.wgsl` is the wgpu backend. |
+| `platform/` | **Seam**: `RawInput` (keys and gamepads held), events, local time. `sdl.rs` is the SDL3 backend (window, keyboard, SDL_Gamepad, audio stream). |
+| `sound/` | The sound system (channels, fades, the original's volume and pan curves, the `.seq` sequencer) on a software mixer that the audio callback pulls from. Ogg via lewton, WAV. |
+| `log.rs` | **Seam**: logging (`WF_LOG`). |
 | `data/` | data.bin and the .pat pattern files. |
-| `art.rs` | The built-in art pack. |
 
-## Rendering
+### Bit-exact simulation
 
-The art is drawn with the Slug algorithm (Lengyel, JCGT 2017). The cooker
-turns each SVG path into quadratic curves and builds, per layer, horizontal
-and vertical bands. Each band lists the curves that overlap it, sorted for
-early exit. The fragment shader takes the pixel's band, casts a ray along
-each axis, and turns the crossings into fractional coverage. Each instance is
-one sprite. Its layers are painted (solid colour, linear or radial ramp, the
-sys0_008 combined ramps, the add0_027 noise) and composed in the shader
-(source-over, or max for `data-blend-layers="max"`). The result is
-premultiplied, tinted like the original's diffuse colour, and blended once as
-normal or additive. Blending is in gamma space, as on the original's
-Direct3D 7.
+The simulation keeps the original's float behaviour: f32 maths in the
+decompilation's operation order, no fused multiply-add, transcendentals as
+`(x as f64).fn() as f32`, `_ftol` truncation, and the C runtime's `rand()`.
+The sine table is baked from the x87's FSIN and checked against the x87 (with
+24-bit precision control) by `game/x87_tests.rs` on x86-64, along with
+`atan2` and `sqrt`.
 
-The fonts have no hand-made vectors yet. The cooker traces their pixels into
-exact outlines (one layer per alpha level), so they render pixel-exact at 1:1
-and stay sharp when scaled. The title character (`etc2_001_character`) has no
-faithful vector version. It is cooked as the original pixels into a bitmap
-atlas and drawn as a textured quad with sharp-bilinear sampling, through the
-same sprite call.
+### Rendering
 
-## Status
+Art is drawn with the Slug algorithm (Lengyel, JCGT 2017). The cooker turns
+each SVG path into quadratic curves and builds horizontal and vertical bands
+per layer; the fragment shader casts a ray along each axis and turns the
+crossings into coverage. Layers are painted (solid, linear or radial ramp,
+the sys0_008 combined ramps, and add0_027's SVG `feTurbulence` fractal noise,
+evaluated on the spec's lattice, which the cooker bakes per seed) and
+composed in the shader, then blended once, normal or additive, in gamma space
+as on the original's Direct3D 7. Untextured shapes (lines, bars, the option
+hexagon) are antialiased with 4x multisampling. Glyphs come from vector SVGs
+when present, else from exact traces of the font sheets. The title character
+stays the original pixels in a bitmap atlas, drawn with sharp-bilinear
+sampling.
 
-Done: the cooker and the Slug renderer, the main loop with the original
-17 ms frame (58.8 fps), the task lists and stages, the screen fade, text,
-pads, sound, and data.bin, .pat and .ogg loading. The viewer stage shows every
-sprite and font and plays the sounds.
+## Verification
 
-Next: the game's own stages (title, game, options, results), then the actors
-and the boss generator, ported from the decompilation file by file.
-`bgm.seq` and `bgm.wav` music, the profile (`wf.ini`) and the score and replay
-files are not ported yet.
+* `cargo test --workspace` runs the unit tests (score table, profile,
+  sequencer, WAV, turbulence lattice, and the x87 checks), and
+  `cargo clippy --workspace --all-targets` is clean.
+* `scripts/playtest.sh [recordings] [data.bin]` plays every `stageNN.rec` of
+  every recording made with the original game, headless. It checks that each
+  stage ends on the score the next stage's recording starts with, and that
+  the last ends on the score in that run's `wf.sco`. All 24 stages of the six
+  recordings match: normal, 3 ships, 5-minute attack and sudden death,
+  including a 19,085-frame stage with pauses.
+* `--hash-log` gives identical files across runs of the same replay.
+
+## Known gaps
+
+* Vector glyphs depend on the glyph SVG set; missing or unreadable ones are
+  traced from the font sheets, with a build warning.
+* As in 1.08, a game over whose score does not rank fades straight to the
+  title, and `best.rec` is never written.

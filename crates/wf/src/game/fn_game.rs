@@ -337,11 +337,10 @@ impl Stage for FnGame {
                     state += 1;
                     continue;
                 }
-                s if s == FnGameState::START + 1 => {
-                    if cx.fn_game.state_time >= 120 {
+                s if s == FnGameState::START + 1
+                    && cx.fn_game.state_time >= 120 => {
                         cx.fn_game.set_state(FnGameState::STAGE);
                     }
-                }
                 _ => {}
             }
             break;

@@ -104,12 +104,11 @@ impl Replay {
 
     /// Replay::Close (0x415590).
     pub fn close(&mut self) {
-        if self.open && self.mode == Mode::Record {
-            if let Some(w) = &mut self.writer {
+        if self.open && self.mode == Mode::Record
+            && let Some(w) = &mut self.writer {
                 w.extend_from_slice(&self.run_keys.to_le_bytes());
                 w.extend_from_slice(&self.run_frames.to_le_bytes());
             }
-        }
         self.close_file();
         self.open = false;
     }

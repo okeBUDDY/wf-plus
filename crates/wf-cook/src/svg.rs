@@ -285,11 +285,10 @@ pub fn parse(text: &str) -> Result<Art, Error> {
         if inside_preview_only(node) || node.attribute("mask").is_some() {
             continue;
         }
-        if let Some(rule) = node.attribute("fill-rule") {
-            if rule != "nonzero" {
+        if let Some(rule) = node.attribute("fill-rule")
+            && rule != "nonzero" {
                 return Err(format!("unsupported fill-rule '{rule}'"));
             }
-        }
         let fill = node.attribute("fill").unwrap_or("#000000");
         if fill == "none" {
             continue;

@@ -30,7 +30,7 @@ impl BackgroundGrid {
     }
 
     /// RotateTransform (0x415f30): turns `t` by `angle` 1024ths of a turn.
-    fn rotate(t: &Transform, angle: i32) -> Transform {
+    pub fn rotate_by(t: &Transform, angle: i32) -> Transform {
         let mut r = Transform::IDENTITY;
         r.m[0][1] = sin(angle);
         r.m[1][0] = -r.m[0][1];
@@ -102,10 +102,15 @@ impl Task for BackgroundGrid {
             let mut t = Transform::IDENTITY;
             t.m[2][0] = -self.x + tile[0];
             t.m[2][1] = -self.y + tile[1];
-            let mut t = Self::rotate(&t, -(self.angle as i32));
+            let mut t = Self::rotate_by(&t, -(self.angle as i32));
             t.m[2][0] += 320.0;
             t.m[2][1] += 240.0;
             cx.draw.shape(Primitive::LineList, &t, &self.points, self.color, Blend::Normal);
         }
     }
+}
+
+/// RotateTransform (0x415f30).
+pub fn rotate(t: &Transform, angle: i32) -> Transform {
+    BackgroundGrid::rotate_by(t, angle)
 }

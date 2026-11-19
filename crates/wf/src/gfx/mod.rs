@@ -76,7 +76,9 @@ pub enum Primitive {
 
 #[derive(Clone, Debug)]
 pub enum Draw {
-    Sprite { sprite: SpriteId, transform: Transform, color: Argb, blend: Blend },
+    /// `clip` (min x, min y, max x, max y in the sprite's own space) cuts
+    /// the sprite to a rect with hard edges: a texel region of a sheet.
+    Sprite { sprite: SpriteId, transform: Transform, color: Argb, blend: Blend, clip: Option<[f32; 4]> },
     /// Points already transformed to screen space.
     Shape { primitive: Primitive, points: Vec<[f32; 2]>, colors: Vec<Argb>, blend: Blend },
 }
@@ -104,7 +106,15 @@ impl DrawList {
         if color.alpha() == 0 {
             return;
         }
-        self.draws.push(Draw::Sprite { sprite, transform: *transform, color, blend });
+        self.draws.push(Draw::Sprite { sprite, transform: *transform, color, blend, clip: None });
+    }
+
+    /// Draws the part of `sprite` inside `clip` (in the sprite's space).
+    pub fn sprite_clipped(&mut self, sprite: SpriteId, transform: &Transform, clip: [f32; 4], color: Argb, blend: Blend) {
+        if color.alpha() == 0 || clip[0] >= clip[2] || clip[1] >= clip[3] {
+            return;
+        }
+        self.draws.push(Draw::Sprite { sprite, transform: *transform, color, blend, clip: Some(clip) });
     }
 
     /// Draws `points` (in the shape's own space) under `transform` in one

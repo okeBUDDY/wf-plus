@@ -9,13 +9,21 @@ pub mod background;
 pub mod enm;
 pub mod fade;
 pub mod fn_game;
+pub mod fn_option;
+pub mod fn_title;
+pub mod hud;
 pub mod game_state;
 pub mod input;
 pub mod math;
+pub mod profile;
+pub mod records;
 pub mod replay;
+pub mod score_table;
 pub mod sounds;
 pub mod task;
+pub mod texels;
 pub mod text;
+pub mod time;
 pub mod viewer;
 
 use crate::art::Art;
@@ -59,6 +67,24 @@ pub struct Cx {
     pub replay: replay::Replay,
     /// The C runtime's rand() state.
     pub rng: math::Rand,
+    /// Texts drawn by actors (`actor::Obj::Text`).
+    pub obj_texts: Vec<text::ObjText>,
+    /// Where the settings, the scores and the replays live.
+    pub home: std::path::PathBuf,
+    /// The settings file (Application::profile, wf.ini).
+    pub profile: profile::Profile,
+    /// g_score_table.
+    pub scores: score_table::ScoreTable,
+    /// g_fn_option's settings.
+    pub options: fn_option::OptionState,
+    /// What fnGame asked of its HUD.
+    pub hud: hud::HudState,
+    /// g_seq_flags (0x468fa0, shared with g_rating): what the game tells
+    /// a .seq music.
+    pub seq_flags: [u8; 8],
+    /// Debug: called after every game frame's MoveAll (the state hash for
+    /// replay desync checks, see `debug::state_hash`).
+    pub frame_hook: Option<fn(&mut Cx)>,
 }
 
 impl Cx {
@@ -88,6 +114,14 @@ impl Cx {
             fn_game: Default::default(),
             replay: Default::default(),
             rng: Default::default(),
+            obj_texts: Vec::new(),
+            home: std::path::PathBuf::from("."),
+            profile: Default::default(),
+            scores: Default::default(),
+            options: Default::default(),
+            hud: Default::default(),
+            seq_flags: [0; 8],
+            frame_hook: None,
         };
         actor::controls::register_all(&mut cx);
         let Cx { enm, rng, .. } = &mut cx;
@@ -96,9 +130,29 @@ impl Cx {
         cx
     }
 
+    /// The file side of cGlobal::Initialize: the settings in `home`/wf.ini,
+    /// the scores in wf.sco and the replays in rec/.
+    pub fn open_home(&mut self, home: std::path::PathBuf) {
+        self.home = home;
+        let _ = std::fs::create_dir_all(&self.home);
+        self.profile = profile::Profile::open(self.home.join("wf.ini"));
+        let path = self.home.join("wf.sco");
+        let Cx { scores, profile, .. } = self;
+        scores.init(path, profile);
+        fn_option::load_settings(self);
+        records::init_records(self);
+    }
+
     /// The screen fade (g_global.screen_fade).
     pub fn fade(&mut self) -> &mut fade::ScreenFade {
         &mut self.fade
+    }
+
+    /// Starts the music (`channel(kChannelBgm)->Assign(&g_bgm, kLoop)`).
+    pub fn play_bgm(&mut self) {
+        if let Some(bgm) = &self.assets.bgm {
+            self.sound.play(assets::CHANNEL_BGM, bgm, true, 1.0);
+        }
     }
 
     /// Plays sound `id` on its own channel (SndSys::Play).

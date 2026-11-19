@@ -26,7 +26,11 @@ pub const SKIPPED: &[&str] = &["etc2_001_character", "add0_extra00", "enm0_extra
 /// `{sheet}` the font sheet (`font0`..`font2`), `{index}` the glyph in its
 /// grid (3 digits), `{x}`/`{y}` the cell's pixel position on the sheet.
 /// The SVG is in cell coordinates (the glyph's top-left corner at 0, 0). A glyph with no SVG is traced from the sheet's pixels.
-pub const GLYPH_PATTERNS: &[&str] = &["{font}/{font}_{index}.svg", "{sheet}/{sheet}_{x}_{y}.svg", "{sheet}_{x}_{y}.svg"];
+///
+/// `{csv}` is the glyph's file in `Config::glyph_csv` (the cut glyphs'
+/// table, `fonts/glyphs.csv`: `file, sheet, ..., x, y, w, h`) with `.svg`
+/// for `.png`, e.g. `ascii_small16/ascii_small16_01_U+0021.svg`.
+pub const GLYPH_PATTERNS: &[&str] = &["{csv}", "{font}/{font}_{index}.svg", "{sheet}/{sheet}_{x}_{y}.svg", "{sheet}_{x}_{y}.svg"];
 
 /// Original pixel art cooked as bitmaps (no faithful vector version yet):
 /// (sprite name, PNG under `Config::bitmap_dir`, pivot in the PNG).
@@ -54,6 +58,9 @@ pub const FONTS: &[FontGrid] = &[
     FontGrid { name: "title", sheet: "font0", count: 28, u: 0, v: 0, width: 20, height: 32, columns: 12 },
     FontGrid { name: "large_digit", sheet: "font0", count: 10, u: 0, v: 96, width: 48, height: 80, columns: 5 },
     FontGrid { name: "digit", sheet: "font2", count: 10, u: 0, v: 48, width: 24, height: 40, columns: 5 },
+    // The three 128 x 16 caption strips at the top of font2, which the
+    // HUD, title and options draw as scrolling bars (DrawTexels, wrapped).
+    FontGrid { name: "strip", sheet: "font2", count: 3, u: 0, v: 0, width: 128, height: 16, columns: 1 },
 ];
 
 /// The name of glyph `index` of `font` in the pack.
@@ -72,25 +79,69 @@ pub struct Config {
     pub glyph_dir: PathBuf,
     /// File name patterns under `glyph_dir` (see [`GLYPH_PATTERNS`]).
     pub glyph_patterns: Vec<String>,
+    /// The table of the cut glyphs, for the `{csv}` pattern.
+    pub glyph_csv: PathBuf,
+}
+
+/// Splits one CSV line (fields may be quoted, with "" for a quote).
+fn csv_fields(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                fields.last_mut().unwrap().push('"');
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => fields.push(String::new()),
+            _ => fields.last_mut().unwrap().push(c),
+        }
+    }
+    fields
+}
+
+/// The cut glyphs by (sheet, x, y): their file without the extension.
+fn read_glyph_csv(path: &Path) -> std::collections::HashMap<(String, usize, usize), String> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(text) = std::fs::read_to_string(path) else { return map };
+    for line in text.lines().skip(1) {
+        let f = csv_fields(line);
+        if f.len() < 11 || f[0].is_empty() {
+            continue;
+        }
+        let (Ok(x), Ok(y)) = (f[7].parse(), f[8].parse()) else { continue };
+        let sheet = f[1].trim_end_matches(".png").to_string();
+        map.insert((sheet, x, y), f[0].trim_end_matches(".png").to_string());
+    }
+    map
 }
 
 impl Config {
     /// The usual layout: glyphs under `<art_dir>/fonts`.
     pub fn new(art_dir: PathBuf, font_dir: PathBuf, bitmap_dir: PathBuf) -> Self {
         let glyph_dir = art_dir.join("fonts");
-        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect() }
+        let glyph_csv = art_dir.join("../fonts/glyphs.csv");
+        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect(), glyph_csv }
     }
 
-    /// The vector glyph for cell `rect` of `grid`, if there is one.
-    fn glyph_svg(&self, grid: &FontGrid, index: usize, x: usize, y: usize) -> Option<PathBuf> {
-        self.glyph_patterns.iter().map(|p| {
+    /// The vector glyph for the cell at (`x`, `y`) of `grid`, if there is
+    /// one.
+    fn glyph_svg(&self, csv: &std::collections::HashMap<(String, usize, usize), String>, grid: &FontGrid, index: usize, x: usize, y: usize) -> Option<PathBuf> {
+        let cut = csv.get(&(grid.sheet.to_string(), x, y));
+        self.glyph_patterns.iter().filter_map(|p| {
+            if p.contains("{csv}") {
+                return cut.map(|c| self.glyph_dir.join(p.replace("{csv}", &format!("{c}.svg"))));
+            }
+            Some(
             self.glyph_dir.join(
                 p.replace("{font}", grid.name)
                     .replace("{sheet}", grid.sheet)
                     .replace("{index}", &format!("{index:03}"))
                     .replace("{x}", &x.to_string())
                     .replace("{y}", &y.to_string()),
-            )
+            ))
         }).find(|p| p.is_file())
     }
 }
@@ -272,7 +323,7 @@ impl Cooker {
         self.report.bitmaps += 1;
     }
 
-    fn cook_font(&mut self, config: &Config, grid: &FontGrid, bitmap: &trace::Bitmap) -> Result<(), Error> {
+    fn cook_font(&mut self, config: &Config, csv: &std::collections::HashMap<(String, usize, usize), String>, grid: &FontGrid, bitmap: &trace::Bitmap) -> Result<(), Error> {
         for index in 0..grid.count {
             let col = index % grid.columns;
             let row = index / grid.columns;
@@ -280,7 +331,7 @@ impl Cooker {
             if rect.x + rect.w > bitmap.width || rect.y + rect.h > bitmap.height {
                 break;
             }
-            if let Some(path) = config.glyph_svg(grid, index, rect.x, rect.y) {
+            if let Some(path) = config.glyph_svg(csv, grid, index, rect.x, rect.y) {
                 self.report.inputs.push(path.clone());
                 let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
                 let mut art = svg::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -368,11 +419,15 @@ pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
         }
     }
     c.report.dirs.push(config.glyph_dir.clone());
+    let csv = read_glyph_csv(&config.glyph_csv);
+    if config.glyph_csv.is_file() {
+        c.report.inputs.push(config.glyph_csv.clone());
+    }
     for grid in FONTS {
         let path = config.font_dir.join(format!("{}.png", grid.sheet));
         c.report.inputs.push(path.clone());
         let (width, height, rgba) = read_png(&path)?;
-        c.cook_font(config, grid, &trace::Bitmap { width, height, rgba: &rgba })?;
+        c.cook_font(config, &csv, grid, &trace::Bitmap { width, height, rgba: &rgba })?;
     }
     for (name, file, origin) in BITMAPS {
         let path = config.bitmap_dir.join(file);
@@ -395,14 +450,25 @@ mod tests {
         std::fs::create_dir_all(dir.join("digit")).unwrap();
         std::fs::write(dir.join("digit/digit_003.svg"), "<svg/>").unwrap();
         std::fs::write(dir.join("font0_48_96.svg"), "<svg/>").unwrap();
+        std::fs::create_dir_all(dir.join("strips")).unwrap();
+        std::fs::write(dir.join("strips/font2_strip2.svg"), "<svg/>").unwrap();
         let mut config = Config::new(PathBuf::new(), PathBuf::new(), PathBuf::new());
         config.glyph_dir = dir.clone();
+        let csv: std::collections::HashMap<_, _> = [(("font2".to_string(), 0, 32), "strips/font2_strip2".to_string())].into();
+        let strip = FONTS.iter().find(|g| g.name == "strip").unwrap();
+        assert_eq!(config.glyph_svg(&csv, strip, 2, 0, 32), Some(dir.join("strips/font2_strip2.svg")));
         let digit = FONTS.iter().find(|g| g.name == "digit").unwrap();
         let large = FONTS.iter().find(|g| g.name == "large_digit").unwrap();
-        assert_eq!(config.glyph_svg(digit, 3, 72, 48), Some(dir.join("digit/digit_003.svg")));
-        assert_eq!(config.glyph_svg(digit, 4, 96, 48), None);
-        assert_eq!(config.glyph_svg(large, 1, 48, 96), Some(dir.join("font0_48_96.svg")));
+        assert_eq!(config.glyph_svg(&csv, digit, 3, 72, 48), Some(dir.join("digit/digit_003.svg")));
+        assert_eq!(config.glyph_svg(&csv, digit, 4, 96, 48), None);
+        assert_eq!(config.glyph_svg(&csv, large, 1, 48, 96), Some(dir.join("font0_48_96.svg")));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn csv_lines_split_with_quotes() {
+        assert_eq!(csv_fields(r#"a/b.png,font1.png,x,2,"""",U+0022,22,32,192,16,16"#)[4], "\"");
+        assert_eq!(csv_fields(r#"f,font1.png,x,12,",",U+002C"#)[4], ",");
     }
 
     #[test]

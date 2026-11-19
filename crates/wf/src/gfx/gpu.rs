@@ -363,7 +363,7 @@ impl Renderer {
         self.batches.clear();
         for draw in &list.draws {
             match draw {
-                Draw::Sprite { sprite, transform, color, blend } => {
+                Draw::Sprite { sprite, transform, color, blend, clip } => {
                     let Some(info) = self.sprites.get(sprite.0 as usize) else { continue };
                     if let Some(rect) = info.bitmap {
                         let m = &transform.m;
@@ -392,9 +392,17 @@ impl Renderer {
                     // get their antialiasing.
                     let d = 1.0 / scale;
                     let b = info.bounds;
+                    let mut bounds = [b[0] - d, b[1] - d, b[2] + d, b[3] + d];
+                    if let Some(c) = clip {
+                        // A texel region: hard edges, as the original quad.
+                        bounds = [bounds[0].max(c[0]), bounds[1].max(c[1]), bounds[2].min(c[2]), bounds[3].min(c[3])];
+                        if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
+                            continue;
+                        }
+                    }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {
-                        bounds: [b[0] - d, b[1] - d, b[2] + d, b[3] + d],
+                        bounds,
                         m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
                         m1: [m[2][0], m[2][1]],
                         tint: color.to_f32(),

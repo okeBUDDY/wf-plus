@@ -20,6 +20,7 @@ fn main() {
     let art_dir = dir("WF_ART_DIR", game.join("sprites/vector"));
     let mut config = wf_cook::Config::new(art_dir.clone(), dir("WF_FONT_DIR", game.join("data")), dir("WF_BITMAP_DIR", game.join("sprites/sheets")));
     config.glyph_dir = dir("WF_GLYPH_DIR", art_dir.join("fonts"));
+    config.glyph_csv = dir("WF_GLYPH_CSV", art_dir.join("../fonts/glyphs.csv"));
     println!("cargo:rerun-if-env-changed=WF_GLYPH_PATTERNS");
     if let Ok(p) = std::env::var("WF_GLYPH_PATTERNS") {
         // Separated by ';', e.g. "{font}/{font}_{index}.svg;{sheet}_{x}_{y}.svg".

@@ -12,9 +12,10 @@ fn main() {
         Ok((blob, report)) => {
             std::fs::write(&args[4], &blob).expect("write pack");
             println!(
-                "{} sprites ({} bitmaps), {} layers, {} curves, {} bytes; skipped vectors {:?}",
+                "{} sprites ({} bitmaps, {} vector glyphs), {} layers, {} curves, {} bytes; skipped vectors {:?}",
                 report.sprites,
                 report.bitmaps,
+                report.vector_glyphs,
                 report.layers,
                 report.curves,
                 blob.len(),

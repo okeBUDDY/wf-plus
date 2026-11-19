@@ -180,6 +180,37 @@ pub struct Fonts {
     pub digit: Font,
 }
 
+/// Which font of `Fonts` (the HLSTxtSys objects of g_fonts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontId {
+    Text,
+    SmallText,
+    Kana,
+    Title,
+    LargeDigit,
+    Digit,
+}
+
+impl FontId {
+    pub fn get(self, f: &Fonts) -> &Font {
+        match self {
+            FontId::Text => &f.text,
+            FontId::SmallText => &f.small_text,
+            FontId::Kana => &f.kana,
+            FontId::Title => &f.title,
+            FontId::LargeDigit => &f.large_digit,
+            FontId::Digit => &f.digit,
+        }
+    }
+}
+
+/// A text an actor draws (an HLSTxt used as an actor's sprite).
+#[derive(Clone, Debug)]
+pub struct ObjText {
+    pub font: FontId,
+    pub text: Vec<u8>,
+}
+
 impl Fonts {
     pub fn load(art: &Art) -> Self {
         let mut f = Fonts {

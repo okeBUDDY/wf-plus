@@ -38,6 +38,12 @@ struct Options {
     size: (u32, u32),
     /// Headless input: keys held on given frames.
     script: Vec<(u32, Key)>,
+    /// Where wf.ini, wf.sco and rec/ live.
+    home: PathBuf,
+    /// Start in the art viewer instead of the title.
+    viewer: bool,
+    /// Play this replay (headless checks) instead of the title.
+    replay: Option<String>,
 }
 
 fn parse_key(s: &str) -> Option<Key> {
@@ -58,8 +64,9 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--size WxH] [--frames N --screenshot out.png]\n          [--headless --script FRAME:KEY,...]\n\
-         data.bin also comes from WF_DATA, else ./data.bin, else next to the executable."
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--headless --script FRAME:KEY,...] [--replay rec/<file>.rec] [--viewer]\n\
+         data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
+         The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
     std::process::exit(2);
 }
@@ -72,6 +79,9 @@ fn options() -> Options {
         screenshot: None,
         size: (1280, 960),
         script: Vec::new(),
+        home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
+        viewer: false,
+        replay: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -79,6 +89,9 @@ fn options() -> Options {
         match a.as_str() {
             "--data" => o.data = value().into(),
             "--headless" => o.headless = true,
+            "--home" => o.home = value().into(),
+            "--viewer" => o.viewer = true,
+            "--replay" => o.replay = Some(value()),
             "--frames" => o.frames = value().parse().unwrap_or_else(|_| usage()),
             "--screenshot" => o.screenshot = Some(value().into()),
             "--size" => {
@@ -110,8 +123,18 @@ fn options() -> Options {
 fn startup(o: &Options) -> Result<(Cx, App), String> {
     let assets = Assets::load(&o.data)?;
     let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
-    let mut app = App::new(Some(|| Box::new(game::viewer::Viewer::new())));
-    if !app.start(&mut cx, Box::new(game::viewer::Viewer::new())) {
+    game::time::set_utc_offset(platform::sdl::local_utc_offset());
+    cx.open_home(o.home.clone());
+    let (reset, first): (fn() -> Box<dyn game::app::Stage>, Box<dyn game::app::Stage>) = if o.viewer {
+        (|| Box::new(game::viewer::Viewer::new()), Box::new(game::viewer::Viewer::new()))
+    } else if let Some(path) = &o.replay {
+        game::fn_game::FnGameState::set_mode(&mut cx, 2, Some(path));
+        (|| Box::new(game::fn_title::FnTitle::new()), Box::new(game::fn_game::FnGame::new()))
+    } else {
+        (|| Box::new(game::fn_title::FnTitle::new()), Box::new(game::fn_title::FnTitle::new()))
+    };
+    let mut app = App::new(Some(reset));
+    if !app.start(&mut cx, first) {
         return Err("the first stage could not start".into());
     }
     Ok((cx, app))

@@ -82,12 +82,19 @@ pub enum Obj {
     Shockwave,
     /// The player's laser (g_laser).
     Laser,
+    /// A text (HLSTxt) of `Cx::obj_texts`, printed at the actor.
+    Text(u8),
 }
 
 /// The cooked art and the hit box of a pattern.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PatInfo {
     pub sprite: Option<SpriteId>,
+    /// Cuts `sprite` to a rect of its space (a pattern that is part of
+    /// a joined vector sprite).
+    pub clip: Option<[f32; 4]>,
+    /// Drawn over `sprite` (original pixels kept as a bitmap).
+    pub overlay: Option<SpriteId>,
     /// Half the hit box (HLSPat::hit_width_, hit_height_).
     pub hit: [u16; 2],
     /// Nothing to draw (a 0 x 0 pattern).
@@ -100,6 +107,16 @@ pub struct Pats {
     pub sheets: Vec<Vec<Option<PatInfo>>>,
 }
 
+/// Patterns whose art was joined or split when it was vectorized:
+/// (sheet, pattern, sprite, clip in the sprite's space, bitmap overlay).
+/// etc2_logo joins etc2 patterns 1 (sheet x 0..256) and 2 (x 256..320)
+/// around their common pivot (160, 56), less the character, which is kept
+/// as the original pixels.
+const JOINED: &[(&str, u32, &str, [f32; 4], Option<&str>)] = &[
+    ("etc2", 1, "etc2_logo", [-160.0, -56.0, 96.0, 56.0], Some("etc2_001_character")),
+    ("etc2", 2, "etc2_logo", [96.0, -56.0, 160.0, 56.0], None),
+];
+
 impl Pats {
     /// Joins the .pat files of data.bin with the cooked art.
     pub fn load(assets: &super::Assets, art: &crate::art::Art) -> Self {
@@ -108,10 +125,20 @@ impl Pats {
             let mut v = Vec::new();
             if let Some(pat) = assets.pat(name) {
                 for (id, p) in pat.patterns.iter().enumerate() {
-                    v.push(p.map(|p| PatInfo {
-                        sprite: art.pattern(name, id as u32),
-                        hit: p.hit_half,
-                        empty: p.rect[2] == 0 && p.rect[3] == 0,
+                    v.push(p.map(|p| {
+                        let mut info = PatInfo {
+                            sprite: art.pattern(name, id as u32),
+                            clip: None,
+                            overlay: None,
+                            hit: p.hit_half,
+                            empty: p.rect[2] == 0 && p.rect[3] == 0,
+                        };
+                        if let Some(j) = JOINED.iter().find(|j| j.0 == name && j.1 == id as u32) {
+                            info.sprite = art.find(j.2);
+                            info.clip = Some(j.3);
+                            info.overlay = j.4.and_then(|o| art.find(o));
+                        }
+                        info
                     }));
                 }
             }
@@ -546,6 +573,8 @@ impl ActorSystem {
         match o {
             Obj::Pat(p) => p.sheet + 1,
             Obj::Anm(i) => self.anims[i as usize].texture,
+            // The font sheets come after the six pattern sheets.
+            Obj::Text(_) => 0x20,
             _ => 0,
         }
     }
@@ -1132,7 +1161,7 @@ const SHOCKWAVE_POINTS: [[f32; 2]; 3] = [[-18.0, -960.0], [18.0, -960.0], [-2.0,
 
 /// Draws `obj` under `t` (HLSObject::Draw), stepping animations while the
 /// time moves.
-fn draw_obj(cx: &mut Cx, obj: Obj, t: &Transform, color: u32, blend: Blend) {
+pub fn draw_obj(cx: &mut Cx, obj: Obj, t: &Transform, color: u32, blend: Blend) {
     match obj {
         Obj::Null => {}
         Obj::Pat(p) => draw_pat(cx, p, t, color, blend),
@@ -1159,6 +1188,13 @@ fn draw_obj(cx: &mut Cx, obj: Obj, t: &Transform, color: u32, blend: Blend) {
             cx.draw.shape(Primitive::TriangleStrip, t, &pts, Argb(dim), blend);
             cx.draw.shape(Primitive::LineStrip, t, &pts, Argb(color), blend);
         }
+        // HLSTxt::Draw (0x40b4d0): prints at the transform's position.
+        Obj::Text(i) => {
+            if let Some(text) = cx.obj_texts.get(i as usize) {
+                let font = text.font.get(&cx.fonts);
+                font.print(&mut cx.draw, t.m[2][0], t.m[2][1], &text.text, None, Argb(color), -1, blend);
+            }
+        }
     }
 }
 
@@ -1168,8 +1204,14 @@ fn draw_pat(cx: &mut Cx, p: PatId, t: &Transform, color: u32, blend: Blend) {
         if info.empty {
             return;
         }
-        if let Some(sprite) = info.sprite {
-            cx.draw.sprite(sprite, t, Argb(color), blend);
+        let info = *info;
+        match (info.sprite, info.clip) {
+            (Some(sprite), Some(clip)) => cx.draw.sprite_clipped(sprite, t, clip, Argb(color), blend),
+            (Some(sprite), None) => cx.draw.sprite(sprite, t, Argb(color), blend),
+            _ => {}
+        }
+        if let Some(overlay) = info.overlay {
+            cx.draw.sprite(overlay, t, Argb(color), blend);
         }
     }
 }

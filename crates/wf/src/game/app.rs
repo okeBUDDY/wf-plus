@@ -135,6 +135,11 @@ impl App {
         if cx.input.reset_pressed {
             cx.app.request_reset();
         }
+        // InputTask::IsProtected (0x405f30): the pause button.
+        if cx.input.pad(0).pressed & cx.input.time_stop_mask != 0 {
+            let stopped = cx.app.flags & AppFlags::TIME_STOPPED != 0;
+            cx.app.set_time_stop(!stopped);
+        }
 
         if cx.app.flags & AppFlags::TIME_STOPPED != 0 {
             task::remove_up_to(cx, ListId::Tasks, 0);

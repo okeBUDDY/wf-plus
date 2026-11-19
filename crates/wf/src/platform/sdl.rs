@@ -239,3 +239,13 @@ impl Platform {
         Ok(DisplayHandle(self.window.display_handle().map_err(|e| e.to_string())?.as_raw()))
     }
 }
+
+/// Seconds east of UTC of the local time zone, from SDL's clock.
+pub fn local_utc_offset() -> i32 {
+    use sdl3::sys::time::{SDL_DateTime, SDL_GetCurrentTime, SDL_TimeToDateTime};
+    let mut now = 0;
+    let mut dt: SDL_DateTime = unsafe { std::mem::zeroed() };
+    // SAFETY: plain out-parameters on the stack.
+    let ok = unsafe { SDL_GetCurrentTime(&mut now) && SDL_TimeToDateTime(now, &mut dt, true) };
+    if ok { dt.utc_offset } else { 0 }
+}

@@ -14,6 +14,7 @@
 //! wide whatever the transform, as Direct3D 7 drew them.
 
 pub mod gpu;
+pub mod fade;
 pub mod layout;
 pub mod scale;
 pub mod transform;
@@ -134,6 +135,9 @@ pub struct DrawList {
     /// Added to every transform's translation (a HUD block anchored to
     /// another edge of a wider arena).
     origin: [f32; 2],
+    /// The screen fade: this colour at its alpha over the whole finished
+    /// frame (alpha 0: none).
+    pub fade: Argb,
 }
 
 impl DrawList {
@@ -148,6 +152,7 @@ impl DrawList {
         self.sub = 0;
         self.pass = Pass::Arena;
         self.origin = [0.0; 2];
+        self.fade = Argb(0);
     }
 
     /// Moves the draws that follow by `origin` (0, 0 to stop).

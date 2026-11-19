@@ -76,6 +76,7 @@ pub struct Renderer {
     batches: Vec<Batch>,
     dynamic: Dynamic,
     offscreen: Option<(wgpu::TextureView, (u32, u32))>,
+    fade: super::fade::FadePass,
     pub time: f32,
 }
 
@@ -353,6 +354,7 @@ impl Renderer {
             .collect();
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
+        let fade = super::fade::FadePass::new(&device, format);
         Renderer {
             device,
             queue,
@@ -370,6 +372,7 @@ impl Renderer {
             dynamic,
             offscreen: None,
             time: 0.0,
+            fade,
         }
     }
 
@@ -567,6 +570,10 @@ impl Renderer {
             pad: [0.0; 3],
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
+        let fading = list.fade.0 >> 24 != 0;
+        if fading {
+            self.fade.prepare(&self.queue, list.fade.to_f32());
+        }
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         {
@@ -616,6 +623,9 @@ impl Renderer {
                         pass.draw(0..4, batch.start..batch.end);
                     }
                 }
+            }
+            if fading {
+                self.fade.draw(&mut pass, size);
             }
         }
         self.queue.submit([encoder.finish()]);

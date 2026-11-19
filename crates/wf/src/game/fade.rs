@@ -92,20 +92,12 @@ impl Task for FadeTask {
     }
 
     fn run(&mut self, cx: &mut Cx) {
+        // The original draws the 640x480 screen rectangle last; the
+        // renderer lays the colour over the whole finished frame instead,
+        // as a plain quad (not a Slug shape: its coverage could drop out
+        // in places on some GPUs, showing the lines under it in dashes).
         if cx.fade.rgba[3] != 0 {
-            let c = cx.fade.color();
-            let screen = cx.art.shapes.screen;
-            // The whole arena (the shape is the 640x480 screen).
-            let mut t = crate::gfx::Transform::IDENTITY;
-            if !cx.arena.is_classic() {
-                t.scale(cx.arena.width / 640.0, cx.arena.height / 480.0);
-            }
-            cx.draw.sprite(
-                screen,
-                &t,
-                c,
-                crate::gfx::Blend::Normal,
-            );
+            cx.draw.fade = cx.fade.color();
         }
     }
 }

@@ -14,6 +14,9 @@ wgpu = "30"
 pollster = "1"
 lewton = "0.10"
 encoding_rs = "0.8"
+# The sim's atan2/sin/cos: pure Rust (the musl port), the same bits on
+# every platform, unlike the system libm.
+libm = "0.2.16"
 png = "0.18"
 raw-window-handle = "0.6"
 

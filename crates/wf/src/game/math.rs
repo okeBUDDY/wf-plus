@@ -183,13 +183,15 @@ pub fn sin_table() -> &'static [f32; 0x500] {
 }
 
 /// The table as computed from its formula (f32 argument, f64 sin).
+/// The sim's transcendental functions come from the `libm` crate, not the
+/// platform's, so they give the same bits everywhere.
 // The original writes 3.14159265f, which is f32 PI.
 #[allow(clippy::approx_constant)]
 pub fn compute_sin_table() -> [f32; 0x500] {
     let step = 2.0f32 * 3.141_592_65_f32 / 1024.0f32;
     let mut t = [0.0f32; 0x500];
     for (i, v) in t.iter_mut().enumerate() {
-        *v = ((i as f32 * step) as f64).sin() as f32;
+        *v = libm::sin((i as f32 * step) as f64) as f32;
     }
     t
 }
@@ -223,7 +225,7 @@ pub fn ftos(f: f32) -> i16 {
 /// `0x100 - (int)(atan2(dy, dx) * -162.97466f)`.
 #[inline]
 pub fn angle_of(dx: f32, dy: f32) -> u16 {
-    let a = (dy as f64).atan2(dx as f64) as f32;
+    let a = libm::atan2(dy as f64, dx as f64) as f32;
     0x100i32.wrapping_sub(ftol(a * -162.974_66_f32)) as u16
 }
 

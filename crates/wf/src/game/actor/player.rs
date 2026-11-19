@@ -55,11 +55,11 @@ impl LaserSprite {
             let dx = self.tip_x - x;
             let dy = self.tip_y - y;
             let mut length = ((dy * dy + dx * dx) as f64).sqrt() as f32;
-            let angle = (dx as f64).atan2(-dy as f64) as f32;
+            let angle = libm::atan2(dx as f64, -dy as f64) as f32;
             if length > LASER_MAX {
                 length = LASER_MAX;
-                self.tip_x = ((angle as f64).sin() as f32) * LASER_MAX + x;
-                self.tip_y = y - ((angle as f64).cos() as f32) * LASER_MAX;
+                self.tip_x = (libm::sin(angle as f64) as f32) * LASER_MAX + x;
+                self.tip_y = y - (libm::cos(angle as f64) as f32) * LASER_MAX;
             }
             self.angle = ftos(angle * 162.974_66);
             self.spread = 160i16.wrapping_sub(ftos(length * 1.028_571_5));

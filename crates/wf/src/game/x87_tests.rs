@@ -29,6 +29,25 @@ fn fsin(x: f32) -> f32 {
     out
 }
 
+fn fcos(x: f32) -> f32 {
+    let mut out = 0f32;
+    // SAFETY: as in fsin.
+    unsafe {
+        asm!(
+            "fninit",
+            "fldcw word ptr [{cw}]",
+            "fld dword ptr [{x}]",
+            "fcos",
+            "fstp dword ptr [{o}]",
+            cw = in(reg) &CW_PC24,
+            x = in(reg) &x,
+            o = in(reg) &mut out,
+            out("st(0)") _,
+        );
+    }
+    out
+}
+
 fn fpatan(y: f32, x: f32) -> f32 {
     let mut out = 0f32;
     // SAFETY: as in fsin; FPATAN pops one of the two values pushed.
@@ -122,4 +141,57 @@ fn print_sin_table_bits() {
     let step = 2.0f32 * 3.141_592_65_f32 / 1024.0f32;
     let bits: Vec<String> = (0..0x500).map(|i| format!("0x{:08x}", fsin(i as f32 * step).to_bits())).collect();
     println!("BITS {}", bits.join(","));
+}
+
+/// LaserSprite::Move's angle and tip: atan2(dx, -dy), then sin and cos of
+/// it, as libm (the sim) and the x87 compute them.
+#[test]
+fn laser_trig_matches_the_x87() {
+    let mut bad = Vec::new();
+    for dy in (-480 * 2..=480 * 2).step_by(5) {
+        for dx in (-640 * 2..=640 * 2).step_by(3) {
+            let (fx, fy) = (dx as f32 * 0.5 + 0.125, dy as f32 * 0.5 - 0.0625);
+            let a = libm::atan2(fx as f64, -fy as f64) as f32;
+            let x = fpatan(fx, -fy);
+            if a.to_bits() != x.to_bits() {
+                bad.push(("atan2", fx, fy));
+                continue;
+            }
+            if (libm::sin(a as f64) as f32).to_bits() != fsin(a).to_bits() {
+                bad.push(("sin", fx, fy));
+            }
+            if (libm::cos(a as f64) as f32).to_bits() != fcos(a).to_bits() {
+                bad.push(("cos", fx, fy));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} inputs differ: {:?}", bad.len(), &bad[..bad.len().min(8)]);
+}
+
+/// libm against FSIN/FCOS over every f32 in [-pi, pi] at a stride, and
+/// FPATAN over a grid of quadrants and magnitudes.
+#[test]
+fn libm_sweeps_match_the_x87() {
+    let mut bad = Vec::new();
+    let pi = std::f32::consts::PI;
+    let (lo, hi) = ((-pi).to_bits(), pi.to_bits());
+    // Negative floats: bits from -0 up to -pi; positive: 0 up to pi.
+    for bits in (0..=hi).step_by(97).chain((0x8000_0000..=lo).step_by(97)) {
+        let x = f32::from_bits(bits);
+        if (libm::sin(x as f64) as f32).to_bits() != fsin(x).to_bits() {
+            bad.push(("sin", x, 0.0));
+        }
+        if (libm::cos(x as f64) as f32).to_bits() != fcos(x).to_bits() {
+            bad.push(("cos", x, 0.0));
+        }
+    }
+    for i in -300..=300 {
+        for j in -300..=300 {
+            let (y, x) = (i as f32 * 1.37, j as f32 * 2.11);
+            if (libm::atan2(y as f64, x as f64) as f32).to_bits() != fpatan(y, x).to_bits() {
+                bad.push(("atan2", y, x));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} inputs differ: {:?}", bad.len(), &bad[..bad.len().min(8)]);
 }

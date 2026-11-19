@@ -9,10 +9,11 @@ use crate::game::math::{cos, sin};
 use crate::game::sounds;
 use bytemuck::{Pod, Zeroable};
 
-/// g_explosion_anim (0x45d37c): add0 16..21, 3 frames each.
-pub static EXPLOSION_ANIM: AnmData = AnmData { set: sheet::ADD, script: &[16, 3, 17, 3, 18, 3, 19, 3, 20, 3, 21, 3, -1] };
-/// g_fragment_anim (0x45d3a4): add0 22..28.
-pub static FRAGMENT_ANIM: AnmData = AnmData { set: sheet::ADD, script: &[22, 3, 23, 3, 24, 3, 25, 3, 26, 3, 27, 3, 28, 3, -1] };
+/// g_explosion_anim (0x45d37c): sys0 16..21 (its set is g_pats.sys, 0x467d70),
+/// 3 frames each.
+pub static EXPLOSION_ANIM: AnmData = AnmData { set: sheet::SYS, script: &[16, 3, 17, 3, 18, 3, 19, 3, 20, 3, 21, 3, -1] };
+/// g_fragment_anim (0x45d3a4): sys0 22..28 (set 0x467d70).
+pub static FRAGMENT_ANIM: AnmData = AnmData { set: sheet::SYS, script: &[22, 3, 23, 3, 24, 3, 25, 3, 26, 3, 27, 3, 28, 3, -1] };
 
 /// Actor::work of control 8.
 #[repr(C)]

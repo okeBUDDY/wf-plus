@@ -159,6 +159,8 @@ pub struct Report {
     pub vector_glyphs: usize,
     /// Directories whose contents decide the output (for rerun-if-changed).
     pub dirs: Vec<PathBuf>,
+    /// Inputs that were skipped or replaced, for the build to print.
+    pub warnings: Vec<String>,
 }
 
 pub type Error = String;
@@ -357,8 +359,19 @@ impl Cooker {
             }
             if let Some(path) = config.glyph_svg(csv, grid, index, rect.x, rect.y) {
                 self.report.inputs.push(path.clone());
-                let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                let mut art = svg::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+                // A glyph SVG that cannot be read or parsed falls back to the
+                // traced glyph, with a warning, like a missing one.
+                let art = std::fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|text| svg::parse(&text).map_err(|e| e.to_string()));
+                let mut art = match art {
+                    Ok(art) => art,
+                    Err(e) => {
+                        self.report.warnings.push(format!("{}: {e}; traced instead", path.display()));
+                        self.trace_glyph(grid, index, bitmap, &rect);
+                        continue;
+                    }
+                };
                 // Glyphs are placed by their top-left corner.
                 art.origin = Vec2::new(0.0, 0.0);
                 art.width = grid.width as f32;
@@ -367,6 +380,14 @@ impl Cooker {
                 self.report.vector_glyphs += 1;
                 continue;
             }
+            self.trace_glyph(grid, index, bitmap, &rect);
+        }
+        Ok(())
+    }
+
+    fn trace_glyph(&mut self, grid: &FontGrid, index: usize, bitmap: &trace::Bitmap, rect: &trace::Rect) {
+        let rect = *rect;
+        {
             // Keep every alpha the glyph has, unless it is antialiased with
             // more than 16 (font1), which is rounded to 16 steps.
             let mut alphas: Vec<u8> = Vec::new();
@@ -398,7 +419,6 @@ impl Cooker {
                 sprite_flags::TRACED,
             );
         }
-        Ok(())
     }
 }
 

@@ -12,6 +12,7 @@ pub struct Bitmap<'a> {
     pub rgba: &'a [u8],
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Rect {
     pub x: usize,
     pub y: usize,

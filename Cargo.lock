@@ -1215,6 +1215,7 @@ dependencies = [
 name = "wf-cook"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "png",
  "roxmltree",
  "wf-art",

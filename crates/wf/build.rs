@@ -28,6 +28,9 @@ fn main() {
     }
     let (blob, report) = wf_cook::cook(&config).unwrap_or_else(|e| panic!("cooking the art failed: {e}"));
     // New vector glyphs appear as new files: watch the directories too.
+    for w in &report.warnings {
+        println!("cargo:warning=art: {w}");
+    }
     for d in &report.dirs {
         if d.exists() {
             println!("cargo:rerun-if-changed={}", d.display());

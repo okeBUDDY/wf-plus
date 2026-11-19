@@ -2,6 +2,7 @@
 //! triggers per pad, built from the keyboard and SDL gamepads each frame.
 
 use crate::platform::{Key, PadButton, RawInput};
+use wf_engine::input::{Action, ActionState};
 
 pub const UP: u16 = 0x1;
 pub const DOWN: u16 = 0x2;
@@ -24,8 +25,75 @@ pub const TRIGGER_KEYS: [Key; MAX_TRIGGERS] = [Key::Z, Key::X, Key::S, Key::D, K
 /// Marks a gamepad button in a trigger code.
 pub const PAD_CODE: i32 = 0x80;
 
-/// Stick deflection that counts as a direction.
-const DEAD_ZONE: f32 = 0.35;
+/// The ship's speed per tick (Control01::OnMove): normal and slow.
+const SHIP_SPEED: [f32; 2] = [7.0, 2.0];
+
+/// What the pointer and drag quantizing needs: the ship, and the drag not
+/// yet turned into moves.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Steer {
+    /// The player's ship (arena units) when one is in play.
+    pub ship: Option<[f32; 2]>,
+    residual: [f32; 2],
+}
+
+/// The eight-way direction bits of `v` (any length), or none when it is
+/// shorter than `min`.
+fn eight_way(v: [f32; 2], min: f32) -> u16 {
+    let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if len <= min || len == 0.0 {
+        return 0;
+    }
+    // sin(22.5 deg): the edge between a straight and a diagonal sector.
+    const EDGE: f32 = 0.382_683_43;
+    let (x, y) = (v[0] / len, v[1] / len);
+    let mut b = 0;
+    if x < -EDGE {
+        b |= LEFT;
+    } else if x > EDGE {
+        b |= RIGHT;
+    }
+    if y < -EDGE {
+        b |= UP;
+    } else if y > EDGE {
+        b |= DOWN;
+    }
+    b
+}
+
+/// The direction bits of the actions: the move vector, else the pointer
+/// (the ship steers toward it, stopping within a step), else a touch drag
+/// (spent a ship's step at a time).
+pub fn quantize(a: &ActionState, steer: &mut Steer) -> u16 {
+    let axis = eight_way(a.axis, 0.0);
+    if axis != 0 {
+        steer.residual = [0.0; 2];
+        return axis;
+    }
+    let step = SHIP_SPEED[a.held(Action::SLOW) as usize];
+    let Some(ship) = steer.ship else {
+        steer.residual = [0.0; 2];
+        return 0;
+    };
+    if let Some(p) = a.pointer {
+        return eight_way([p[0] - ship[0], p[1] - ship[1]], step * 0.5);
+    }
+    steer.residual[0] += a.drag[0];
+    steer.residual[1] += a.drag[1];
+    let b = eight_way(steer.residual, step * 0.5);
+    if b != 0 {
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        let diag = (b & (LEFT | RIGHT) != 0) && (b & (UP | DOWN) != 0);
+        let k = if diag { step * d } else { step };
+        let dx = if b & LEFT != 0 { -k } else if b & RIGHT != 0 { k } else { 0.0 };
+        let dy = if b & UP != 0 { -k } else if b & DOWN != 0 { k } else { 0.0 };
+        steer.residual = [steer.residual[0] - dx, steer.residual[1] - dy];
+    }
+    if !a.touching {
+        steer.residual = [0.0; 2];
+    }
+    b
+}
 
 pub struct Pad {
     pub buttons: u16,
@@ -52,58 +120,16 @@ impl Default for Pad {
 }
 
 impl Pad {
-    /// HLKeyboard::Poll (0x405c00) and HLJoystick::Poll (0x405ab0) merged:
-    /// the keyboard and every gamepad drive the pad together.
-    pub fn poll(&mut self, raw: &RawInput) {
-        let mut b = 0u16;
-        let k = |key| raw.key(key);
-        if k(Key::Numpad2) || k(Key::Down) {
-            b |= DOWN;
-        }
-        if k(Key::Numpad4) || k(Key::Left) {
-            b |= LEFT;
-        }
-        if k(Key::Numpad6) || k(Key::Right) {
-            b |= RIGHT;
-        }
-        if k(Key::Numpad8) || k(Key::Up) {
-            b |= UP;
-        }
-        if k(Key::Numpad1) {
-            b |= DOWN | LEFT;
-        }
-        if k(Key::Numpad3) {
-            b |= DOWN | RIGHT;
-        }
-        if k(Key::Numpad7) {
-            b |= UP | LEFT;
-        }
-        if k(Key::Numpad9) {
-            b |= UP | RIGHT;
-        }
+    /// HLKeyboard::Poll (0x405c00) and HLJoystick::Poll (0x405ab0), now fed
+    /// by the engine's actions: whatever device made them, they reduce to
+    /// the original's eight directions and eight triggers, the bits a .rec
+    /// stores. Analog and pointer input is quantized here, before the
+    /// game sees it (see [`quantize`]).
+    pub fn poll(&mut self, a: &ActionState, steer: &mut Steer) {
+        let mut b = quantize(a, steer);
         for i in 0..self.trigger_count {
-            if k(self.key_map[i]) {
+            if a.held(Action::Trigger(i as u8)) {
                 b |= TRIGGER << i;
-            }
-        }
-        for g in &raw.gamepads {
-            if g.stick[1] < -DEAD_ZONE || g.held(PadButton::DpadUp) {
-                b |= UP;
-            }
-            if g.stick[1] > DEAD_ZONE || g.held(PadButton::DpadDown) {
-                b |= DOWN;
-            }
-            if g.stick[0] < -DEAD_ZONE || g.held(PadButton::DpadLeft) {
-                b |= LEFT;
-            }
-            if g.stick[0] > DEAD_ZONE || g.held(PadButton::DpadRight) {
-                b |= RIGHT;
-            }
-            for i in 0..self.trigger_count {
-                if let Some(&button) = PadButton::TRIGGERS.get(self.button_map[i] as usize)
-                    && g.held(button) {
-                        b |= TRIGGER << i;
-                    }
             }
         }
         self.buttons = b;
@@ -203,15 +229,21 @@ pub struct Input {
     pub raw: RawInput,
     held_quit: bool,
     held_reset: bool,
+    /// The pointer and drag quantizing (not game state: a .rec keeps only
+    /// the bits it makes).
+    pub steer: Steer,
 }
 
 impl Input {
-    pub fn poll(&mut self, raw: &RawInput) {
+    /// Reads this tick's actions (the window must be active; see
+    /// InputTask::IsProtected).
+    pub fn poll(&mut self, a: &ActionState) {
         for pad in &mut self.pads {
-            pad.poll(raw);
+            pad.poll(a, &mut self.steer);
         }
-        let quit = raw.key(Key::Escape);
-        let reset = raw.key(Key::F12);
+        let raw = &a.raw;
+        let quit = a.held(Action::Quit);
+        let reset = a.held(Action::Reset);
         self.quit_pressed = quit && !self.held_quit;
         self.reset_pressed = reset && !self.held_reset;
         self.held_quit = quit;

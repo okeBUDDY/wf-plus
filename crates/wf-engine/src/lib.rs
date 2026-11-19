@@ -13,7 +13,11 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+pub mod app;
 pub mod audio;
+pub mod config;
 pub mod gfx;
+pub mod input;
 pub mod log;
 pub mod platform;
+pub mod time;

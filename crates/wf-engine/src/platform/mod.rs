@@ -38,10 +38,41 @@ pub enum Key {
 
 impl Key {
     pub const COUNT: usize = Key::Space as usize + 1;
+
+    /// A key by its name in bindings ("z", "up", "kp8", "escape").
+    pub fn parse(s: &str) -> Option<Key> {
+        Some(match s {
+            "up" => Key::Up,
+            "down" => Key::Down,
+            "left" => Key::Left,
+            "right" => Key::Right,
+            "kp1" => Key::Numpad1,
+            "kp2" => Key::Numpad2,
+            "kp3" => Key::Numpad3,
+            "kp4" => Key::Numpad4,
+            "kp6" => Key::Numpad6,
+            "kp7" => Key::Numpad7,
+            "kp8" => Key::Numpad8,
+            "kp9" => Key::Numpad9,
+            "z" => Key::Z,
+            "x" => Key::X,
+            "s" => Key::S,
+            "d" => Key::D,
+            "a" => Key::A,
+            "w" => Key::W,
+            "e" => Key::E,
+            "f" => Key::F,
+            "esc" | "escape" => Key::Escape,
+            "f12" => Key::F12,
+            "return" | "enter" => Key::Return,
+            "space" => Key::Space,
+            _ => return None,
+        })
+    }
 }
 
 /// Gamepad buttons, in the SDL standard (Xbox-style) layout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum PadButton {
     South,
@@ -62,6 +93,27 @@ pub enum PadButton {
 
 impl PadButton {
     pub const COUNT: usize = PadButton::DpadRight as usize + 1;
+
+    /// A button by its name in bindings ("south", "start", "dpup").
+    pub fn parse(s: &str) -> Option<PadButton> {
+        Some(match s {
+            "south" | "a" => PadButton::South,
+            "east" | "b" => PadButton::East,
+            "west" | "x" => PadButton::West,
+            "north" | "y" => PadButton::North,
+            "lb" | "leftshoulder" => PadButton::LeftShoulder,
+            "rb" | "rightshoulder" => PadButton::RightShoulder,
+            "back" | "select" => PadButton::Back,
+            "start" => PadButton::Start,
+            "ls" | "leftstick" => PadButton::LeftStick,
+            "rs" | "rightstick" => PadButton::RightStick,
+            "dpup" => PadButton::DpadUp,
+            "dpdown" => PadButton::DpadDown,
+            "dpleft" => PadButton::DpadLeft,
+            "dpright" => PadButton::DpadRight,
+            _ => return None,
+        })
+    }
     /// The buttons a trigger map indexes (physical button n), in order.
     pub const TRIGGERS: [PadButton; 10] = [
         PadButton::South,
@@ -83,6 +135,36 @@ pub struct GamepadState {
     pub buttons: u32,
     /// Left stick, -1..1, y down.
     pub stick: [f32; 2],
+    /// The first finger on the first touchpad (DualSense and the like):
+    /// 0..1, y down, when touching.
+    pub touchpad: Option<[f32; 2]>,
+}
+
+/// The mouse: where it is (window pixels) and the buttons held (bit 0
+/// left, 1 middle, 2 right).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MouseState {
+    pub pos: [f32; 2],
+    pub buttons: u32,
+    /// Inside the window.
+    pub inside: bool,
+}
+
+/// A finger on a touch screen: 0..1 of the window, y down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Finger {
+    pub id: u64,
+    pub pos: [f32; 2],
+}
+
+/// A kind of input device, for the last-used switch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Device {
+    #[default]
+    Keyboard,
+    Mouse,
+    Gamepad,
+    Touch,
 }
 
 impl GamepadState {
@@ -96,6 +178,13 @@ impl GamepadState {
 pub struct RawInput {
     pub keys: [bool; Key::COUNT],
     pub gamepads: Vec<GamepadState>,
+    pub mouse: MouseState,
+    pub fingers: Vec<Finger>,
+    /// The device the player used last (a key or button pressed, the
+    /// mouse moved or clicked, a finger down, a stick pushed).
+    pub last_device: Device,
+    /// The window's size in pixels, for pointer positions.
+    pub window: (u32, u32),
 }
 
 impl RawInput {

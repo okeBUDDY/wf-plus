@@ -7,7 +7,7 @@
 //! only when their points change. Every draw, cooked or dynamic, is a Slug
 //! instance whose transform is applied on the GPU.
 
-use super::{Blend, Draw, DrawList, Primitive, SCREEN_HEIGHT, SCREEN_WIDTH};
+use super::{Blend, Draw, DrawList, Pass, Primitive};
 use std::collections::HashMap;
 use wf_art::shape::{Outline, outline, stroke_margin};
 use wf_art::slug::{Edges, Target, add_layer, gpu_layer};
@@ -41,6 +41,7 @@ enum BatchKind {
 struct Batch {
     kind: BatchKind,
     blend: Blend,
+    pass: Pass,
     start: u32,
     end: u32,
 }
@@ -64,14 +65,22 @@ pub struct Renderer {
     sprite_pipelines: [wgpu::RenderPipeline; 2],
     bitmap_pipelines: [wgpu::RenderPipeline; 2],
     sprites: Vec<SpriteInfo>,
+    /// A persistent ring of `RING` instance regions of `instance_capacity`
+    /// each: a frame writes its own region, so a write never waits on the
+    /// GPU reading the previous frames'.
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
+    ring_slot: usize,
     // Scratch, reused every frame.
     instances: Vec<Instance>,
     batches: Vec<Batch>,
     dynamic: Dynamic,
+    offscreen: Option<(wgpu::TextureView, (u32, u32))>,
     pub time: f32,
 }
+
+/// Frames of instance data in flight.
+const RING: usize = 3;
 
 /// Rows of the dynamic region: 2048 curves, 8192 band texels, 128 layers.
 const DYN_CURVE_ROWS: u32 = 1;
@@ -343,7 +352,7 @@ impl Renderer {
             })
             .collect();
         let instance_capacity = 1024;
-        let instance_buffer = Self::buffer(&device, "instances", instance_capacity * std::mem::size_of::<Instance>());
+        let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         Renderer {
             device,
             queue,
@@ -355,9 +364,11 @@ impl Renderer {
             sprites,
             instance_buffer,
             instance_capacity,
+            ring_slot: 0,
             instances: Vec::new(),
             batches: Vec::new(),
             dynamic,
+            offscreen: None,
             time: 0.0,
         }
     }
@@ -381,16 +392,17 @@ impl Renderer {
         self.format
     }
 
-    fn push_batch(&mut self, kind: BatchKind, blend: Blend, start: u32, end: u32) {
+    fn push_batch(&mut self, kind: BatchKind, blend: Blend, pass: Pass, start: u32, end: u32) {
         if let Some(last) = self.batches.last_mut()
             && last.kind == kind
             && last.blend == blend
+            && last.pass == pass
             && last.end == start
         {
             last.end = end;
             return;
         }
-        self.batches.push(Batch { kind, blend, start, end });
+        self.batches.push(Batch { kind, blend, pass, start, end });
     }
 
     /// Builds the frame's dynamic shapes into the dynamic region, unless all
@@ -450,21 +462,19 @@ impl Renderer {
         write_rows(&self.queue, &dy.layers, dy.layer_row, LAYER_TEX_WIDTH * 16, bytemuck::cast_slice(&layers));
     }
 
-    /// Renders `list` into `target` (of `size` pixels), letterboxing the
-    /// 4:3 screen.
+    /// Renders `list` into `target` (of `size` pixels): the arena fitted
+    /// and centred in the window, the background pass filling the margins
+    /// around it.
     pub fn render(&mut self, list: &DrawList, target: &wgpu::TextureView, size: (u32, u32)) {
-        let k = (size.0 as f32 / SCREEN_WIDTH).min(size.1 as f32 / SCREEN_HEIGHT).max(1e-3);
-        let vw = SCREEN_WIDTH * k;
-        let vh = SCREEN_HEIGHT * k;
-        let vx = ((size.0 as f32 - vw) * 0.5).floor();
-        let vy = ((size.1 as f32 - vh) * 0.5).floor();
+        let layout = super::Layout::new(list.arena, size);
+        let k = layout.scale;
 
         self.instances.clear();
         self.batches.clear();
         self.build_dynamic(list);
         for draw in &list.draws {
             match draw {
-                Draw::Sprite { sprite, transform, color, blend, clip } => {
+                Draw::Sprite { sprite, transform, color, blend, clip, pass, .. } => {
                     let Some(info) = self.sprites.get(sprite.0 as usize) else {
                         continue;
                     };
@@ -478,7 +488,7 @@ impl Renderer {
                             tint: color.to_f32(),
                             layers: rect,
                         });
-                        self.push_batch(BatchKind::Bitmaps, *blend, i, i + 1);
+                        self.push_batch(BatchKind::Bitmaps, *blend, *pass, i, i + 1);
                         continue;
                     }
                     if info.layer_count == 0 {
@@ -511,9 +521,9 @@ impl Renderer {
                         tint: color.to_f32(),
                         layers: [info.first_layer, info.layer_count, info.compose, LINE_WIDTH.to_bits()],
                     });
-                    self.push_batch(BatchKind::Sprites, *blend, i, i + 1);
+                    self.push_batch(BatchKind::Sprites, *blend, *pass, i, i + 1);
                 }
-                Draw::Shape { primitive, points, transform, color, blend } => {
+                Draw::Shape { primitive, points, transform, color, blend, pass, .. } => {
                     let m = &transform.m;
                     let Some(bucket) = scale_bucket(transform) else {
                         continue;
@@ -533,7 +543,7 @@ impl Renderer {
                         tint: color.to_f32(),
                         layers: [layer, 1, 0, LINE_WIDTH.to_bits()],
                     });
-                    self.push_batch(BatchKind::Sprites, *blend, i, i + 1);
+                    self.push_batch(BatchKind::Sprites, *blend, *pass, i, i + 1);
                 }
             }
         }
@@ -541,12 +551,18 @@ impl Renderer {
         if self.instances.len() > self.instance_capacity {
             self.instance_capacity = self.instances.len().next_power_of_two();
             self.instance_buffer =
-                Self::buffer(&self.device, "instances", self.instance_capacity * std::mem::size_of::<Instance>());
+                Self::buffer(&self.device, "instances", RING * self.instance_capacity * std::mem::size_of::<Instance>());
         }
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+        self.ring_slot = (self.ring_slot + 1) % RING;
+        let ring_offset = (self.ring_slot * self.instance_capacity * std::mem::size_of::<Instance>()) as u64;
+        if !self.instances.is_empty() {
+            self.queue.write_buffer(&self.instance_buffer, ring_offset, bytemuck::cast_slice(&self.instances));
+        }
+        // Logical -> clip over the whole window (the visible rect).
+        let [x0, y0, w, h] = layout.visible;
         let view = ViewUniform {
-            scale: [2.0 / SCREEN_WIDTH, -2.0 / SCREEN_HEIGHT],
-            offset: [-1.0, 1.0],
+            scale: [2.0 / w, -2.0 / h],
+            offset: [-1.0 - x0 * 2.0 / w, 1.0 + y0 * 2.0 / h],
             time: self.time,
             pad: [0.0; 3],
         };
@@ -576,24 +592,55 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
+            let [ax, ay, aw, ah] = layout.arena_px;
+            let instances = self.instance_buffer.slice(ring_offset..);
+            let mut scissor = None;
             for batch in &self.batches {
+                if scissor != Some(batch.pass) {
+                    match batch.pass {
+                        Pass::Background => pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1)),
+                        Pass::Arena => pass.set_scissor_rect(ax, ay, aw.max(1), ah.max(1)),
+                    }
+                    scissor = Some(batch.pass);
+                }
                 match batch.kind {
                     BatchKind::Sprites => {
                         pass.set_pipeline(&self.sprite_pipelines[blend_index(batch.blend)]);
-                        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+                        pass.set_vertex_buffer(0, instances);
                         pass.draw(0..4, batch.start..batch.end);
                     }
                     BatchKind::Bitmaps => {
                         pass.set_pipeline(&self.bitmap_pipelines[blend_index(batch.blend)]);
-                        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+                        pass.set_vertex_buffer(0, instances);
                         pass.draw(0..4, batch.start..batch.end);
                     }
                 }
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// Renders `list` into an offscreen target of `size` kept between calls,
+    /// and waits for the GPU (for benchmarks).
+    pub fn render_offscreen(&mut self, list: &DrawList, size: (u32, u32)) {
+        let stale = self.offscreen.as_ref().is_none_or(|(_, s)| *s != size);
+        if stale {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("offscreen"),
+                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.offscreen = Some((texture.create_view(&wgpu::TextureViewDescriptor::default()), size));
+        }
+        let view = self.offscreen.as_ref().map(|(v, _)| v.clone()).expect("offscreen target");
+        self.render(list, &view, size);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// Renders `list` into a new `width` x `height` image and reads it back

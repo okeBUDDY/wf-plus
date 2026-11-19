@@ -30,22 +30,23 @@ mod shape_table;
 pub use wf_engine::{audio as sound, gfx, log, platform};
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use game::assets::{Assets, CHANNELS};
 use game::{App, Cx};
 use platform::{Key, RawInput};
-
-/// HLSync::Initialize (0x40c9e0): a 60 fps timer of (10000 / 60 + 5) / 10
-/// = 17 ms, so the game really runs at 1000 / 17 = 58.8 frames a second.
-const FRAME: Duration = Duration::from_millis(17);
 
 struct Options {
     data: PathBuf,
     headless: bool,
     frames: u32,
     screenshot: Option<PathBuf>,
-    size: (u32, u32),
+    /// The window (or headless image) size; the config's otherwise.
+    size: Option<(u32, u32)>,
+    fps_cap: Option<wf_engine::time::FpsCap>,
+    window_mode: Option<wf_engine::config::WindowMode>,
+    show_fps: bool,
+    /// Measure the uncapped frame rate for this many seconds (headless).
+    bench: Option<f64>,
     /// Headless input: keys held on given frames.
     script: Vec<(u32, Key)>,
     /// Where wf.ini, wf.sco and rec/ live.
@@ -75,7 +76,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--headless --script FRAME:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps]\n          [--headless [--bench SECONDS] --script FRAME:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -88,7 +89,11 @@ fn options() -> Options {
         headless: false,
         frames: 60,
         screenshot: None,
-        size: (1280, 960),
+        size: None,
+        fps_cap: None,
+        window_mode: None,
+        show_fps: false,
+        bench: None,
         script: Vec::new(),
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
         viewer: false,
@@ -110,8 +115,14 @@ fn options() -> Options {
             "--size" => {
                 let v = value();
                 let (w, h) = v.split_once('x').unwrap_or_else(|| usage());
-                o.size = (w.parse().unwrap_or_else(|_| usage()), h.parse().unwrap_or_else(|_| usage()));
+                o.size = Some((w.parse().unwrap_or_else(|_| usage()), h.parse().unwrap_or_else(|_| usage())));
             }
+            "--fps-cap" => o.fps_cap = Some(wf_engine::time::FpsCap::parse(&value()).unwrap_or_else(|| usage())),
+            "--fullscreen" => o.window_mode = Some(wf_engine::config::WindowMode::Fullscreen),
+            "--borderless" => o.window_mode = Some(wf_engine::config::WindowMode::Borderless),
+            "--windowed" => o.window_mode = Some(wf_engine::config::WindowMode::Windowed),
+            "--show-fps" => o.show_fps = true,
+            "--bench" => o.bench = Some(value().parse().unwrap_or_else(|_| usage())),
             "--script" => {
                 for item in value().split(',') {
                     let (f, k) = item.split_once(':').unwrap_or_else(|| usage());
@@ -163,147 +174,153 @@ fn save_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), S
     enc.write_header().and_then(|mut w| w.write_image_data(rgba)).map_err(|e| e.to_string())
 }
 
-/// Runs `frames` frames without a window and saves the last one.
-fn run_headless(o: &Options) -> Result<(), String> {
-    let (mut cx, mut app) = startup(o)?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
-    let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &cx.art.pack);
-    for frame in 0..o.frames {
-        let mut raw = RawInput::default();
-        for &(f, k) in &o.script {
-            if f == frame {
-                raw.keys[k as usize] = true;
-            }
+/// The game as the engine's loop drives it: the simulation (`Cx` and the
+/// stage loop) plus the input adapter in front of it.
+struct WfGame {
+    cx: Cx,
+    app: App,
+    /// The trigger maps last given to the bindings.
+    synced: Option<([Key; 8], [u8; 8])>,
+}
+
+impl WfGame {
+    fn ship(&self) -> Option<[f32; 2]> {
+        let p = self.cx.game.player?;
+        let a = self.cx.actors.get(p);
+        Some([a.x(), a.y()])
+    }
+}
+
+impl wf_engine::app::Game for WfGame {
+    fn tick(&mut self, actions: &wf_engine::input::ActionState) -> bool {
+        // InputTask::IsProtected (0x405f30): the pads are polled only while
+        // the window is active; otherwise their buttons and presses hold.
+        if self.active() {
+            self.cx.input.steer.ship = self.ship();
+            self.cx.input.poll(actions);
         }
-        cx.input.poll(&raw);
-        app.frame(&mut cx);
-        if !app.running() {
-            break;
+        self.app.frame(&mut self.cx)
+    }
+    fn snapshot(&self) -> &gfx::DrawList {
+        &self.cx.draw
+    }
+    fn running(&self) -> bool {
+        self.app.running()
+    }
+    fn quit(&mut self) {
+        self.app.quit(&mut self.cx);
+    }
+    fn focus(&mut self, active: bool) {
+        if active {
+            self.cx.app.flags &= !game::AppFlags::INACTIVE;
+        } else {
+            self.cx.app.flags |= game::AppFlags::INACTIVE;
         }
     }
+    fn active(&self) -> bool {
+        self.cx.app.flags & game::AppFlags::INACTIVE == 0
+    }
+    fn shader_time(&self) -> f32 {
+        self.cx.app.frame_count as f32 / 58.8
+    }
+    fn sync_bindings(&mut self, b: &mut wf_engine::input::Bindings) {
+        let pad = &self.cx.input.pads[0];
+        let maps = (pad.key_map, pad.button_map);
+        if self.synced == Some(maps) {
+            return;
+        }
+        for i in 0..8 {
+            b.set_trigger_key(i as u8, maps.0[i]);
+            if let Some(&button) = platform::PadButton::TRIGGERS.get(maps.1[i] as usize) {
+                b.set_trigger_button(i as u8, button);
+            }
+        }
+        self.synced = Some(maps);
+    }
+    fn wants_border(&self) -> bool {
+        true
+    }
+}
+
+fn engine_config(o: &Options) -> wf_engine::config::Config {
+    let _ = std::fs::create_dir_all(&o.home);
+    wf_engine::config::Config::load(&o.home.join("wf-plus.ini"))
+}
+
+fn script_input(o: &Options, frame: u32) -> RawInput {
+    let mut raw = RawInput::default();
+    for &(f, k) in &o.script {
+        if f == frame {
+            raw.keys[k as usize] = true;
+        }
+    }
+    raw
+}
+
+/// Runs `frames` ticks without a window and saves the last one; or, with
+/// --bench, measures the uncapped frame rate offscreen.
+fn run_headless(o: &Options) -> Result<(), String> {
+    let (cx, app) = startup(o)?;
+    let mut game = WfGame { cx, app, synced: None };
+    let cfg = engine_config(o);
+    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
+    let size = o.size.unwrap_or((1280, 720));
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
+    let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &game.cx.art.pack);
+    let mut snaps = wf_engine::app::run_ticks(&mut game, &mut input, o.frames, |f| script_input(o, f));
+    if let Some(seconds) = o.bench {
+        let (fps, ticks) = wf_engine::app::bench(&mut game, &mut renderer, size, seconds, &mut input);
+        println!("bench: {fps:.0} frames/s uncapped at {}x{} ({ticks} ticks in {seconds} s)", size.0, size.1);
+        return Ok(());
+    }
     if let Some(path) = &o.screenshot {
-        renderer.time = cx.app.frame_count as f32 / 58.8;
-        let rgba = renderer.render_to_rgba(&cx.draw, o.size.0, o.size.1);
-        save_png(path, o.size.0, o.size.1, &rgba)?;
+        renderer.time = game.cx.app.frame_count as f32 / 58.8;
+        let layout = gfx::Layout::new(snaps.cur.arena, size);
+        let frame = snaps.frame(1.0, &layout, true);
+        let rgba = renderer.render_to_rgba(frame, size.0, size.1);
+        save_png(path, size.0, size.1, &rgba)?;
         println!("saved {}", path.display());
     }
     Ok(())
 }
 
-struct Display {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    renderer: gfx::gpu::Renderer,
-}
-
-impl Display {
-    fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?)));
-        // SAFETY: the window outlives the surface: the Display is created
-        // after the Platform in run_windowed and dropped before it.
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&platform.window).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?
-        };
-        let (adapter, device, queue) = gfx::gpu::create_device(&instance, Some(&surface))?;
-        let caps = surface.get_capabilities(&adapter);
-        // Blend in gamma space, as the original's Direct3D 7 did.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .or_else(|| caps.formats.first().copied())
-            .ok_or("the window surface has no format")?;
-        let present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
-            .into_iter()
-            .find(|m| caps.present_modes.contains(m))
-            .unwrap_or(wgpu::PresentMode::Fifo);
-        let (w, h) = platform.drawable_size();
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: w.max(1),
-            height: h.max(1),
-            present_mode,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            color_space: Default::default(),
-        };
-        surface.configure(&device, &config);
-        let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
-        Ok(Display { surface, config, renderer })
-    }
-
-    fn resize(&mut self, w: u32, h: u32) {
-        self.config.width = w.max(1);
-        self.config.height = h.max(1);
-        self.surface.configure(self.renderer.device(), &self.config);
-    }
-
-    fn present(&mut self, list: &gfx::DrawList) {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(self.renderer.device(), &self.config);
-                return;
-            }
-            _ => return,
-        };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.render(list, &view, (self.config.width, self.config.height));
-        self.renderer.queue().present(frame);
-    }
-}
-
 fn run_windowed(o: &Options) -> Result<(), String> {
-    let mut platform = platform::sdl::Platform::new("WARNING FOREVER", o.size.0, o.size.1)?;
-    let (mut cx, mut app) = startup(o)?;
-    let mut display = Display::new(&platform, &cx.art.pack)?;
-    platform.start_audio(cx.sound.mixer());
-    let mut next = Instant::now() + FRAME;
-    let mut screenshot_taken = false;
-    while app.running() {
-        for event in platform.poll() {
-            match event {
-                platform::Event::Quit => app.quit(&mut cx),
-                platform::Event::Resized(w, h) => display.resize(w, h),
-                platform::Event::Focus(active) => {
-                    if active {
-                        cx.app.flags &= !game::AppFlags::INACTIVE;
-                    } else {
-                        cx.app.flags |= game::AppFlags::INACTIVE;
-                    }
-                }
-            }
-        }
-        // InputTask::IsProtected (0x405f30): the pads are polled only while
-        // the window is active; otherwise their buttons and presses hold.
-        if cx.app.flags & game::AppFlags::INACTIVE == 0 {
-            cx.input.poll(&platform.input());
-        }
-        let drew = app.frame(&mut cx);
-        // Wait for the timer tick, then present (HLSync's WaitBlt).
-        let now = Instant::now();
-        if next > now {
-            std::thread::sleep(next - now);
-        }
-        next = (next + FRAME).max(Instant::now() - FRAME);
-        if drew {
-            display.renderer.time = cx.app.frame_count as f32 / 58.8;
-            display.present(&cx.draw);
-            if let (Some(path), false) = (&o.screenshot, screenshot_taken)
-                && cx.app.frame_count >= o.frames {
-                    let (w, h) = (display.config.width, display.config.height);
-                    let rgba = display.renderer.render_to_rgba(&cx.draw, w, h);
-                    save_png(path, w, h, &rgba)?;
-                    screenshot_taken = true;
-                }
-        }
+    let cfg = engine_config(o);
+    let mut display_cfg = wf_engine::config::DisplayConfig::from_config(&cfg);
+    if let Some((w, h)) = o.size {
+        (display_cfg.width, display_cfg.height) = (w, h);
     }
+    if let Some(cap) = o.fps_cap {
+        display_cfg.fps_cap = cap;
+    }
+    if let Some(mode) = o.window_mode {
+        display_cfg.mode = mode;
+    }
+    display_cfg.show_fps |= o.show_fps;
+    let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
+    wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
+    let (cx, app) = startup(o)?;
+    let mut game = WfGame { cx, app, synced: None };
+    let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
+    platform.start_audio(game.cx.sound.mixer());
+    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
+    let mut screenshot_taken = false;
+    let frames = o.frames;
+    let shot = o.screenshot.clone();
+    let counter = std::cell::Cell::new(0u32);
+    wf_engine::app::run_windowed(&mut game, &mut platform, &mut display, display_cfg, &mut input, |display, frame| {
+        counter.set(counter.get() + 1);
+        if let (Some(path), false) = (&shot, screenshot_taken)
+            && counter.get() >= frames
+        {
+            let (w, h) = display.size();
+            let rgba = display.renderer.render_to_rgba(frame, w, h);
+            save_png(path, w, h, &rgba)?;
+            screenshot_taken = true;
+        }
+        Ok(())
+    })?;
     drop(display);
     Ok(())
 }

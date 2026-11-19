@@ -1,7 +1,8 @@
 //! The SDL3 implementation of the platform seam: window, keyboard, gamepads
 //! (SDL_Gamepad) and audio output.
 
-use super::{Event, GamepadState, Key, PadButton, RawInput};
+use super::{Device, Event, Finger, GamepadState, Key, MouseState, PadButton, RawInput};
+use crate::config::WindowMode;
 use crate::audio::{Mixer, OUTPUT_RATE};
 use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream, AudioStreamWithCallback};
 use sdl3::event::{Event as SdlEvent, WindowEvent};
@@ -17,6 +18,9 @@ pub struct Platform {
     audio: Option<AudioStreamWithCallback<MixerCallback>>,
     events: sdl3::EventPump,
     pub window: sdl3::video::Window,
+    fingers: Vec<Finger>,
+    last_device: Device,
+    mouse_inside: bool,
 }
 
 pub struct MixerCallback {
@@ -140,7 +144,19 @@ impl Platform {
         let gamepad_sys = sdl.gamepad().ok();
         let audio_sys = sdl.audio().ok();
         let events = sdl.event_pump().map_err(|e| e.to_string())?;
-        Ok(Platform { _sdl: sdl, _video: video, gamepad_sys, gamepads: Vec::new(), audio_sys, audio: None, events, window })
+        Ok(Platform {
+            _sdl: sdl,
+            _video: video,
+            gamepad_sys,
+            gamepads: Vec::new(),
+            audio_sys,
+            audio: None,
+            events,
+            window,
+            fingers: Vec::new(),
+            last_device: Device::Keyboard,
+            mouse_inside: false,
+        })
     }
 
     /// Starts audio output pulling from `mixer`. Returns false without an
@@ -181,12 +197,38 @@ impl Platform {
                 },
                 SdlEvent::GamepadAdded { which, .. } => {
                     if let Some(sys) = &self.gamepad_sys
+                        && !self.gamepads.iter().any(|p| p.id().ok() == Some(which))
                         && let Ok(pad) = sys.open(which) {
                             self.gamepads.push(pad);
+                            self.last_device = Device::Gamepad;
                         }
                 }
                 SdlEvent::GamepadRemoved { which, .. } => {
                     self.gamepads.retain(|p| p.id().ok() != Some(which));
+                }
+                // The last-used device: whatever the player touched last.
+                SdlEvent::KeyDown { repeat: false, .. } => self.last_device = Device::Keyboard,
+                SdlEvent::MouseMotion { xrel, yrel, .. } => {
+                    self.mouse_inside = true;
+                    if xrel.abs() + yrel.abs() > 2.0 {
+                        self.last_device = Device::Mouse;
+                    }
+                }
+                SdlEvent::MouseButtonDown { .. } => self.last_device = Device::Mouse,
+                SdlEvent::GamepadButtonDown { .. } | SdlEvent::GamepadTouchpadDown { .. } => self.last_device = Device::Gamepad,
+                SdlEvent::GamepadAxisMotion { value, .. } if value.unsigned_abs() > 16000 => self.last_device = Device::Gamepad,
+                SdlEvent::FingerDown { finger_id, x, y, .. } => {
+                    self.last_device = Device::Touch;
+                    self.fingers.retain(|f| f.id != finger_id);
+                    self.fingers.push(Finger { id: finger_id, pos: [x, y] });
+                }
+                SdlEvent::FingerMotion { finger_id, x, y, .. } => {
+                    if let Some(f) = self.fingers.iter_mut().find(|f| f.id == finger_id) {
+                        f.pos = [x, y];
+                    }
+                }
+                SdlEvent::FingerUp { finger_id, .. } | SdlEvent::FingerCanceled { finger_id, .. } => {
+                    self.fingers.retain(|f| f.id != finger_id);
                 }
                 _ => {}
             }
@@ -209,9 +251,66 @@ impl Platform {
                 }
             }
             g.stick = [pad.axis(Axis::LeftX) as f32 / 32767.0, pad.axis(Axis::LeftY) as f32 / 32767.0];
+            g.touchpad = touchpad_finger(pad);
             raw.gamepads.push(g);
         }
+        let ms = self.events.mouse_state();
+        // SDL gives the mouse in window points; the renderer works in pixels.
+        let (pw, _) = self.window.size_in_pixels();
+        let (lw, _) = self.window.size();
+        let density = if lw > 0 { pw as f32 / lw as f32 } else { 1.0 };
+        raw.mouse = MouseState {
+            pos: [ms.x() * density, ms.y() * density],
+            buttons: (ms.left() as u32) | (ms.middle() as u32) << 1 | (ms.right() as u32) << 2,
+            inside: self.mouse_inside,
+        };
+        raw.fingers = self.fingers.clone();
+        raw.last_device = self.last_device;
+        raw.window = self.window.size_in_pixels();
         raw
+    }
+}
+
+/// SDL_GetGamepadTouchpadFinger of finger 0 on touchpad 0.
+fn touchpad_finger(pad: &Gamepad) -> Option<[f32; 2]> {
+    if pad.touchpads_count() == 0 {
+        return None;
+    }
+    let (mut down, mut x, mut y, mut p) = (false, 0.0f32, 0.0f32, 0.0f32);
+    // SAFETY: an open gamepad and plain out-parameters on the stack.
+    let ok = unsafe { sdl3::sys::gamepad::SDL_GetGamepadTouchpadFinger(pad.raw(), 0, 0, &mut down, &mut x, &mut y, &mut p) };
+    (ok && down).then_some([x, y])
+}
+
+impl Platform {
+    pub fn set_title(&mut self, title: &str) {
+        let _ = self.window.set_title(title);
+    }
+
+    /// Shows the window windowed, exclusive fullscreen (the desktop's
+    /// mode) or borderless over the display.
+    pub fn set_window_mode(&mut self, mode: WindowMode) {
+        use sdl3::sys::video::{SDL_GetDesktopDisplayMode, SDL_GetDisplayForWindow, SDL_SetWindowFullscreenMode};
+        let raw = self.window.raw();
+        match mode {
+            WindowMode::Windowed => {
+                let _ = self.window.set_fullscreen(false);
+            }
+            WindowMode::Borderless => {
+                // SAFETY: a live window; a null mode is borderless desktop.
+                unsafe { SDL_SetWindowFullscreenMode(raw, std::ptr::null()) };
+                let _ = self.window.set_fullscreen(true);
+            }
+            WindowMode::Fullscreen => {
+                // SAFETY: a live window; the desktop mode SDL returns lives
+                // as long as the display.
+                unsafe {
+                    let mode = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(raw));
+                    SDL_SetWindowFullscreenMode(raw, mode);
+                }
+                let _ = self.window.set_fullscreen(true);
+            }
+        }
     }
 }
 

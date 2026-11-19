@@ -8,7 +8,10 @@ use super::input;
 use super::math::sin;
 use super::task::Task;
 use crate::shape_table::GRID_HALF_TILE as HALF_TILE;
-use crate::gfx::{Argb, Blend, Transform};
+use crate::gfx::{Argb, Blend, Pass, Transform};
+
+/// The interpolation keys of the grid's tiles (above any actor's).
+const GRID_KEY: u32 = 0x7fff_0000;
 
 pub struct BackgroundGrid {
     pub speed: f32,
@@ -82,7 +85,11 @@ impl Task for BackgroundGrid {
 
     /// Run (0x416030): the four copies of the tile.
     fn run(&mut self, cx: &mut Cx) {
-        for tile in self.tiles {
+        // The grid runs on into the margins around the arena; each tile is
+        // keyed for display interpolation (a wrap snaps).
+        cx.draw.set_pass(Pass::Background);
+        for (i, tile) in self.tiles.into_iter().enumerate() {
+            cx.draw.set_key(GRID_KEY + i as u32);
             let mut t = Transform::IDENTITY;
             t.m[2][0] = -self.x + tile[0];
             t.m[2][1] = -self.y + tile[1];
@@ -91,6 +98,8 @@ impl Task for BackgroundGrid {
             t.m[2][1] += 240.0;
             cx.draw.sprite(cx.art.shapes.grid_tile, &t, self.color, Blend::Normal);
         }
+        cx.draw.set_key(0);
+        cx.draw.set_pass(Pass::Arena);
     }
 }
 

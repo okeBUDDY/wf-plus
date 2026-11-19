@@ -1227,6 +1227,11 @@ fn hit_obj(cx: &mut Cx, obj: Obj, x: i32, y: i32, id: u16) {
 fn draw_actor(cx: &mut Cx, a: Aid) -> Aid {
     let x = cx.actors.get(a);
     let (obj, screen, color, f, hp, low) = (x.sprite, x.screen, x.color, x.flags, x.hit_points, x.low_hit_points);
+    // Display only: the draws of one actor carry a key that stays the same
+    // while it lives (its slot and the frame it was made on), so the
+    // renderer can interpolate them between ticks.
+    let born = cx.app.frame_count.wrapping_sub(x.age as u32);
+    cx.draw.set_key(((a as u32 + 1).wrapping_mul(0x9e37_79b1) ^ born.wrapping_mul(0x85eb_ca6b)) & 0x3ff_ffff | 1);
     if f & flags::ADDITIVE != 0 {
         draw_obj(cx, obj, &screen, color, Blend::Additive);
     } else if hp < 0 {
@@ -1243,6 +1248,7 @@ fn draw_actor(cx: &mut Cx, a: Aid) -> Aid {
         let (sx, sy, id) = (math::ftol(x.sx()), math::ftol(x.sy()), x.hit_id);
         hit_obj(cx, obj, sx, sy, id);
     }
+    cx.draw.set_key(0);
     cx.actors.get(a).draw_next
 }
 

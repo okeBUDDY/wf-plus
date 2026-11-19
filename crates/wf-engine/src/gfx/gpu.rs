@@ -469,7 +469,14 @@ impl Renderer {
     /// and centred in the window, the background pass filling the margins
     /// around it.
     pub fn render(&mut self, list: &DrawList, target: &wgpu::TextureView, size: (u32, u32)) {
-        let layout = super::Layout::new(list.arena, size);
+        self.render_for(list, target, size, size);
+    }
+
+    /// Renders `list` as for a window of `window` pixels into a `target` of
+    /// `size` pixels (a render scale's): the window's logical view at the
+    /// target's resolution.
+    pub fn render_for(&mut self, list: &DrawList, target: &wgpu::TextureView, size: (u32, u32), window: (u32, u32)) {
+        let layout = super::Layout::new(list.arena, window).resized(window, size);
         let k = layout.scale;
 
         self.instances.clear();

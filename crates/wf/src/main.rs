@@ -293,6 +293,9 @@ impl wf_engine::app::Game for WfGame {
     fn set_window_arena(&mut self, arena: [f32; 2]) {
         self.cx.window_arena_width = arena[0];
     }
+    fn set_window_size(&mut self, size: (u32, u32)) {
+        self.cx.window_size = size;
+    }
     fn wants_border(&self) -> bool {
         self.cx.arena.is_classic()
     }
@@ -316,6 +319,7 @@ fn run_headless(o: &Options) -> Result<(), String> {
     game.cx.settings.display.show_fps |= o.show_fps;
     let size = o.size.unwrap_or((1280, 720));
     game.cx.window_arena_width = wf_engine::app::window_arena(size)[0];
+    game.cx.window_size = size;
     if let Some(mode) = o.arena {
         game.cx.arena_choice = mode;
     }

@@ -31,6 +31,8 @@ pub trait Game {
     fn shader_time(&self) -> f32;
     /// The arena the window would give a game started now (logical units).
     fn set_window_arena(&mut self, _arena: [f32; 2]) {}
+    /// The window's size in pixels (what the frames are laid out to).
+    fn set_window_size(&mut self, _size: (u32, u32)) {}
     /// Lets the game's own remaps (the options screen) reach the bindings.
     fn sync_bindings(&mut self, _bindings: &mut Bindings) {}
     /// The display settings changed by the game (its options screen).
@@ -248,6 +250,7 @@ pub fn run_windowed(
         let size = display.size();
         let window_arena = window_arena(size);
         game.set_window_arena(window_arena);
+        game.set_window_size(size);
         let ticks = step.advance(Instant::now());
         for _ in 0..ticks {
             game.sync_bindings(&mut input.bindings);

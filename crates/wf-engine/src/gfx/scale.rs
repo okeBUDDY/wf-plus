@@ -139,7 +139,7 @@ impl Scaler {
             self.target = Some((view, scaled, bind));
         }
         let (view, _, bind) = self.target.as_ref().expect("scaled target");
-        r.render(list, view, scaled);
+        r.render_for(list, view, scaled, size);
         let mut encoder = r.device().create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("blit") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -32,6 +32,24 @@ impl Layout {
         Layout { scale, visible, arena_px: [px as u32, py as u32, pw as u32, ph as u32] }
     }
 
+    /// The same view on a target of `to` pixels instead of `from` (a
+    /// render scale's target, stretched back onto the window): the logical
+    /// rect stays the window's, so nothing laid out to the window's edges
+    /// moves off them when the target's size rounds to another aspect.
+    pub fn resized(self, from: (u32, u32), to: (u32, u32)) -> Self {
+        if from == to {
+            return self;
+        }
+        let kx = to.0 as f32 / from.0.max(1) as f32;
+        let ky = to.1 as f32 / from.1.max(1) as f32;
+        let [x, y, w, h] = self.arena_px;
+        let x0 = (x as f32 * kx).round();
+        let y0 = (y as f32 * ky).round();
+        let x1 = ((x + w) as f32 * kx).round().min(to.0 as f32);
+        let y1 = ((y + h) as f32 * ky).round().min(to.1 as f32);
+        Layout { scale: self.scale * kx.min(ky), visible: self.visible, arena_px: [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32] }
+    }
+
     /// The logical point under window pixel (`x`, `y`).
     pub fn to_logical(&self, x: f32, y: f32) -> [f32; 2] {
         [self.visible[0] + x / self.scale, self.visible[1] + y / self.scale]
@@ -50,6 +68,15 @@ mod tests {
         let p = l.to_logical(160.0, 0.0);
         assert!(p[0].abs() < 1e-3 && p[1] == 0.0);
         assert_eq!(l.visible[2], 1280.0 / 1.5);
+    }
+
+    #[test]
+    fn a_resized_layout_keeps_the_window_view() {
+        let l = Layout::new([640.0, 480.0], (2000, 1253));
+        let r = l.resized((2000, 1253), (1000, 627));
+        assert_eq!(r.visible, l.visible);
+        assert_eq!(r.arena_px, [82, 0, 836, 627]);
+        assert_eq!(l.resized((2000, 1253), (2000, 1253)), l);
     }
 
     #[test]

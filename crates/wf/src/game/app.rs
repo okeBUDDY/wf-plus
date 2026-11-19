@@ -159,9 +159,7 @@ impl App {
             stage.update(cx);
             task::remove_up_to(cx, ListId::Overlays, 2);
         }
-        cx.draw.reset();
-        cx.draw.menu = stage.is_menu();
-        cx.guide = None;
+        begin_frame(cx, stage.is_menu());
         task::run_all(cx, ListId::Tasks);
         stage.draw(cx);
         task::run_all(cx, ListId::Overlays);
@@ -213,5 +211,25 @@ impl App {
         }
         cx.app.flags &= !(AppFlags::STOP_TIME | AppFlags::START_TIME);
         true
+    }
+}
+
+/// Starts a frame's draw list. The camera is set afresh every frame (a
+/// menu's would otherwise stay on into the game that a menu starts).
+pub fn begin_frame(cx: &mut Cx, menu: bool) {
+    cx.draw.reset();
+    cx.draw.menu = menu;
+    cx.draw.arena = frame_arena(cx);
+    cx.guide = None;
+}
+
+/// The arena (logical units) the camera fits to the window this frame: the
+/// 640x480 box a menu lays out around (taller by the input guide's strip),
+/// else the game's arena.
+pub fn frame_arena(cx: &Cx) -> [f32; 2] {
+    if cx.draw.menu {
+        [super::arena::W, 480.0 + super::guide::menu_strip(cx)]
+    } else {
+        [cx.arena.width, cx.arena.height]
     }
 }

@@ -133,9 +133,6 @@ fn row(cx: &Cx) -> (f32, f32, f32) {
 
 /// Draws the guide and the FPS counter (after the frame's other draws).
 pub fn draw(cx: &mut Cx) {
-    if cx.draw.menu {
-        cx.draw.arena = [super::arena::W, 480.0 + menu_strip(cx)];
-    }
     let fps = cx.settings.display.show_fps.then(|| format!("{:.0} FPS", cx.settings.fps));
     let guide = cx.guide.filter(|_| shown(cx)).map(|g| text(cx, g));
     if fps.is_none() && guide.is_none() {

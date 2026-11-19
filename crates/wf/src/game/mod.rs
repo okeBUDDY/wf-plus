@@ -102,6 +102,8 @@ pub struct Cx {
     /// it).
     pub arena_choice: arena::Mode,
     pub window_arena_width: f32,
+    /// The window's size in pixels (display only).
+    pub window_size: (u32, u32),
     /// The port's own settings (wf-plus.ini): the engine's display and
     /// input settings and the game's new ones; wf.ini stays the original's.
     pub port: wf_engine::config::Config,
@@ -153,6 +155,7 @@ impl Cx {
             arena: arena::Arena::CLASSIC,
             arena_choice: arena::Mode::Classic,
             window_arena_width: 640.0,
+            window_size: (640, 480),
             port: Default::default(),
             settings: Default::default(),
             ui: Default::default(),
@@ -205,10 +208,13 @@ impl Cx {
 
     /// The view the HUD keeps to, as (left, width) in arena units: the
     /// arena in HD; in Classic the window's whole width around the
-    /// 640-wide arena (display only: the game never reads it).
+    /// 640-wide arena (display only: the game never reads it). Either way
+    /// the part of the camera's view (`gfx::Layout::visible` for the frame's
+    /// arena) that holds the arena's height.
     pub fn hud_view(&self) -> (f32, f32) {
         if self.arena.is_classic() {
-            let w = self.window_arena_width.max(arena::W);
+            let (w, h) = self.window_size;
+            let w = (480.0 * w.max(1) as f32 / h.max(1) as f32).max(arena::W);
             ((arena::W - w) * 0.5, w)
         } else {
             (0.0, self.arena.width)

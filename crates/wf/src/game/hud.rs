@@ -759,3 +759,131 @@ pub fn mode_label(cx: &super::Cx) -> String {
         super::arena::Mode::Hd => format!("HD SCORES ({}X{})", cx.arena.width, cx.arena.height),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::{Draw, Layout, scale::scaled_size};
+    use super::super::{app, arena, guide};
+
+    /// The window sizes the HUD must fit (the odd ones round unevenly).
+    const SIZES: [(u32, u32); 12] = [
+        (640, 480),
+        (800, 600),
+        (1280, 720),
+        (1366, 768),
+        (1600, 900),
+        (1920, 1080),
+        (2560, 1080),
+        (2560, 1440),
+        (3840, 2160),
+        (2000, 1253),
+        (1080, 1920),
+        (1917, 1079),
+    ];
+
+    /// A game's HUD with everything it shows at once (score, lives, a
+    /// three-digit timer, a replay's name, date and help, the input guide
+    /// and the FPS counter), drawn as the frame for a window of `size`.
+    fn hud_frame(size: (u32, u32), mode: arena::Mode) -> Cx {
+        let mut cx = super::super::tests::cx();
+        cx.window_size = size;
+        cx.window_arena_width = wf_engine::app::window_arena(size)[0];
+        cx.arena_choice = mode;
+        let a = cx.chosen_arena();
+        // The game starts from the title: its last frame (a menu's, guide
+        // and all) is drawn around the arena's locking, as in App::frame.
+        app::begin_frame(&mut cx, true);
+        cx.set_arena(a);
+        guide::draw(&mut cx);
+        app::begin_frame(&mut cx, false);
+        cx.global.entry.score = 999_999_999;
+        cx.game.timer = 199 * 60 + 59;
+        cx.game.lives = 9;
+        cx.game.extend_count = 99;
+        cx.fn_game.mode = 1;
+        cx.settings.input_guide = guide::Policy::Always;
+        cx.settings.display.show_fps = true;
+        cx.settings.fps = 165.0;
+        cx.guide = Some(guide::Guide::Paused);
+        let mut hud = GameHud::new();
+        hud.flags = FLAG_SCORE | FLAG_TIMER | FLAG_LIVES | FLAG_REPLAY;
+        hud.replay_name = b"STAGE07.REC".to_vec();
+        hud.replay_name_x = (80 - hud.replay_name.len() as i32) * 8;
+        hud.replay_date = b"2026.11.19 21:49".to_vec();
+        hud.run(&mut cx);
+        guide::draw(&mut cx);
+        cx
+    }
+
+    /// Each overlay draw's box in window pixels, as the frame lands on a
+    /// window of `size` drawn at render scale `scale`.
+    fn boxes(cx: &Cx, size: (u32, u32), scale: f32) -> Vec<(String, [f32; 4])> {
+        let target = if (scale - 1.0).abs() < 1e-3 { size } else { scaled_size(size, scale) };
+        // As the renderer lays it out (`Renderer::render_for`).
+        let layout = Layout::new(cx.draw.arena, size).resized(size, target);
+        let (sx, sy) = (size.0 as f32 / target.0 as f32, size.1 as f32 / target.1 as f32);
+        let px = |[x, y]: [f32; 2]| {
+            [(x - layout.visible[0]) * layout.scale * sx, (y - layout.visible[1]) * layout.scale * sy]
+        };
+        let mut out = Vec::new();
+        for d in cx.draw.draws.iter().filter(|d| d.pass() == crate::gfx::Pass::Overlay) {
+            let (name, points): (String, Vec<[f32; 2]>) = match d {
+                Draw::Sprite { sprite, transform, .. } => {
+                    let [x0, y0, x1, y1] = cx.art.pack.sprites[sprite.0 as usize].bounds;
+                    (cx.art.name(*sprite).to_string(), [[x0, y0], [x1, y0], [x0, y1], [x1, y1]].iter().map(|p| transform.apply(p[0], p[1])).collect())
+                }
+                Draw::Shape { points, transform, .. } => ("shape".into(), points.iter().map(|p| transform.apply(p[0], p[1])).collect()),
+            };
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for p in points.into_iter().map(px) {
+                b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+            }
+            out.push((name, b));
+        }
+        out
+    }
+
+    /// Every HUD element lies inside the window, at every window size,
+    /// render scale and arena mode.
+    #[test]
+    fn hud_stays_inside_the_window() {
+        let mut failed = Vec::new();
+        let mut checked = 0;
+        for size in SIZES {
+            for mode in [arena::Mode::Classic, arena::Mode::Hd] {
+                let cx = hud_frame(size, mode);
+                for scale in [1.0, 0.5, 0.75] {
+                    let b = boxes(&cx, size, scale);
+                    assert!(b.len() > 30, "the HUD drew ({} draws)", b.len());
+                    // Half a window pixel of slack: a scaled frame is
+                    // stretched onto the window.
+                    let (w, h) = (size.0 as f32 + 0.5, size.1 as f32 + 0.5);
+                    for (name, [x0, y0, x1, y1]) in b {
+                        checked += 1;
+                        if x0 < -0.5 || y0 < -0.5 || x1 > w || y1 > h {
+                            failed.push(format!("{}x{} {mode:?} x{scale}: {name} at {x0:.1},{y0:.1}..{x1:.1},{y1:.1}", size.0, size.1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{} of {checked} HUD draws leave the window:\n{}", failed.len(), failed.join("\n"));
+    }
+
+    /// The HUD's view is the camera's: its edges are the window's in
+    /// Classic and the arena's in HD.
+    #[test]
+    fn hud_view_is_the_camera_view() {
+        for size in SIZES {
+            for mode in [arena::Mode::Classic, arena::Mode::Hd] {
+                let cx = hud_frame(size, mode);
+                let (left, width) = cx.hud_view();
+                let v = Layout::new(cx.draw.arena, size).visible;
+                let (l, w) = if mode == arena::Mode::Classic { (v[0], v[2]) } else { (0.0, cx.arena.width) };
+                assert!((left - l).abs() < 1e-3 && (width - w).abs() < 1e-3, "{size:?} {mode:?}: hud ({left}, {width}), camera ({l}, {w})");
+                assert!(v[0] <= left + 1e-3 && left + width <= v[0] + v[2] + 1e-3, "{size:?} {mode:?}: the HUD's view leaves the camera's");
+            }
+        }
+    }
+}

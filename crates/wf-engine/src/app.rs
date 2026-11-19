@@ -53,18 +53,32 @@ pub trait Game {
 pub const ARENA_BORDER: u32 = 0x607a_5cff;
 
 /// The arena border: a thin low-alpha stroke, display only, after the
-/// background and before the arena's draws.
+/// background and before the arena's draws. It is drawn only on the sides
+/// where the view extends past the arena, half a logical pixel outside the
+/// arena so the 1 px stroke sits entirely in the margin.
 pub fn add_border(list: &mut DrawList, layout: &Layout) {
     let [x, y, w, h] = layout.visible;
     let [aw, ah] = list.arena;
-    if x > -0.5 && y > -0.5 && (w - aw).abs() < 1.0 && (h - ah).abs() < 1.0 {
+    let (left, top) = (x < -0.5, y < -0.5);
+    let (right, bottom) = (x + w > aw + 0.5, y + h > ah + 0.5);
+    if !(left || top || right || bottom) {
         return;
     }
     let at = list.draws.iter().position(|d| d.pass() == gfx::Pass::Arena).unwrap_or(list.draws.len());
     let mut tail = list.draws.split_off(at);
     list.set_pass(gfx::Pass::Background);
-    let pts = [[0.0, 0.0], [aw, 0.0], [aw, ah], [0.0, ah], [0.0, 0.0]];
-    list.shape(gfx::Primitive::LineStrip, &gfx::Transform::IDENTITY, &pts, gfx::Argb(ARENA_BORDER), gfx::Blend::Normal);
+    let (x0, y0, x1, y1) = (-0.5, -0.5, aw + 0.5, ah + 0.5);
+    let sides = [
+        (left, [[x0, y0], [x0, y1]]),
+        (right, [[x1, y0], [x1, y1]]),
+        (top, [[x0, y0], [x1, y0]]),
+        (bottom, [[x0, y1], [x1, y1]]),
+    ];
+    for (on, pts) in sides {
+        if on {
+            list.shape(gfx::Primitive::LineStrip, &gfx::Transform::IDENTITY, &pts, gfx::Argb(ARENA_BORDER), gfx::Blend::Normal);
+        }
+    }
     list.set_pass(gfx::Pass::Arena);
     list.draws.append(&mut tail);
 }

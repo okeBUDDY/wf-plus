@@ -186,12 +186,12 @@ fn dash(cx: &mut Cx, a: Aid, program: &mut EnmList, mut x: f32, mut y: f32, powe
     let act = cx.actors.get_mut(a);
     act.acceleration = acceleration;
     act.speed = 0.0;
-    act.start_angle = angle;
+    act.start_angle = angle as u16;
     program.time = 0;
     pw(cx, a).flags |= DASHING;
     if boost {
         cx.enm.unknown_164 = 0;
-        cx.enm.unknown_158 = angle as i32;
+        cx.enm.unknown_158 = angle as u16 as i32; // via the u16 start_angle: zero-extended
         cx.enm.flare_time = brake as i32;
         cx.enm.flare_size = power;
         let arms = bw(cx, a).arms;
@@ -322,9 +322,9 @@ fn angle_to_player(cx: &mut Cx, a: Aid) -> u16 {
     match cx.game.player {
         Some(p) => {
             let (x, y) = (cx.actors.get(p).sx(), cx.actors.get(p).sy());
-            cx.actors.angle_to(a, x, y)
+            cx.actors.angle_to(a, x, y) as u16
         }
-        None => cx.actors.angle_to(a, 320.0, 400.0),
+        None => cx.actors.angle_to(a, 320.0, 400.0) as u16,
     }
 }
 
@@ -403,11 +403,11 @@ fn run_side_program(cx: &mut Cx, a: Aid, p: &mut EnmList, side: usize) {
 }
 
 /// Control32::StartTurn (0x411580).
-fn start_turn(cx: &mut Cx, a: Aid, p: &mut EnmList, angle: i32) -> bool {
+fn start_turn(cx: &mut Cx, a: Aid, p: &mut EnmList, angle: i16) -> bool {
     let from = cx.actors.get(a).angle;
     let w = bw(cx, a);
-    w.turn_from = from;
-    w.turn = (angle - from as i32) as i16;
+    w.turn_from = from as u16;
+    w.turn = angle.wrapping_sub(from);
     let size = (w.turn as i32).abs() as i16;
     if size == 0 {
         return false;
@@ -429,7 +429,7 @@ fn run_program_b0(cx: &mut Cx, a: Aid, p: &mut EnmList) {
     if pw(cx, a).flags & TURNING != 0 {
         let w = *bw(cx, a);
         if p.time >= w.turn_end as i32 {
-            cx.actors.get_mut(a).angle = (w.turn as u16).wrapping_add(w.turn_from);
+            cx.actors.get_mut(a).angle = (w.turn as u16).wrapping_add(w.turn_from) as i16;
             pw(cx, a).flags &= !TURNING;
             cx.enm.state.flags |= 2;
             p.op = 0;
@@ -466,7 +466,7 @@ fn run_program_b0(cx: &mut Cx, a: Aid, p: &mut EnmList) {
             turned = -turned;
         }
         let from = bw(cx, a).turn_from;
-        cx.actors.get_mut(a).angle = from.wrapping_add(turned as u16);
+        cx.actors.get_mut(a).angle = from.wrapping_add(turned as u16) as i16;
         p.time += 1;
         return;
     }
@@ -474,29 +474,32 @@ fn run_program_b0(cx: &mut Cx, a: Aid, p: &mut EnmList) {
     let target = match p.op {
         0x20001 => angle as i32 + if cx.rng.rand() & 1 != 0 { 0x200 } else { -0x200 },
         0x20002 => {
-            let mut v = angle.wrapping_sub(p.arg as u16) & 0x3ff;
-            if v as i16 >= 0x200 {
-                v = v.wrapping_sub(0x400);
+            let mut v = angle.wrapping_sub(p.arg as i16) & 0x3ff;
+            if v >= 0x200 {
+                v -= 0x400;
             }
-            v = v.wrapping_add(p.arg as u16);
+            v = v.wrapping_add(p.arg as i16);
             cx.actors.get_mut(a).angle = v;
             p.arg
         }
         0x20003 => angle as i32 + ((p.arg - 90) & !0x3ff) + 0x400,
         0x20004 => {
+            // `from` is the signed angle (decomp 4d32126); the turn target
+            // is truncated to i16, so the extension doesn't change it.
+            let from = angle as i32;
             let to = angle_to_player(cx, a) as i32;
-            let mut off = ((to - 0x200 - p.arg - angle as i32) & 0x3ff) as i16;
+            let mut off = ((to - 0x200 - p.arg - from) & 0x3ff) as i16;
             if off >= 0x200 {
                 off -= 0x400;
             }
-            angle as i32 + off as i32
+            from + off as i32
         }
         _ => {
             p.time += 1;
             return;
         }
     };
-    if !start_turn(cx, a, p, target) {
+    if !start_turn(cx, a, p, target as i16) {
         p.op = 0;
     }
     p.time += 1;
@@ -520,7 +523,7 @@ pub fn body_child_destroyed(cx: &mut Cx, parent: Aid, child: Aid) {
     if big && cx.enm.state.flags & 0x100 != 0 {
         pw(cx, parent).flags &= !DASHING;
         let (x, y) = (cx.actors.get(child).sx(), cx.actors.get(child).sy());
-        let angle = cx.actors.angle_to(parent, x, y) as i16 as i32 + 0x200;
+        let angle = cx.actors.angle_to(parent, x, y) as i32 + 0x200;
         cx.enm.list_9c.start(0x10006, angle);
     }
     parts::linked_child_destroyed(cx, parent, child);

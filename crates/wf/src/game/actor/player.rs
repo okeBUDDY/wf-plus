@@ -174,8 +174,8 @@ fn fire(cx: &mut Cx, a: Aid) {
             let d = cx.ctl.shot;
             spawn(cx, &d);
             let flame = cx.actors.get_mut(w.flame as Aid);
-            if flame.angle != angle as u16 {
-                flame.angle = angle as u16;
+            if flame.angle != angle {
+                flame.angle = angle;
             }
         }
         0 => {

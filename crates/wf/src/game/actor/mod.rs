@@ -366,7 +366,7 @@ pub struct Actor {
     pub age: u16,
     pub hit_age: u16,
     pub debris: i16,
-    pub angle: u16,
+    pub angle: i16,
     pub start_angle: u16,
     pub speed: f32,
     pub acceleration: f32,
@@ -381,7 +381,7 @@ pub struct Actor {
     pub hit_id: u16,
     pub id: i16,
     pub layer: u16,
-    pub matrix_angle: u16,
+    pub matrix_angle: i16,
     pub scale: f32,
     pub parent: Aid,
     pub next_sibling: Aid,
@@ -712,9 +712,9 @@ impl ActorSystem {
     pub fn screen_angle(&self, a: Aid) -> u16 {
         let x = &self.a[a as usize];
         if !x.relative_tf {
-            return x.angle;
+            return x.angle as u16;
         }
-        let mut result = x.angle;
+        let mut result = x.angle as u16;
         let mut anc = x.parent;
         while anc != 0 && anc != NIL {
             let p = &self.a[anc as usize];
@@ -724,7 +724,7 @@ impl ActorSystem {
             if p.flags & flags::MIRROR_Y != 0 {
                 result = 0x200u16.wrapping_sub(result);
             }
-            result = result.wrapping_add(p.angle);
+            result = result.wrapping_add(p.angle as u16);
             anc = p.parent;
         }
         result
@@ -736,7 +736,7 @@ impl ActorSystem {
         if x.relative_tf {
             screen_angle = self.to_local_angle(x.parent, screen_angle);
         }
-        screen_angle = screen_angle.wrapping_sub(x.angle);
+        screen_angle = screen_angle.wrapping_sub(x.angle as u16);
         if x.flags & flags::MIRROR_X != 0 {
             screen_angle = screen_angle.wrapping_neg();
         }
@@ -748,7 +748,7 @@ impl ActorSystem {
 
     /// Actor::AngleTo (0x411d90, matched): the angle to (`x`, `y`) in the
     /// actor's parent's frame.
-    pub fn angle_to(&self, a: Aid, x: f32, y: f32) -> u16 {
+    pub fn angle_to(&self, a: Aid, x: f32, y: f32) -> i16 {
         let act = &self.a[a as usize];
         if act.flags & flags::MOVED_ONCE == 0 {
             return act.angle;
@@ -759,7 +759,7 @@ impl ActorSystem {
             return act.angle;
         }
         let result = math::angle_of(dx, dy);
-        if act.relative_tf { self.to_local_angle(act.parent, result) } else { result }
+        (if act.relative_tf { self.to_local_angle(act.parent, result) } else { result }) as i16
     }
 
     /// Actor::TurnTo (0x414a00).
@@ -776,16 +776,16 @@ impl ActorSystem {
             x.angle = goal;
             return;
         }
-        let mut offset = (goal.wrapping_sub(x.angle) & 0x3ff) as i16;
+        let mut offset = goal.wrapping_sub(x.angle) & 0x3ff;
         if offset >= 0x200 {
             offset -= 0x400;
         }
         if offset.abs() < speed {
-            x.angle = x.angle.wrapping_add(offset as u16);
+            x.angle = x.angle.wrapping_add(offset);
         } else if offset < 0 {
-            x.angle = x.angle.wrapping_sub(speed as u16);
+            x.angle = x.angle.wrapping_sub(speed);
         } else {
-            x.angle = x.angle.wrapping_add(speed as u16);
+            x.angle = x.angle.wrapping_add(speed);
         }
     }
 
@@ -846,7 +846,7 @@ fn init(cx: &mut Cx, a: Aid, control: bool, parent: Option<Aid>, x: f32, y: f32,
     let parent = {
         let act = cx.actors.get_mut(a);
         if act.flags & flags::FACE_START != 0 {
-            act.angle = act.start_angle;
+            act.angle = act.start_angle as i16;
         }
         act.matrix_angle = act.angle.wrapping_add(0x1000);
         act.low_hit_points = act.hit_points >> 3;
@@ -902,7 +902,7 @@ pub fn spawn(cx: &mut Cx, desc: &ActorDesc) -> Option<Aid> {
         let act = cx.actors.get_mut(a);
         act.flags = desc.flags;
         act.hit_points = desc.hit_points as i32;
-        act.angle = desc.angle;
+        act.angle = desc.angle as i16;
     }
     if !init(cx, a, false, desc.parent, desc.x, desc.y, desc.layer, desc.start_angle, Param::None) {
         return None;
@@ -1051,7 +1051,7 @@ pub fn move_actor(cx: &mut Cx, a: Aid) -> bool {
     {
         let x = cx.actors.get_mut(a);
         if x.flags & flags::FACE_START != 0 {
-            x.angle = x.start_angle;
+            x.angle = x.start_angle as i16;
         }
         if x.matrix_angle != x.angle {
             let scaled = x.scale != 1.0;

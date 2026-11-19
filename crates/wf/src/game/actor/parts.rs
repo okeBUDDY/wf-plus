@@ -161,7 +161,7 @@ pub fn init_part(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     }
     let (turret, angle) = (w.turret as Aid, w.angle as u16);
     let t = cx.actors.get_mut(turret);
-    t.angle = angle;
+    t.angle = angle as i16;
     t.start_angle = angle;
     let hp = cx.actors.get(a).hit_points;
     let w = pw(cx, a);
@@ -391,7 +391,7 @@ pub fn part_destroy(cx: &mut Cx, a: Aid) {
     let id = cx.actors.get(a).id;
     let s = slot_of(cx, a);
     let angle = cx.actors.get(a).angle;
-    cx.enm.slots[s as usize].lerp_at = angle as i16;
+    cx.enm.slots[s as usize].lerp_at = angle;
     let mut chain = 1i32;
     let mut rapid = 1i32;
     let mut anc = a;
@@ -473,7 +473,7 @@ pub fn core_destroy(cx: &mut Cx, id: i16, a: Aid) {
 fn spawn_flare(cx: &mut Cx, a: Aid) {
     let Some(boss) = cx.ctl.boss else { return };
     let (sx, sy) = (cx.actors.get(a).sx(), cx.actors.get(a).sy());
-    let mut angle = cx.actors.angle_to(boss, sx, sy);
+    let mut angle = cx.actors.angle_to(boss, sx, sy) as u16;
     let offset = ((cx.enm.unknown_158 as u16).wrapping_sub(angle) & 0x3ff) as i16;
     if offset > 0x100 && offset < 0x300 {
         let x = cx.actors.get(a);
@@ -559,16 +559,16 @@ pub fn on_damage(cx: &mut Cx, a: Aid, mut how: i32) {
 fn turn_toward(cx: &mut Cx, turret: Aid, goal: i16) -> bool {
     let speed = cx.enm.turn_speed;
     let now = cx.actors.get(turret).angle;
-    let mut offset = ((goal as u16).wrapping_sub(now) & 0x3ff) as i16;
+    let mut offset = goal.wrapping_sub(now) & 0x3ff;
     if offset >= 0x200 {
         offset -= 0x400;
     }
     let t = cx.actors.get_mut(turret);
     if (offset.abs() as i32) < speed {
-        t.angle = now.wrapping_add(offset as u16);
+        t.angle = now.wrapping_add(offset);
         true
     } else {
-        t.angle = if offset < 0 { now.wrapping_sub(speed as u16) } else { now.wrapping_add(speed as u16) };
+        t.angle = if offset < 0 { now.wrapping_sub(speed as i16) } else { now.wrapping_add(speed as i16) };
         false
     }
 }
@@ -594,7 +594,7 @@ pub fn move_part(cx: &mut Cx, a: Aid) -> bool {
             let speed = cx.enm.turn_speed as i16;
             cx.actors.turn_to(turret, player, speed);
             let t = cx.actors.get_mut(turret);
-            t.angle = super::clamp_angle(t.angle, w.low, w.high);
+            t.angle = super::clamp_angle(t.angle as u16, w.low, w.high) as i16;
             if old == t.angle {
                 cx.enm.state.flags |= 1;
                 if w.state == 7 {

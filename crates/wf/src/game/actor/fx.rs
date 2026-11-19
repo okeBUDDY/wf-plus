@@ -281,7 +281,7 @@ fn grey(alpha: i32) -> u32 {
 fn spin_rings(cx: &mut Cx, rings: [u32; 3], spins: [i16; 3], color: u32) {
     for i in 0..3 {
         let r = cx.actors.get_mut(rings[i] as Aid);
-        r.angle = r.angle.wrapping_add(spins[i] as u16);
+        r.angle = r.angle.wrapping_add(spins[i]);
         r.color = color;
     }
 }
@@ -325,7 +325,7 @@ struct C20Work {
 pub fn c20_create(cx: &mut Cx, a: Aid) -> bool {
     let sprite = cx.pats.get(sheet::SYS, 32);
     cx.actors.set_sprite(a, sprite);
-    let angle = ((cx.rng.rand() & 0x3f) - 0x20) as u16;
+    let angle = ((cx.rng.rand() & 0x3f) - 0x20) as i16;
     let start = ((cx.rng.rand() & 0x7f) - 0x40) as u16;
     {
         let act = cx.actors.get_mut(a);
@@ -355,7 +355,7 @@ pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
     };
     match age {
         50 | 80 => {
-            let angle = ((cx.rng.rand() & 0x7f) - 64) as u16;
+            let angle = ((cx.rng.rand() & 0x7f) - 64) as i16;
             let start = ((cx.rng.rand() & 0x1ff) + 0x100) as u16;
             let act = cx.actors.get_mut(a);
             act.angle = angle;
@@ -487,7 +487,7 @@ pub fn glow_move(cx: &mut Cx, a: Aid) -> bool {
     let pulse = crate::game::math::sin_table()[((w.phase & 0xff) * 4) as usize] * 0.2 + 0.8;
     let act = cx.actors.get_mut(a);
     act.color = ((crate::game::math::ftol(pulse * alpha * 255.0) as u32) << 24) | 0xff8800;
-    act.angle = act.angle.wrapping_add(w.spin as u16);
+    act.angle = act.angle.wrapping_add(w.spin);
     w.phase += 1;
     w.timer += 1;
     *cx.actors.w::<GlowWork>(a) = w;
@@ -509,7 +509,7 @@ pub fn flare_create(cx: &mut Cx, a: Aid) -> bool {
     let act = cx.actors.get_mut(a);
     act.hit_points = 1;
     act.team = 0;
-    act.angle = act.start_angle;
+    act.angle = act.start_angle as i16;
     let w = cx.actors.w::<FlareWork>(a);
     w.timer = time;
     w.max_scale = ((size - 1.0) * 1.5 + 1.0) * 0.2;

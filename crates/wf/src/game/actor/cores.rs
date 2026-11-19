@@ -131,7 +131,7 @@ pub fn core_create(cx: &mut Cx, id: i16, a: Aid, param: Param) -> bool {
             *t16(cx, a, 8) = amplitude as i16;
             let t = cx.actors.get_mut(turret);
             t.start_angle = angle;
-            t.angle = angle;
+            t.angle = angle as i16;
             on_damage(cx, a, 0);
         }
         _ => on_damage(cx, a, 6),
@@ -313,7 +313,7 @@ pub fn core_move(cx: &mut Cx, id: i16, a: Aid) -> bool {
                 let age = cx.actors.get(a).age as i32;
                 let w = *pw(cx, a);
                 let v = ftos(amplitude * sin_table()[(((age - start) * 2) & 0x3ff) as usize]);
-                cx.actors.get_mut(w.turret as Aid).angle = (v as i32 + w.angle as i32) as u16;
+                cx.actors.get_mut(w.turret as Aid).angle = (v as i32 + w.angle as i32) as i16;
                 if w.unknown_1e & 7 == 0 && cx.actors.count < 700 {
                     let angle = cx.actors.screen_angle(a);
                     let d = &mut cx.ctl.desc49;
@@ -507,7 +507,7 @@ pub fn missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     act.team = 0x61;
     act.debris = 17;
     act.speed = lw.rank as f32 * 0.014_285_714 + 4.0;
-    act.angle = act.start_angle;
+    act.angle = act.start_angle as i16;
     let w = cx.actors.w::<MissileWork>(a);
     w.launcher = launcher as u32;
     w.slot = lw.slot;
@@ -522,7 +522,7 @@ pub fn missile_move(cx: &mut Cx, a: Aid) -> bool {
         let player = cx.game.player;
         cx.actors.turn_to(a, player, 8);
         let act = cx.actors.get_mut(a);
-        act.start_angle = act.angle;
+        act.start_angle = act.angle as u16;
         cx.actors.w::<MissileWork>(a).homing -= 1;
     }
     if parts::is_off_screen(cx, a) {
@@ -545,7 +545,7 @@ pub fn slow_missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let act = cx.actors.get_mut(a);
     act.team = 0x61;
     act.debris = 19;
-    act.angle = act.start_angle;
+    act.angle = act.start_angle as i16;
     act.acceleration = -0.05;
     act.speed = speed;
     true
@@ -599,7 +599,7 @@ pub fn smoke_move(cx: &mut Cx, a: Aid) -> bool {
         act.color = (alpha << 24) | 0xff_ffff;
         cx.actors.w::<SmokeWork>(a).scale += 0.2;
         let r = cx.rng.rand();
-        cx.actors.get_mut(a).angle = (r & 0x3ff) as u16;
+        cx.actors.get_mut(a).angle = (r & 0x3ff) as i16;
     } else {
         let w = cx.actors.w::<SmokeWork>(a);
         w.alpha -= 4;

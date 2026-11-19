@@ -68,6 +68,9 @@ pub struct Display {
     config: wgpu::SurfaceConfiguration,
     caps: wgpu::SurfaceCapabilities,
     pub renderer: gfx::gpu::Renderer,
+    /// Render target pixels per window pixel.
+    pub render_scale: f32,
+    scaler: gfx::scale::Scaler,
 }
 
 impl Display {
@@ -104,7 +107,8 @@ impl Display {
         };
         surface.configure(&device, &config);
         let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
-        Ok(Display { surface, config, caps, renderer })
+        let scaler = gfx::scale::Scaler::new(&renderer);
+        Ok(Display { surface, config, caps, renderer, render_scale: 1.0, scaler })
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -137,7 +141,8 @@ impl Display {
             _ => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.render(list, &view, (self.config.width, self.config.height));
+        let size = (self.config.width, self.config.height);
+        self.scaler.render(&mut self.renderer, list, &view, size, self.render_scale);
         self.renderer.queue().present(frame);
     }
 }
@@ -196,6 +201,7 @@ pub fn run_windowed(
     let mut fps = FpsCounter::default();
     let mut snaps = Snapshots::default();
     let mut title_at = Instant::now();
+    display.render_scale = cfg.render_scale;
     while game.running() {
         for event in platform.poll() {
             match event {
@@ -215,6 +221,7 @@ pub fn run_windowed(
                 platform.set_window_size(d.width, d.height);
             }
             display.set_cap(d.fps_cap);
+            display.render_scale = d.render_scale;
             cfg = d;
         }
         let size = display.size();

@@ -15,6 +15,7 @@
 
 pub mod gpu;
 pub mod layout;
+pub mod scale;
 pub mod transform;
 
 pub use layout::Layout;

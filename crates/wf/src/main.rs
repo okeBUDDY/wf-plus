@@ -45,6 +45,8 @@ struct Options {
     fps_cap: Option<wf_engine::time::FpsCap>,
     window_mode: Option<wf_engine::config::WindowMode>,
     show_fps: bool,
+    /// Render target pixels per window pixel.
+    render_scale: Option<f32>,
     /// The arena of new games (else the last choice).
     arena: Option<game::arena::Mode>,
     /// Measure the uncapped frame rate for this many seconds (headless).
@@ -83,7 +85,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--arena classic|hd]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -100,6 +102,7 @@ fn options() -> Options {
         fps_cap: None,
         window_mode: None,
         show_fps: false,
+        render_scale: None,
         bench: None,
         arena: None,
         script: Vec::new(),
@@ -130,6 +133,7 @@ fn options() -> Options {
             "--borderless" => o.window_mode = Some(wf_engine::config::WindowMode::Borderless),
             "--windowed" => o.window_mode = Some(wf_engine::config::WindowMode::Windowed),
             "--show-fps" => o.show_fps = true,
+            "--render-scale" => o.render_scale = Some(value().parse::<f32>().unwrap_or_else(|_| usage()).clamp(0.25, 4.0)),
             "--arena" => {
                 o.arena = Some(match value().as_str() {
                     "classic" => game::arena::Mode::Classic,
@@ -316,7 +320,9 @@ fn run_headless(o: &Options) -> Result<(), String> {
         renderer.time = game.cx.app.frame_count as f32 / 58.8;
         let layout = gfx::Layout::new(snaps.cur.arena, size);
         let frame = snaps.frame(1.0, &layout, true);
-        let rgba = renderer.render_to_rgba(frame, size.0, size.1);
+        let scale = o.render_scale.unwrap_or(game.cx.settings.display.render_scale);
+        let mut scaler = gfx::scale::Scaler::new(&renderer);
+        let rgba = renderer.render_to_rgba_with(size.0, size.1, |r, view| scaler.render(r, frame, view, size, scale));
         save_png(path, size.0, size.1, &rgba)?;
         println!("saved {}", path.display());
     }
@@ -356,6 +362,9 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         display_cfg.mode = mode;
     }
     display_cfg.show_fps |= o.show_fps;
+    if let Some(k) = o.render_scale {
+        display_cfg.render_scale = k;
+    }
     game.cx.settings.display = display_cfg;
     let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);

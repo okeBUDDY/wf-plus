@@ -646,6 +646,12 @@ impl Renderer {
     /// Renders `list` into a new `width` x `height` image and reads it back
     /// as RGBA8 (for tests and screenshots).
     pub fn render_to_rgba(&mut self, list: &DrawList, width: u32, height: u32) -> Vec<u8> {
+        self.render_to_rgba_with(width, height, |r, view| r.render(list, view, (width, height)))
+    }
+
+    /// Reads back as RGBA8 a new `width` x `height` image that `draw`
+    /// renders into.
+    pub fn render_to_rgba_with(&mut self, width: u32, height: u32, draw: impl FnOnce(&mut Self, &wgpu::TextureView)) -> Vec<u8> {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -657,7 +663,7 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.render(list, &view, (width, height));
+        draw(self, &view);
         let row = (width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),

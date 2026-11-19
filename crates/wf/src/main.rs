@@ -281,11 +281,10 @@ fn run_windowed(o: &Options) -> Result<(), String> {
                 }
             }
         }
-        // The pads are polled while the window is active (InputTask).
+        // InputTask::IsProtected (0x405f30): the pads are polled only while
+        // the window is active; otherwise their buttons and presses hold.
         if cx.app.flags & game::AppFlags::INACTIVE == 0 {
             cx.input.poll(&platform.input());
-        } else {
-            cx.input.poll(&RawInput::default());
         }
         let drew = app.frame(&mut cx);
         // Wait for the timer tick, then present (HLSync's WaitBlt).

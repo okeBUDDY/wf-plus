@@ -135,10 +135,15 @@ impl App {
         if cx.input.reset_pressed {
             cx.app.request_reset();
         }
-        // InputTask::IsProtected (0x405f30): the pause button.
-        if cx.input.pad(0).pressed & cx.input.time_stop_mask != 0 {
-            let stopped = cx.app.flags & AppFlags::TIME_STOPPED != 0;
-            cx.app.set_time_stop(!stopped);
+        // InputTask::IsProtected (0x405f30): the pause button of any pad,
+        // checked only when the pads were polled (the window is active).
+        if cx.app.flags & AppFlags::INACTIVE == 0 {
+            for i in 0..cx.input.pads.len() {
+                if cx.input.pad(i).pressed & cx.input.time_stop_mask != 0 {
+                    let stopped = cx.app.flags & AppFlags::TIME_STOPPED != 0;
+                    cx.app.set_time_stop(!stopped);
+                }
+            }
         }
 
         if cx.app.flags & AppFlags::TIME_STOPPED != 0 {

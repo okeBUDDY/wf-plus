@@ -52,7 +52,8 @@ impl Pack {
             if offset + size > data.len() {
                 return Err(PackError(format!("data.bin member {name} out of range")));
             }
-            entries.insert(name, (offset, size));
+            // PackFile::Open (0x40dbb0): the first entry of a name wins.
+            entries.entry(name).or_insert((offset, size));
         }
         Ok(Pack { data, entries })
     }

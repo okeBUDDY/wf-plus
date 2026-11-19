@@ -73,6 +73,10 @@ fn parse_key(s: &str) -> Option<Key> {
         "f" => Key::F,
         "esc" => Key::Escape,
         "f12" => Key::F12,
+        "q" => Key::Q,
+        "e" => Key::E,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
         _ => return None,
     })
 }
@@ -211,8 +215,24 @@ impl wf_engine::app::Game for WfGame {
         if self.active() {
             self.cx.input.steer.ship = self.ship();
             self.cx.input.poll(actions);
+            self.cx.ui.update(actions);
         }
-        self.app.frame(&mut self.cx)
+        let made = self.app.frame(&mut self.cx);
+        if made && self.cx.settings.display.show_fps {
+            // SHOW FPS: the display rate, bottom right (display only).
+            let text = format!("{:.0} FPS", self.cx.settings.fps);
+            let x = self.cx.arena.width - 8.0 * text.len() as f32 - 6.0;
+            let y = self.cx.arena.height - 14.0;
+            self.cx.fonts.small_text.print(&mut self.cx.draw, x, y, text.as_bytes(), None, gfx::Argb(0xa0ff_ffff), -1, gfx::Blend::Normal);
+        }
+        made
+    }
+    fn set_fps(&mut self, fps: f32) {
+        self.cx.settings.fps = fps;
+    }
+    fn display_request(&mut self) -> Option<wf_engine::config::DisplayConfig> {
+        let s = &mut self.cx.settings;
+        std::mem::take(&mut s.display_dirty).then_some(s.display)
     }
     fn snapshot(&self) -> &gfx::DrawList {
         &self.cx.draw
@@ -237,6 +257,9 @@ impl wf_engine::app::Game for WfGame {
         self.cx.app.frame_count as f32 / 58.8
     }
     fn sync_bindings(&mut self, b: &mut wf_engine::input::Bindings) {
+        if std::mem::take(&mut self.cx.settings.input_dirty) {
+            self.cx.settings.apply_input(b);
+        }
         let pad = &self.cx.input.pads[0];
         let maps = (pad.key_map, pad.button_map);
         if self.synced == Some(maps) {
@@ -318,6 +341,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         display_cfg.mode = mode;
     }
     display_cfg.show_fps |= o.show_fps;
+    game.cx.settings.display = display_cfg;
     let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
     let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;

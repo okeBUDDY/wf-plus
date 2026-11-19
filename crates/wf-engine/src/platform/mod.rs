@@ -34,10 +34,13 @@ pub enum Key {
     F12,
     Return,
     Space,
+    Q,
+    PageUp,
+    PageDown,
 }
 
 impl Key {
-    pub const COUNT: usize = Key::Space as usize + 1;
+    pub const COUNT: usize = Key::PageDown as usize + 1;
 
     /// A key by its name in bindings ("z", "up", "kp8", "escape").
     pub fn parse(s: &str) -> Option<Key> {
@@ -66,6 +69,9 @@ impl Key {
             "f12" => Key::F12,
             "return" | "enter" => Key::Return,
             "space" => Key::Space,
+            "q" => Key::Q,
+            "pageup" => Key::PageUp,
+            "pagedown" => Key::PageDown,
             _ => return None,
         })
     }
@@ -148,6 +154,9 @@ pub struct MouseState {
     pub buttons: u32,
     /// Inside the window.
     pub inside: bool,
+    /// The wheel's travel since the start, in notches (up is positive):
+    /// a running total, so any tick can tell how far it moved.
+    pub wheel: f32,
 }
 
 /// A finger on a touch screen: 0..1 of the window, y down.

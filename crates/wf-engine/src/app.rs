@@ -37,6 +37,8 @@ pub trait Game {
     fn display_request(&mut self) -> Option<DisplayConfig> {
         None
     }
+    /// The measured display rate, once a frame (the FPS counter).
+    fn set_fps(&mut self, _fps: f32) {}
     /// Draw the subtle arena border when there are margins.
     fn wants_border(&self) -> bool {
         false
@@ -209,6 +211,9 @@ pub fn run_windowed(
             if d.mode != cfg.mode {
                 platform.set_window_mode(d.mode);
             }
+            if d.mode == WindowMode::Windowed && (d.width, d.height) != (cfg.width, cfg.height) {
+                platform.set_window_size(d.width, d.height);
+            }
             display.set_cap(d.fps_cap);
             cfg = d;
         }
@@ -234,6 +239,7 @@ pub fn run_windowed(
         on_frame(display, frame)?;
         let now = Instant::now();
         fps.frame(now);
+        game.set_fps(fps.fps as f32);
         if cfg.show_fps && now.duration_since(title_at).as_secs_f32() > 0.5 {
             platform.set_title(&format!("WARNING FOREVER - {:.0} fps", fps.fps));
             title_at = now;

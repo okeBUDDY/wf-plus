@@ -1,0 +1,261 @@
+//! The port's own settings (wf-plus.ini), which the options screen edits
+//! beside the original's [Option] ones: the display, the mouse and touch
+//! bindings and tuning. Nothing here is game state or goes into a .rec.
+
+use wf_engine::config::{Config, DisplayConfig, WindowMode};
+use wf_engine::input::{Action, Bindings, Source};
+use wf_engine::platform::Device;
+use wf_engine::time::FpsCap;
+
+/// What a mouse button does (MOUSE LEFT/MIDDLE/RIGHT).
+pub const MOUSE_ACTIONS: [(&str, Option<Action>); 5] = [
+    ("SHOT", Some(Action::SHOT)),
+    ("SLOW", Some(Action::SLOW)),
+    ("WEAPON", Some(Action::WEAPON)),
+    ("PAUSE", Some(Action::PAUSE)),
+    ("NONE", None),
+];
+const MOUSE_KEYS: [&str; 3] = ["input.mouse_left", "input.mouse_middle", "input.mouse_right"];
+/// Left shoots, middle selects the weapon, right moves slowly.
+const MOUSE_DEFAULTS: [u8; 3] = [0, 2, 1];
+
+/// The window sizes the options offer (16:9 first).
+pub const RESOLUTIONS: [(u32, u32); 9] =
+    [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160), (640, 480), (1024, 768), (1280, 960), (2560, 1080)];
+pub const RENDER_SCALES: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+pub const DEAD_ZONES: [f32; 10] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5];
+pub const TOUCH_SCALES: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+
+#[derive(Clone, Debug)]
+pub struct Settings {
+    pub display: DisplayConfig,
+    /// The FPS cap's CUSTOM rate.
+    pub fps_custom: f64,
+    /// The display changed (the engine applies it).
+    pub display_dirty: bool,
+    /// Index into `MOUSE_ACTIONS` of the left, middle and right buttons.
+    pub mouse: [u8; 3],
+    pub mouse_steering: bool,
+    pub dead_zone: f32,
+    pub touch_scale: f32,
+    /// The input tuning changed (the bindings follow).
+    pub input_dirty: bool,
+    /// The display rate measured last, for SHOW FPS.
+    pub fps: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            display: DisplayConfig::default(),
+            fps_custom: 90.0,
+            display_dirty: false,
+            mouse: MOUSE_DEFAULTS,
+            mouse_steering: true,
+            dead_zone: 0.35,
+            touch_scale: 1.0,
+            input_dirty: true,
+            fps: 0.0,
+        }
+    }
+}
+
+/// The index of the entry of `list` nearest `v`.
+pub fn nearest(list: &[f32], v: f32) -> usize {
+    let mut best = 0;
+    for (i, &x) in list.iter().enumerate() {
+        if (x - v).abs() < (list[best] - v).abs() {
+            best = i;
+        }
+    }
+    best
+}
+
+impl Settings {
+    pub fn load(c: &Config) -> Self {
+        let mut s = Settings { display: DisplayConfig::from_config(c), ..Default::default() };
+        s.fps_custom = c.get_or("display.fps_custom", s.fps_custom).clamp(1.0, 1000.0);
+        let b = Bindings::from_config(c);
+        s.mouse_steering = b.mouse_steering;
+        s.dead_zone = b.dead_zone;
+        s.touch_scale = b.touch_scale;
+        for (i, key) in MOUSE_KEYS.iter().enumerate() {
+            if let Some(v) = c.get(key)
+                && let Some(n) = MOUSE_ACTIONS.iter().position(|(name, _)| name.eq_ignore_ascii_case(v))
+            {
+                s.mouse[i] = n as u8;
+            }
+        }
+        s
+    }
+
+    pub fn store(&self, c: &mut Config) {
+        self.display.store(c);
+        c.set("display.fps_custom", self.fps_custom);
+        for (i, key) in MOUSE_KEYS.iter().enumerate() {
+            c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
+        }
+        c.set("input.mouse_steering", self.mouse_steering);
+        c.set("input.dead_zone", self.dead_zone);
+        c.set("input.touch_scale", self.touch_scale);
+    }
+
+    /// The bindings as these settings tune them: the mouse buttons'
+    /// actions replace the mouse sources.
+    pub fn apply_input(&self, b: &mut Bindings) {
+        b.binds.retain(|(s, _)| !matches!(s, Source::Mouse(_)));
+        for (button, &n) in self.mouse.iter().enumerate() {
+            if let Some(action) = MOUSE_ACTIONS[n as usize].1 {
+                b.binds.push((Source::Mouse(button as u8), action));
+            }
+        }
+        b.mouse_steering = self.mouse_steering;
+        b.dead_zone = self.dead_zone;
+        b.touch_scale = self.touch_scale;
+    }
+
+    /// The FPS cap as an index of the options' list: the presets, then
+    /// CUSTOM.
+    pub fn fps_index(&self) -> usize {
+        FpsCap::PRESETS.iter().position(|p| *p == self.display.fps_cap).unwrap_or(FpsCap::PRESETS.len())
+    }
+
+    pub fn set_fps_index(&mut self, i: usize) {
+        self.display.fps_cap = FpsCap::PRESETS.get(i).copied().unwrap_or(FpsCap::Fps(self.fps_custom));
+    }
+
+    pub fn resolution_index(&self) -> usize {
+        let d = &self.display;
+        RESOLUTIONS.iter().position(|&r| r == (d.width, d.height)).unwrap_or(RESOLUTIONS.len())
+    }
+
+    pub fn window_mode_index(&self) -> usize {
+        match self.display.mode {
+            WindowMode::Windowed => 0,
+            WindowMode::Borderless => 1,
+            WindowMode::Fullscreen => 2,
+        }
+    }
+}
+
+pub const WINDOW_MODES: [(&str, WindowMode); 3] =
+    [("WINDOWED", WindowMode::Windowed), ("BORDERLESS", WindowMode::Borderless), ("FULLSCREEN", WindowMode::Fullscreen)];
+
+/// The menus' view of the devices: edges and pointer hits made from the
+/// engine's actions each tick (display only; never in a .rec).
+#[derive(Clone, Debug, Default)]
+pub struct UiInput {
+    /// The device used last (the prompts follow it).
+    pub device: Device,
+    /// Previous (-1) or next (+1) tab asked this tick: Q/E, PageUp and
+    /// PageDown, the shoulder buttons, the wheel over the tab strip, a
+    /// sideways swipe.
+    pub tab: i8,
+    /// What asked for `tab` (a key or button being remapped wins over it).
+    pub tab_by: TabBy,
+    /// The mouse or a finger, in arena units.
+    pub cursor: Option<[f32; 2]>,
+    /// The cursor moved this tick.
+    pub moved: bool,
+    /// A click (mouse left press) or tap (a short touch) this tick, where.
+    pub click: Option<[f32; 2]>,
+    /// Wheel notches this tick (up positive).
+    pub wheel: f32,
+    held: u32,
+    wheel_total: f32,
+    touch_start: Option<([f32; 2], u32)>,
+    touch_last: Option<[f32; 2]>,
+    ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabBy {
+    #[default]
+    None,
+    /// Q or E.
+    Letter,
+    /// PageUp or PageDown.
+    Page,
+    /// A shoulder button.
+    Shoulder,
+    /// The wheel, a click or a swipe.
+    Pointer,
+}
+
+const UI_Q: u32 = 1;
+const UI_E: u32 = 2;
+const UI_PGUP: u32 = 4;
+const UI_PGDN: u32 = 8;
+const UI_LB: u32 = 16;
+const UI_RB: u32 = 32;
+const UI_CLICK: u32 = 64;
+
+impl UiInput {
+    pub fn update(&mut self, a: &wf_engine::input::ActionState) {
+        use wf_engine::platform::{Key, PadButton};
+        self.ticks = self.ticks.wrapping_add(1);
+        let raw = &a.raw;
+        let pad = |b: PadButton| raw.gamepads.iter().any(|g| g.held(b));
+        let mut held = 0;
+        for (on, bit) in [
+            (raw.key(Key::Q), UI_Q),
+            (raw.key(Key::E), UI_E),
+            (raw.key(Key::PageUp), UI_PGUP),
+            (raw.key(Key::PageDown), UI_PGDN),
+            (pad(PadButton::LeftShoulder), UI_LB),
+            (pad(PadButton::RightShoulder), UI_RB),
+            (raw.mouse.buttons & 1 != 0, UI_CLICK),
+        ] {
+            if on {
+                held |= bit;
+            }
+        }
+        let pressed = held & !self.held;
+        self.held = held;
+        self.device = a.device;
+        self.tab = 0;
+        self.tab_by = TabBy::None;
+        for (bit, dir, by) in [
+            (UI_Q, -1, TabBy::Letter),
+            (UI_E, 1, TabBy::Letter),
+            (UI_PGUP, -1, TabBy::Page),
+            (UI_PGDN, 1, TabBy::Page),
+            (UI_LB, -1, TabBy::Shoulder),
+            (UI_RB, 1, TabBy::Shoulder),
+        ] {
+            if pressed & bit != 0 {
+                self.tab = dir;
+                self.tab_by = by;
+            }
+        }
+        self.wheel = raw.mouse.wheel - self.wheel_total;
+        self.wheel_total = raw.mouse.wheel;
+        let last = self.cursor;
+        self.cursor = a.touches.first().copied().or(a.cursor);
+        self.moved = last.is_some() && self.cursor.is_some() && last != self.cursor;
+        self.click = None;
+        if pressed & UI_CLICK != 0 {
+            self.click = a.cursor;
+        }
+        // Touch: a short touch that stays put is a tap; a quick sideways
+        // move is a swipe.
+        match (a.touches.first(), self.touch_start) {
+            (Some(&p), None) => self.touch_start = Some((p, self.ticks)),
+            (Some(&p), Some(_)) => self.touch_last = Some(p),
+            (None, Some((start, at))) => {
+                let end = self.touch_last.unwrap_or(start);
+                let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+                let quick = self.ticks.wrapping_sub(at) < 30;
+                if quick && dx.abs() > 80.0 && dx.abs() > dy.abs() * 2.0 {
+                    self.tab = if dx < 0.0 { 1 } else { -1 };
+                    self.tab_by = TabBy::Pointer;
+                } else if quick && dx.abs() + dy.abs() < 12.0 {
+                    self.click = Some(start);
+                }
+                self.touch_start = None;
+                self.touch_last = None;
+            }
+            (None, None) => {}
+        }
+    }
+}

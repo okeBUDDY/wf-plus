@@ -5,6 +5,7 @@
 pub mod actor;
 pub mod app;
 pub mod arena;
+pub mod settings;
 pub mod assets;
 pub mod background;
 pub mod debug;
@@ -103,6 +104,10 @@ pub struct Cx {
     /// The port's own settings (wf-plus.ini): the engine's display and
     /// input settings and the game's new ones; wf.ini stays the original's.
     pub port: wf_engine::config::Config,
+    /// The port's settings (from `port`): display and input tuning.
+    pub settings: settings::Settings,
+    /// The menus' pointer and tab input.
+    pub ui: settings::UiInput,
 }
 
 impl Cx {
@@ -145,6 +150,8 @@ impl Cx {
             arena_choice: arena::Mode::Classic,
             window_arena_width: 640.0,
             port: Default::default(),
+            settings: Default::default(),
+            ui: Default::default(),
         };
         actor::controls::register_all(&mut cx);
         let Cx { enm, rng, .. } = &mut cx;
@@ -161,6 +168,7 @@ impl Cx {
         self.profile = profile::Profile::open(self.home.join("wf.ini"));
         self.port = wf_engine::config::Config::load(&self.home.join("wf-plus.ini"));
         arena::load_choice(self);
+        self.settings = settings::Settings::load(&self.port);
         let path = self.home.join("wf.sco");
         let Cx { scores, profile, .. } = self;
         scores.init(path, profile);

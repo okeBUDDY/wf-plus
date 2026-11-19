@@ -102,6 +102,8 @@ pub struct Bindings {
     pub dead_zone: f32,
     pub mouse_steering: bool,
     pub touch: bool,
+    /// Touch drag speed (1 = the finger's own travel).
+    pub touch_scale: f32,
 }
 
 impl Default for Bindings {
@@ -128,7 +130,7 @@ impl Default for Bindings {
         // The original's default trigger maps: ZXSDAWEF and pad buttons 1-8.
         binds.extend(DEFAULT_TRIGGER_KEYS.iter().enumerate().map(|(i, &k)| (Source::Key(k), A::Trigger(i as u8))));
         binds.extend(PadButton::TRIGGERS[..8].iter().enumerate().map(|(i, &b)| (Source::Pad(b), A::Trigger(i as u8))));
-        Bindings { binds, dead_zone: 0.35, mouse_steering: true, touch: true }
+        Bindings { binds, dead_zone: 0.35, mouse_steering: true, touch: true, touch_scale: 1.0 }
     }
 }
 
@@ -152,6 +154,7 @@ impl Bindings {
         b.dead_zone = c.get_or("input.dead_zone", b.dead_zone).clamp(0.05, 0.95);
         b.mouse_steering = c.get_bool("input.mouse_steering", b.mouse_steering);
         b.touch = c.get_bool("input.touch", b.touch);
+        b.touch_scale = c.get_or("input.touch_scale", b.touch_scale).clamp(0.25, 4.0);
         b
     }
 
@@ -183,6 +186,10 @@ pub struct ActionState {
     pub drag: [f32; 2],
     /// Some finger is down.
     pub touching: bool,
+    /// The mouse in arena units whenever it is in the window (menus).
+    pub cursor: Option<[f32; 2]>,
+    /// The fingers down, in arena units (menus).
+    pub touches: Vec<[f32; 2]>,
     /// The device used last; it picks the UI's prompts.
     pub device: Device,
     /// The devices as read, for the options screen's "press a button".
@@ -251,6 +258,10 @@ impl InputSystem {
         }
         // Touch: a relative drag of any finger that stayed down.
         let (w, h) = (raw.window.0.max(1) as f32, raw.window.1.max(1) as f32);
+        if raw.mouse.inside {
+            s.cursor = Some(layout.to_logical(raw.mouse.pos[0], raw.mouse.pos[1]));
+        }
+        s.touches = raw.fingers.iter().map(|f| layout.to_logical(f.pos[0] * w, f.pos[1] * h)).collect();
         if self.bindings.touch {
             for f in &raw.fingers {
                 if let Some((_, p)) = self.last_fingers.iter().find(|(id, _)| *id == f.id) {
@@ -269,6 +280,8 @@ impl InputSystem {
                 }
             }
             s.touching |= !raw.fingers.is_empty();
+            let k = self.bindings.touch_scale;
+            s.drag = [s.drag[0] * k, s.drag[1] * k];
         }
         self.last_fingers = raw.fingers.iter().map(|f| (f.id, f.pos)).collect();
         self.last_pads = raw.gamepads.iter().map(|g| g.touchpad).collect();

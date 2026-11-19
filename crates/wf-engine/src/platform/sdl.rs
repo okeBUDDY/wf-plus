@@ -21,6 +21,7 @@ pub struct Platform {
     fingers: Vec<Finger>,
     last_device: Device,
     mouse_inside: bool,
+    wheel: f32,
 }
 
 pub struct MixerCallback {
@@ -63,6 +64,9 @@ fn keymap(k: Key) -> Scancode {
         Key::F12 => Scancode::F12,
         Key::Return => Scancode::Return,
         Key::Space => Scancode::Space,
+        Key::Q => Scancode::Q,
+        Key::PageUp => Scancode::PageUp,
+        Key::PageDown => Scancode::PageDown,
     }
 }
 
@@ -91,6 +95,9 @@ const ALL_KEYS: [Key; Key::COUNT] = [
     Key::F12,
     Key::Return,
     Key::Space,
+    Key::Q,
+    Key::PageUp,
+    Key::PageDown,
 ];
 
 fn padmap(b: PadButton) -> Button {
@@ -156,6 +163,7 @@ impl Platform {
             fingers: Vec::new(),
             last_device: Device::Keyboard,
             mouse_inside: false,
+            wheel: 0.0,
         })
     }
 
@@ -215,6 +223,10 @@ impl Platform {
                     }
                 }
                 SdlEvent::MouseButtonDown { .. } => self.last_device = Device::Mouse,
+                SdlEvent::MouseWheel { y, .. } => {
+                    self.wheel += y;
+                    self.last_device = Device::Mouse;
+                }
                 SdlEvent::GamepadButtonDown { .. } | SdlEvent::GamepadTouchpadDown { .. } => self.last_device = Device::Gamepad,
                 SdlEvent::GamepadAxisMotion { value, .. } if value.unsigned_abs() > 16000 => self.last_device = Device::Gamepad,
                 SdlEvent::FingerDown { finger_id, x, y, .. } => {
@@ -263,6 +275,7 @@ impl Platform {
             pos: [ms.x() * density, ms.y() * density],
             buttons: (ms.left() as u32) | (ms.middle() as u32) << 1 | (ms.right() as u32) << 2,
             inside: self.mouse_inside,
+            wheel: self.wheel,
         };
         raw.fingers = self.fingers.clone();
         raw.last_device = self.last_device;
@@ -283,6 +296,14 @@ fn touchpad_finger(pad: &Gamepad) -> Option<[f32; 2]> {
 }
 
 impl Platform {
+    /// Resizes the window (windowed mode), in pixels.
+    pub fn set_window_size(&mut self, width: u32, height: u32) {
+        let (pw, _) = self.window.size_in_pixels();
+        let (lw, _) = self.window.size();
+        let density = if lw > 0 { pw as f32 / lw as f32 } else { 1.0 };
+        let _ = self.window.set_size((width as f32 / density) as u32, (height as f32 / density) as u32);
+    }
+
     pub fn set_title(&mut self, title: &str) {
         let _ = self.window.set_title(title);
     }

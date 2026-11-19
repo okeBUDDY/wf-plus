@@ -74,8 +74,15 @@ pub struct Renderer {
     instances: Vec<Instance>,
     shape_vertices: Vec<ShapeVertex>,
     batches: Vec<Batch>,
+    /// The multisampled colour target and its size, resolved into the frame.
+    msaa: Option<(wgpu::TextureView, (u32, u32))>,
     pub time: f32,
 }
+
+/// Samples a pixel. Slug sprites antialias themselves (one shading per pixel);
+/// the multisampling is what antialiases the untextured shapes (lines, the
+/// option hexagons, bars) and the hard edges of texel regions.
+const SAMPLES: u32 = 4;
 
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, image: &wf_art::Image, format: wgpu::TextureFormat) -> wgpu::TextureView {
     let texture = device.create_texture_with_data(
@@ -226,7 +233,7 @@ impl Renderer {
                 },
                 primitive: wgpu::PrimitiveState { topology, ..Default::default() },
                 depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
@@ -277,6 +284,7 @@ impl Renderer {
             instances: Vec::new(),
             shape_vertices: Vec::new(),
             batches: Vec::new(),
+            msaa: None,
             time: 0.0,
         }
     }
@@ -434,15 +442,29 @@ impl Renderer {
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
 
+        if self.msaa.as_ref().is_none_or(|m| m.1 != size) {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("msaa"),
+                size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: SAMPLES,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.msaa = Some((texture.create_view(&wgpu::TextureViewDescriptor::default()), size));
+        }
+        let msaa = &self.msaa.as_ref().expect("msaa target").0;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         {
             let clear = list.clear.to_f32();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: msaa,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: Some(target),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: clear[0] as f64,
@@ -450,7 +472,7 @@ impl Renderer {
                             b: clear[2] as f64,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                 })],
                 depth_stencil_attachment: None,

@@ -89,7 +89,9 @@ pub struct GpuLayer {
     /// Texel 4: the second ramp's geometry.
     pub geom2: [u32; 4],
     /// Texel 5: ramp row, second ramp row, the heat level (f32 bits; 0 when
-    /// the layer is not a heat level), reserved.
+    /// the layer is not a heat level), and for [`paint::FLAG_NOISE`] the first
+    /// layer texel of the feTurbulence lattice (256 texels of selector,
+    /// gradient x and y bits, 0).
     pub ramp: u32,
     pub ramp2: u32,
     pub heat: u32,
@@ -97,7 +99,9 @@ pub struct GpuLayer {
     /// Texel 6: noise parameters (f32 bits).
     pub noise: [u32; 4],
     /// Texel 7: band scale and offset: band = (coord - bbox.min) * scale
-    /// (x for vertical, y for horizontal bands), f32 bits.
+    /// (x for vertical, y for horizontal bands), f32 bits; then for
+    /// [`paint::FLAG_NOISE`] the sprite origin (f32 bits), which takes the
+    /// pivot-relative sample back to the SVG user space the noise lives in.
     pub band_scale: [u32; 2],
     pub reserved7: [u32; 2],
 }

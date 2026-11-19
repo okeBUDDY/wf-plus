@@ -197,36 +197,53 @@ fn ramp_t(kind: u32, geom: vec4<f32>, p: vec2<f32>) -> f32 {
     return dot(p - geom.xy, d) / max(dot(d, d), 1e-6);
 }
 
-fn hash(p: vec2<f32>, seed: f32) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7)) + seed * 74.7;
-    return fract(sin(h) * 43758.5453);
+// SVG feTurbulence (SVG 1.1, 15.24) on the lattice the cooker baked into
+// the layer texture at texel `base`: 256 texels of (selector, gradient x
+// bits, gradient y bits, 0).
+fn lattice(base: u32, i: i32) -> vec4<u32> {
+    return textureLoad(layer_tex, tex2d(base + u32(i & 255), LAYER_W), 0);
 }
 
-fn value_noise(p: vec2<f32>, seed: f32) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let a = hash(i, seed);
-    let b = hash(i + vec2<f32>(1.0, 0.0), seed);
-    let c = hash(i + vec2<f32>(0.0, 1.0), seed);
-    let d = hash(i + vec2<f32>(1.0, 1.0), seed);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+fn grad(base: u32, b: i32) -> vec2<f32> {
+    return bitcast<vec2<f32>>(lattice(base, b).yz);
 }
 
-// Fractal noise in 0..1 (stands in for feTurbulence fractalNoise).
-fn fractal(p: vec2<f32>, params: vec4<f32>) -> f32 {
+fn s_curve(t: vec2<f32>) -> vec2<f32> {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// The spec's noise2 for one channel, without stitching.
+fn noise2(base: u32, v: vec2<f32>) -> f32 {
+    let t = v + vec2<f32>(4096.0);
+    let b0 = vec2<i32>(floor(t)) & vec2<i32>(255);
+    let b1 = (b0 + vec2<i32>(1)) & vec2<i32>(255);
+    let r0 = t - floor(t);
+    let r1 = r0 - vec2<f32>(1.0);
+    let i = i32(lattice(base, b0.x).x);
+    let j = i32(lattice(base, b1.x).x);
+    let b00 = i32(lattice(base, i + b0.y).x);
+    let b10 = i32(lattice(base, j + b0.y).x);
+    let b01 = i32(lattice(base, i + b1.y).x);
+    let b11 = i32(lattice(base, j + b1.y).x);
+    let s = s_curve(r0);
+    let a = mix(dot(r0, grad(base, b00)), dot(vec2<f32>(r1.x, r0.y), grad(base, b10)), s.x);
+    let b = mix(dot(vec2<f32>(r0.x, r1.y), grad(base, b01)), dot(r1, grad(base, b11)), s.x);
+    return mix(a, b, s.y);
+}
+
+// type="fractalNoise" in 0..1. `params` is (base frequency, octaves, seed,
+// amplitude); `p` is in the SVG's user space.
+fn fractal(base: u32, p: vec2<f32>, params: vec4<f32>) -> f32 {
     var sum = 0.0;
-    var amp = 0.5;
-    var freq = params.x;
-    var norm = 0.0;
+    var ratio = 1.0;
+    var v = p * params.x;
     let octaves = i32(params.y);
     for (var o = 0; o < octaves; o++) {
-        sum += amp * value_noise(p * freq, params.z + f32(o));
-        norm += amp;
-        amp *= 0.5;
-        freq *= 2.0;
+        sum += noise2(base, v) / ratio;
+        v *= 2.0;
+        ratio *= 2.0;
     }
-    return sum / max(norm, 1e-6);
+    return (sum + 1.0) * 0.5;
 }
 
 // The layer's straight colour at `p`.
@@ -251,7 +268,9 @@ fn paint(layer: u32, p: vec2<f32>) -> vec4<f32> {
     }
     if ((flags & FLAG_NOISE) != 0u) {
         let n = bitcast<vec4<f32>>(layer_texel(layer, 6u));
-        let k = 1.0 + n.w * (fractal(p, n) - 0.52);
+        let base = layer_texel(layer, 5u).w;
+        let origin = bitcast<vec2<f32>>(layer_texel(layer, 7u).zw);
+        let k = 1.0 + n.w * (clamp(fractal(base, p + origin, n), 0.0, 1.0) - 0.52);
         c = vec4<f32>(clamp(c.rgb * k, vec3<f32>(0.0), vec3<f32>(1.0)), c.a);
     }
     return c;

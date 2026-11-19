@@ -6,6 +6,7 @@ pub mod actor;
 pub mod app;
 pub mod assets;
 pub mod background;
+pub mod debug;
 pub mod enm;
 pub mod fade;
 pub mod fn_game;
@@ -85,7 +86,7 @@ pub struct Cx {
     /// a .seq music.
     pub seq_flags: [u8; 8],
     /// Debug: called after every game frame's MoveAll (the state hash for
-    /// replay desync checks, see `debug::state_hash`).
+    /// replay desync checks, see `debug::start_hash_log`).
     pub frame_hook: Option<fn(&mut Cx)>,
 }
 

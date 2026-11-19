@@ -6,6 +6,7 @@ pub mod geom;
 pub mod slug;
 pub mod svg;
 pub mod trace;
+pub mod turbulence;
 
 use std::path::{Path, PathBuf};
 
@@ -167,6 +168,9 @@ struct Cooker {
     /// Shelf packer state of the bitmap atlas: x, shelf top, shelf height.
     shelf: (usize, usize, usize),
     ramp_rows: Vec<[[u8; 4]; RAMP_WIDTH as usize]>,
+    /// feTurbulence lattices already in the layer texture: (seed bits, first
+    /// texel).
+    noise_tables: Vec<(u32, u32)>,
     report: Report,
 }
 
@@ -240,6 +244,23 @@ impl Cooker {
         self.report.sprites += 1;
     }
 
+    /// The first layer texel of the feTurbulence lattice for `seed`, baked on
+    /// first use as whole (unreferenced) layers ahead of the sprite's own.
+    fn noise_table(&mut self, seed: f32) -> u32 {
+        if let Some(&(_, base)) = self.noise_tables.iter().find(|t| t.0 == seed.to_bits()) {
+            return base;
+        }
+        let base = self.w.layers.len() as u32 * wf_art::LAYER_TEXELS;
+        let texels = turbulence::NoiseTable::new(seed).texels();
+        for chunk in texels.chunks(wf_art::LAYER_TEXELS as usize) {
+            let mut raw = [[0u32; 4]; wf_art::LAYER_TEXELS as usize];
+            raw[..chunk.len()].copy_from_slice(chunk);
+            self.w.layers.push(bytemuck::cast(raw));
+        }
+        self.noise_tables.push((seed.to_bits(), base));
+        base
+    }
+
     fn cook_svg(&mut self, name: String, art: svg::Art) {
         let mut layers = Vec::new();
         for path in &art.paths {
@@ -268,6 +289,9 @@ impl Cooker {
             if let Some(n) = &art.noise {
                 layer.paint |= paint::FLAG_NOISE;
                 layer.noise = bits4([n.frequency, n.octaves, n.seed, n.amplitude]);
+                layer.reserved5 = self.noise_table(n.seed);
+                // feTurbulence samples user space, the curves are pivot-relative.
+                layer.reserved7 = [art.origin.x.to_bits(), art.origin.y.to_bits()];
             }
             layer.heat = path.heat.unwrap_or(0.0).to_bits();
             layers.push(layer);
@@ -397,7 +421,7 @@ fn read_png(path: &Path) -> Result<(usize, usize, Vec<u8>), Error> {
 }
 
 pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
-    let mut c = Cooker { w: Writer::new(), shelf: (0, 0, 0), ramp_rows: Vec::new(), report: Report::default() };
+    let mut c = Cooker { w: Writer::new(), shelf: (0, 0, 0), ramp_rows: Vec::new(), noise_tables: Vec::new(), report: Report::default() };
     for sheet in SHEETS {
         let dir = config.art_dir.join(sheet);
         let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)

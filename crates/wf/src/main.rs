@@ -44,6 +44,7 @@ struct Options {
     viewer: bool,
     /// Play this replay (headless checks) instead of the title.
     replay: Option<String>,
+    hash_log: Option<PathBuf>,
 }
 
 fn parse_key(s: &str) -> Option<Key> {
@@ -64,7 +65,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--headless --script FRAME:KEY,...] [--replay rec/<file>.rec] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--headless --script FRAME:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -82,6 +83,7 @@ fn options() -> Options {
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
         viewer: false,
         replay: None,
+        hash_log: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -92,6 +94,7 @@ fn options() -> Options {
             "--home" => o.home = value().into(),
             "--viewer" => o.viewer = true,
             "--replay" => o.replay = Some(value()),
+            "--hash-log" => o.hash_log = Some(value().into()),
             "--frames" => o.frames = value().parse().unwrap_or_else(|_| usage()),
             "--screenshot" => o.screenshot = Some(value().into()),
             "--size" => {
@@ -125,6 +128,9 @@ fn startup(o: &Options) -> Result<(Cx, App), String> {
     let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
     game::time::set_utc_offset(platform::sdl::local_utc_offset());
     cx.open_home(o.home.clone());
+    if let Some(path) = &o.hash_log {
+        game::debug::start_hash_log(&mut cx, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     let (reset, first): (fn() -> Box<dyn game::app::Stage>, Box<dyn game::app::Stage>) = if o.viewer {
         (|| Box::new(game::viewer::Viewer::new()), Box::new(game::viewer::Viewer::new()))
     } else if let Some(path) = &o.replay {

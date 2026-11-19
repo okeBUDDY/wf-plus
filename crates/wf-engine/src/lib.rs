@@ -14,6 +14,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 pub mod app;
+pub mod assets;
 pub mod audio;
 pub mod config;
 pub mod gfx;

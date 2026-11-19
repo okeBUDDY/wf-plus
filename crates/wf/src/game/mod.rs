@@ -238,7 +238,7 @@ pub(crate) mod tests {
     /// A context without data.bin (no sounds, no patterns).
     pub fn cx() -> Cx {
         let assets = Assets {
-            pack: crate::data::pack::Pack::from_bytes(vec![0; 8]).unwrap(),
+            pack: wf_engine::assets::Registry::new(),
             pats: Vec::new(),
             sounds: Vec::new(),
             bgm: None,

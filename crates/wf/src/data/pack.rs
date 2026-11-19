@@ -27,6 +27,15 @@ fn u32_at(d: &[u8], at: usize) -> Result<u32, PackError> {
         .ok_or_else(|| PackError("data.bin is truncated".into()))
 }
 
+impl wf_engine::assets::AssetSource for Pack {
+    fn get(&self, name: &str) -> Option<&[u8]> {
+        Pack::get(self, name)
+    }
+    fn names(&self) -> Vec<String> {
+        Pack::names(self).map(str::to_string).collect()
+    }
+}
+
 impl Pack {
     pub fn open(path: &Path) -> Result<Self, PackError> {
         let data = std::fs::read(path).map_err(|e| PackError(format!("cannot open {}: {e}", path.display())))?;

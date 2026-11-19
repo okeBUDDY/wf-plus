@@ -45,7 +45,8 @@ pub const CHANNEL_BGM: usize = 32;
 pub const CHANNELS: usize = 40;
 
 pub struct Assets {
-    pub pack: Pack,
+    /// The engine's registry with data.bin mounted.
+    pub pack: wf_engine::assets::Registry,
     pub pats: Vec<(&'static str, PatFile)>,
     pub sounds: Vec<Option<SoundBuffer>>,
     pub bgm: Option<crate::sound::Music>,
@@ -68,7 +69,9 @@ impl Assets {
         }
         // The user's music, if any, next to data.bin.
         let bgm = path.parent().and_then(crate::sound::Music::load);
-        Ok(Assets { pack, pats, sounds, bgm })
+        let mut registry = wf_engine::assets::Registry::new();
+        registry.mount(pack);
+        Ok(Assets { pack: registry, pats, sounds, bgm })
     }
 
     pub fn pat(&self, sheet: &str) -> Option<&PatFile> {

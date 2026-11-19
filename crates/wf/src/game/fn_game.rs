@@ -247,6 +247,10 @@ impl Stage for FnGame {
                     }
                 }
                 FnGameState::CLEARED => {
+                    crate::log::info(&format!(
+                        "stage {} cleared: score {} timer {} bonus {} frames {} rand {:#x}",
+                        cx.global.stage, cx.global.entry.score, cx.game.timer, cx.game.bonus, cx.game.frames, cx.rng.seed
+                    ));
                     cx.game.flags &= !RUNNING;
                     cx.game.on_boss_destroyed();
                     cx.replay.close();
@@ -284,6 +288,7 @@ impl Stage for FnGame {
                     }
                 }
                 FnGameState::GAME_OVER => {
+                    crate::log::info(&format!("game over at stage {}: score {} frames {}", cx.global.stage, cx.global.entry.score, cx.game.frames));
                     cx.game.flags &= !RUNNING;
                     cx.replay.close();
                     if let Some(p) = cx.game.player {

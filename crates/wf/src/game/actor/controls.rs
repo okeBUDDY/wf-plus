@@ -69,8 +69,9 @@ pub struct ControlData {
     pub beam_desc: ActorDesc,
     /// Control43::sound_users_ (0x469200).
     pub sound_users: [i32; 2],
-    /// g_explosion_depth (0x469048).
-    pub explosion_depth: i32,
+    /// g_explosion_depth (0x469048): a file-static counter of
+    /// explosion_controls.cpp; only actor/fx.rs (that file's port) uses it.
+    pub(super) explosion_depth: i32,
     pub fragment_desc: ActorDesc,
     pub spark_desc: ActorDesc,
     pub shockwave_desc: ActorDesc,

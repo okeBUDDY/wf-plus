@@ -81,6 +81,9 @@ pub enum Pass {
     /// Cut to the arena's rect: the game proper.
     #[default]
     Arena,
+    /// In the list's order, over the whole view: the HUD, which keeps to
+    /// the view's edges in a narrower arena.
+    Overlay,
 }
 
 #[derive(Clone, Debug)]

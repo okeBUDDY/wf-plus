@@ -35,7 +35,7 @@ impl Default for Arena {
 }
 
 /// The original's screen.
-const W: f32 = 640.0;
+pub const W: f32 = 640.0;
 
 impl Arena {
     pub const CLASSIC: Arena = Arena { mode: Mode::Classic, width: W, height: 480.0 };

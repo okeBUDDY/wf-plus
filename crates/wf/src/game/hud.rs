@@ -488,7 +488,8 @@ impl GameHud {
     /// DrawNameEntry (0x41f830).
     fn draw_name_entry(&mut self, cx: &mut Cx) {
         // Centred in a wider arena.
-        cx.draw.set_origin([cx.arena.center_offset_x(320.0) - 320.0, 0.0]);
+        let (left, width) = cx.hud_view();
+        cx.draw.set_origin([left + width * 0.5 - 320.0, 0.0]);
         let t = Transform::translation(320.0, 240.0);
         cx.draw.sprite(cx.art.shapes.backdrop, &t, Argb(alpha(self.back_alpha, 160.0)), Blend::Normal);
         // The bars, scrolling apart as the window opens.
@@ -595,7 +596,9 @@ impl GameHud {
         palette[1] = Argb(alpha(self.result_alpha, 200.0) | 0xffc800);
         let len = (self.result_length as i32).max(1);
         let y = 448 - self.result_height * self.result_shown as i32 / len;
+        cx.draw.set_origin([cx.hud_view().0, 0.0]);
         cx.fonts.small_text.print(&mut cx.draw, 16.0, y as f32, &self.texts[0], Some(&palette), palette[0], self.result_shown as i32, Blend::Normal);
+        cx.draw.set_origin([0.0; 2]);
     }
 }
 
@@ -652,6 +655,9 @@ impl Task for GameHud {
 
     /// Run (0x41f340).
     fn run(&mut self, cx: &mut Cx) {
+        // The HUD keeps to the view, past a narrower arena's edges.
+        cx.draw.set_pass(crate::gfx::Pass::Overlay);
+        let (left, width) = cx.hud_view();
         match cx.hud.mode {
             MODE_GAME_OVER => self.draw_game_over(cx),
             MODE_NAME_ENTRY => self.draw_name_entry(cx),
@@ -659,6 +665,7 @@ impl Task for GameHud {
             _ => {}
         }
         let c = Argb(TEXT_COLOR);
+        cx.draw.set_origin([left, 0.0]);
         if self.flags & FLAG_SCORE != 0 {
             let s = format!("1P:{:012}", cx.global.entry.score as i32);
             cx.fonts.text.print(&mut cx.draw, 0.0, 0.0, s.as_bytes(), None, c, -1, Blend::Normal);
@@ -675,7 +682,7 @@ impl Task for GameHud {
             }
         }
         // The timer and the replay's name keep to the right edge.
-        cx.draw.set_origin([cx.arena.right_x(640.0) - 640.0, 0.0]);
+        cx.draw.set_origin([left + width - 640.0, 0.0]);
         if self.flags & FLAG_TIMER != 0 {
             let seconds = cx.game.timer / 60;
             if seconds >= 100 {
@@ -694,20 +701,22 @@ impl Task for GameHud {
         if self.flags & FLAG_REPLAY != 0 {
             cx.fonts.small_text.print(&mut cx.draw, self.replay_name_x as f32, 456.0, &self.replay_name, None, c, -1, Blend::Normal);
             cx.fonts.small_text.print(&mut cx.draw, 512.0, 468.0, &self.replay_date, None, c, -1, Blend::Normal);
-            cx.draw.set_origin([0.0; 2]);
+            cx.draw.set_origin([left, 0.0]);
             if cx.fn_game.mode == 1 {
                 let help = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
                 cx.fonts.small_text.print(&mut cx.draw, 0.0, 460.0, help, None, c, -1, Blend::Normal);
             }
+            cx.draw.set_origin([0.0; 2]);
         }
+        cx.draw.set_pass(crate::gfx::Pass::Arena);
     }
 }
 
 /// The copies of a scrolling band (768 units of texels long) that cover
-/// the arena: one in Classic; in a wider HD arena, more on each side
-/// along the band.
+/// the view: one across 640 units; in a wider view (an HD arena, or the
+/// window around a Classic one), more on each side along the band.
 fn band_copies(cx: &Cx) -> std::ops::RangeInclusive<i32> {
-    let extra = (cx.arena.width - 640.0).max(0.0);
+    let extra = (cx.hud_view().1 - 640.0).max(0.0);
     let k = (extra / 600.0).ceil() as i32;
     -k..=k
 }

@@ -45,8 +45,15 @@ pub trait Game {
     }
 }
 
-/// The arena border: a thin low-alpha stroke in the grid's colours,
-/// display only, after the background and before the arena's draws.
+/// The arena border's colour: a muted indigo-violet (#7a5cff) at low
+/// alpha. The game's palette is green and teal (grid, bosses), amber (HUD),
+/// white and grey (text), crimson (cores) and yellow to orange
+/// (explosions); violet is used nowhere, sits opposite the greens, and
+/// stays clear of the crimson.
+pub const ARENA_BORDER: u32 = 0x607a_5cff;
+
+/// The arena border: a thin low-alpha stroke, display only, after the
+/// background and before the arena's draws.
 pub fn add_border(list: &mut DrawList, layout: &Layout) {
     let [x, y, w, h] = layout.visible;
     let [aw, ah] = list.arena;
@@ -57,7 +64,7 @@ pub fn add_border(list: &mut DrawList, layout: &Layout) {
     let mut tail = list.draws.split_off(at);
     list.set_pass(gfx::Pass::Background);
     let pts = [[0.0, 0.0], [aw, 0.0], [aw, ah], [0.0, ah], [0.0, 0.0]];
-    list.shape(gfx::Primitive::LineStrip, &gfx::Transform::IDENTITY, &pts, gfx::Argb(0x5000_c080), gfx::Blend::Normal);
+    list.shape(gfx::Primitive::LineStrip, &gfx::Transform::IDENTITY, &pts, gfx::Argb(ARENA_BORDER), gfx::Blend::Normal);
     list.set_pass(gfx::Pass::Arena);
     list.draws.append(&mut tail);
 }

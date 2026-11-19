@@ -198,6 +198,18 @@ impl Cx {
         }
     }
 
+    /// The view the HUD keeps to, as (left, width) in arena units: the
+    /// arena in HD; in Classic the window's whole width around the
+    /// 640-wide arena (display only: the game never reads it).
+    pub fn hud_view(&self) -> (f32, f32) {
+        if self.arena.is_classic() {
+            let w = self.window_arena_width.max(arena::W);
+            ((arena::W - w) * 0.5, w)
+        } else {
+            (0.0, self.arena.width)
+        }
+    }
+
     /// The arena a game started now gets.
     pub fn chosen_arena(&self) -> arena::Arena {
         match self.arena_choice {

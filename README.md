@@ -50,8 +50,10 @@ After GAME START the title asks for the arena; the choice is remembered.
 
 * **Classic** is the original's 640x480 arena, exactly: its replays and
   scores are the original's formats, byte for byte. In a window of another
-  shape it is drawn 4:3 in the middle, the background grid running into the
-  margins and a faint border around the arena.
+  shape the arena stays 4:3 in the middle, with a faint violet border; the
+  background grid runs into the margins, and the HUD (score, timer, the
+  WARNING, name-entry and result bands) keeps to the window's edges. That
+  is display only: the game itself never sees the window.
 * **HD** is 480 high and as wide as the window's shape (clamped to
   270..1920). Every screen-derived value (player and boss bounds, spawn and
   aim points, culling, the grid, the HUD's anchors) comes from the arena in

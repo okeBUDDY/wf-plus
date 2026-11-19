@@ -599,7 +599,7 @@ impl Renderer {
             for batch in &self.batches {
                 if scissor != Some(batch.pass) {
                     match batch.pass {
-                        Pass::Background => pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1)),
+                        Pass::Background | Pass::Overlay => pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1)),
                         Pass::Arena => pass.set_scissor_rect(ax, ay, aw.max(1), ah.max(1)),
                     }
                     scissor = Some(batch.pass);

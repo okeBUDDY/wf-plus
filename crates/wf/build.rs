@@ -15,8 +15,27 @@ mod shape_table {
     include!("src/shape_table.rs");
 }
 
+/// Embeds assets/icon/wf.ico as the exe's icon when building for Windows
+/// on Windows (winresource needs the Windows resource compiler).
+#[cfg(target_os = "windows")]
+fn embed_icon(manifest: &std::path::Path) {
+    let ico = manifest.join("../../assets/icon/wf.ico");
+    println!("cargo:rerun-if-changed={}", ico.display());
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon(&ico.to_string_lossy());
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=icon: {e}");
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn embed_icon(_manifest: &std::path::Path) {}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    embed_icon(&manifest);
     let game = manifest.join("../../../software/warning-forever/1.08");
     let dir = |var: &str, default: PathBuf| {
         println!("cargo:rerun-if-env-changed={var}");

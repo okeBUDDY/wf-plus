@@ -304,6 +304,16 @@ impl Platform {
         let _ = self.window.set_size((width as f32 / density) as u32, (height as f32 / density) as u32);
     }
 
+    /// The window's icon, from straight RGBA pixels (row by row).
+    pub fn set_icon(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        let mut pixels = rgba.to_vec();
+        if let Ok(surface) =
+            sdl3::surface::Surface::from_data(&mut pixels, width, height, width * 4, sdl3::pixels::PixelFormat::RGBA32)
+        {
+            self.window.set_icon(surface);
+        }
+    }
+
     pub fn set_title(&mut self, title: &str) {
         let _ = self.window.set_title(title);
     }

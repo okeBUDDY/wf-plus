@@ -23,3 +23,8 @@ raw-window-handle = "0.6"
 [build-dependencies]
 wf-cook.workspace = true
 wf-art.workspace = true
+
+# The exe's icon resource. Cargo matches a build dependency's cfg against
+# the host, so Windows builds embed it (see build.rs); others never fetch it.
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1.34"

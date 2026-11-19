@@ -323,6 +323,21 @@ fn run_headless(o: &Options) -> Result<(), String> {
     Ok(())
 }
 
+/// The window icon (assets/icon), as RGBA.
+fn icon() -> Option<(u32, u32, Vec<u8>)> {
+    const PNG: &[u8] = include_bytes!("../../../assets/icon/windows/wf_256.png");
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(PNG));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    Some((info.width, info.height, buf))
+}
+
 fn run_windowed(o: &Options) -> Result<(), String> {
     let (cx, app) = startup(o)?;
     let mut game = WfGame { cx, app, synced: None };
@@ -344,6 +359,9 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     game.cx.settings.display = display_cfg;
     let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
+    if let Some((w, h, rgba)) = icon() {
+        platform.set_icon(w, h, &rgba);
+    }
     let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
     platform.start_audio(game.cx.sound.mixer());
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
@@ -375,5 +393,14 @@ fn main() {
         // Shown like the original's Shutdown() MessageBox, on stderr.
         eprintln!("ERROR: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_decodes() {
+        let (w, h, rgba) = super::icon().expect("assets/icon/windows/wf_256.png");
+        assert_eq!((w, h, rgba.len()), (256, 256, 256 * 256 * 4));
     }
 }

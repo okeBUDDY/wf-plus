@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="208" viewBox="0 0 128 208" data-stroke="24" data-vgap="32" data-note="icon-only glyph: the etc0 W redrawn to the original wf.exe icon proportions (tools/icon/glyphs.py)">
+<path fill="#ffffff" fill-opacity="0.200" d="M1 207 L1 1 L8 1 L8 190 L63 135 L103 175 L103 1 L127 1 L127 207 L103 207 L63 167 L23 207 Z"/>
+<path fill="#ffffff" fill-rule="evenodd" d="M1 207 L1 1 L8 1 L8 190 L63 135 L103 175 L103 1 L127 1 L127 207 L103 207 L63 167 L23 207 Z M22.586 206 L63 165.586 L103.414 206 L126 206 L126 2 L104 2 L104 177.414 L63 136.414 L7 192.414 L7 2 L2 2 L2 206 Z"/>
+</svg>

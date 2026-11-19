@@ -3,7 +3,6 @@
 //! a time: the game over screen, the name entry and the boss result.
 
 use super::Cx;
-use super::fn_option::HEXAGON;
 use super::game_state::FLAG_ENGLISH;
 use super::input;
 use super::math::sin;
@@ -11,6 +10,7 @@ use super::score_table::RANK_NAMES;
 use super::sounds;
 use super::task::Task;
 use super::texels;
+use crate::gfx::shape_table::HEXAGON;
 use crate::gfx::{Argb, Blend, Primitive, Transform};
 
 pub const MODE_NONE: i32 = 0;
@@ -47,7 +47,6 @@ impl HudState {
 // The game over screen's tables.
 const BAND: [[f32; 2]; 4] = [[-256.0, -24.0], [768.0, -24.0], [-256.0, 24.0], [768.0, 24.0]]; // 0x45dd48
 const BAND_TEXELS: [[i16; 2]; 4] = [[0, 208], [1024, 208], [0, 256], [1024, 256]]; // 0x45dd78
-const TITLE_LINE: [[f32; 2]; 3] = [[-20.0, 20.0], [0.0, 0.0], [360.0, 0.0]]; // 0x45dd88
 const WEAPON_ICON: [[f32; 2]; 4] = [[-16.0, 0.0], [64.0, 0.0], [-16.0, 24.0], [64.0, 24.0]]; // 0x45ddac
 const WEAPON_TEXELS: [[[i16; 2]; 4]; 7] = [
     [[96, 128], [176, 128], [96, 152], [176, 152]],
@@ -58,15 +57,11 @@ const WEAPON_TEXELS: [[[i16; 2]; 4]; 7] = [
     [[176, 128], [256, 128], [176, 152], [256, 152]],
     [[176, 152], [256, 152], [176, 176], [256, 176]],
 ]; // 0x45dde0
-const WEAPON_BAR: [[f32; 2]; 4] = [[0.0, 2.0], [64.0, 2.0], [0.0, 12.0], [64.0, 12.0]]; // 0x45de50
 
 // The name entry's tables.
 const NAME_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 %&+-/!?.,_ <$"; // 0x45dc48
 const BAR_POINTS: [[f32; 2]; 4] = [[-320.0, -8.0], [448.0, -8.0], [-320.0, 8.0], [448.0, 8.0]]; // 0x45dc4c
 const BAR_TEXELS: [[i16; 2]; 4] = [[0, 32], [768, 32], [0, 48], [768, 48]]; // 0x45dc7c
-const BACKDROP: [[f32; 2]; 4] = [[-320.0, -59.0], [320.0, -59.0], [-320.0, 60.0], [320.0, 60.0]]; // 0x45dc8c
-const NAME_CURSOR: [[f32; 2]; 2] = [[0.0, 18.0], [16.0, 18.0]]; // 0x45dcbc
-const CHAR_CURSOR: [[f32; 2]; 4] = [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0, 8.0]]; // 0x45dcd4
 const CHAR_LAST_SIGN: i32 = 47;
 const CHAR_DELETE: i32 = 49;
 const CHAR_END: i32 = 50;
@@ -303,7 +298,7 @@ impl GameHud {
             t.scale(self.band_height, self.band_height);
             let mut t = super::background::rotate(&t, cx.app.frame_count.wrapping_mul(3).wrapping_neg() as i32);
             t.translate(160.0, 200.0);
-            cx.draw.shape(Primitive::LineStrip, &t, &HEXAGON, Argb(0xc800_ff80), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.hexagon, &t, Argb(0xc800_ff80), Blend::Normal);
         }
 
         let count = cx.enm.state.weapon_count.max(0) as usize;
@@ -320,14 +315,14 @@ impl GameHud {
             let mut t = Transform::IDENTITY;
             t.scale(self.shown_params[6 + i] as f32 / 1024.0, 1.0);
             t.translate(x, y);
-            cx.draw.shape(Primitive::TriangleStrip, &t, &WEAPON_BAR, Argb(info_color), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.weapon_bar, &t, Argb(info_color), Blend::Normal);
             x -= 21.0;
             y += 36.0;
         }
 
         let t = Transform::translation(self.title_slide + 360.0, 404.0);
         self.title_pos.0 = self.title_slide as i32 + 360;
-        cx.draw.shape(Primitive::LineStrip, &t, &TITLE_LINE, Argb(0xc8ff_c800), Blend::Normal);
+        cx.draw.sprite(cx.art.shapes.title_line, &t, Argb(0xc8ff_c800), Blend::Normal);
         let (px, py) = (self.title_pos.0 as f32, self.title_pos.1 as f32);
         let c = Argb(0xc8ff_c800);
         cx.fonts.text.print(&mut cx.draw, px, py - 20.0, &self.texts[0], None, c, -1, Blend::Normal);
@@ -488,7 +483,7 @@ impl GameHud {
     /// DrawNameEntry (0x41f830).
     fn draw_name_entry(&mut self, cx: &mut Cx) {
         let t = Transform::translation(320.0, 240.0);
-        cx.draw.shape(Primitive::TriangleStrip, &t, &BACKDROP, Argb(alpha(self.back_alpha, 160.0)), Blend::Normal);
+        cx.draw.sprite(cx.art.shapes.backdrop, &t, Argb(alpha(self.back_alpha, 160.0)), Blend::Normal);
         // The bars, scrolling apart as the window opens.
         let mut t = Transform::IDENTITY;
         t.scale(1.0, self.open);
@@ -506,9 +501,9 @@ impl GameHud {
         if self.flags & FLAG_NAME_CURSOR != 0 {
             let t = Transform::translation(self.cursor as f32 * 16.0 + 296.0, 244.0);
             let a = super::math::ftol((1.0 - (self.mode_time & 0x3f) as f32 * (1.0 / 63.0)) * 200.0) as u32;
-            cx.draw.shape(Primitive::LineList, &t, &NAME_CURSOR, Argb((a << 24) | 0xffc800), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.name_cursor, &t, Argb((a << 24) | 0xffc800), Blend::Normal);
             let t = Transform::translation(self.char_index as f32 * 8.0 + 116.0, 268.0);
-            cx.draw.shape(Primitive::TriangleStrip, &t, &CHAR_CURSOR, Argb(0x6400_ff80), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.char_cursor, &t, Argb(0x6400_ff80), Blend::Normal);
         }
         let color = Argb(alpha(self.text_alpha, 200.0) | 0xffc800);
         let white = Argb(alpha(self.text_alpha, 128.0) | 0xff_ffff);

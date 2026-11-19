@@ -31,6 +31,10 @@
 
 use bytemuck::{Pod, Zeroable};
 
+pub mod geom;
+pub mod shape;
+pub mod slug;
+
 pub const MAGIC: [u8; 4] = *b"WFA1";
 pub const VERSION: u32 = 2;
 
@@ -57,6 +61,10 @@ pub mod paint {
     /// Flag: colour = ramp * (1 + amplitude * (noise - 0.52)), `noise` holds
     /// (base frequency, octaves, seed, amplitude) (add0_027).
     pub const FLAG_NOISE: u32 = 0x200;
+    /// Flag: the layer's curves are stroke edges (centre points and signed
+    /// normals, see [`crate::slug`]), widened in the shader to the
+    /// instance's line width in screen pixels.
+    pub const FLAG_STROKE: u32 = 0x400;
 }
 
 /// How a sprite's layers combine inside the shader before the result is

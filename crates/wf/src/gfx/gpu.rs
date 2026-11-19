@@ -1,10 +1,17 @@
 //! The wgpu backend of the graphics seam: uploads the cooked art's GPU half
-//! once, then turns each [`DrawList`] into Slug instance draws and shape
-//! triangles, in order.
+//! once, then turns each [`DrawList`] into Slug instance draws, in order.
+//!
+//! The curve, band and layer textures have a few rows more than the cooked
+//! data: the dynamic region, where the shapes whose points come from game
+//! logic ([`Draw::Shape`]) are built with the cooker's band builder, again
+//! only when their points change. Every draw, cooked or dynamic, is a Slug
+//! instance whose transform is applied on the GPU.
 
 use super::{Blend, Draw, DrawList, Primitive, SCREEN_HEIGHT, SCREEN_WIDTH};
-use wf_art::Pack;
-use wgpu::util::DeviceExt;
+use std::collections::HashMap;
+use wf_art::shape::{Outline, outline, stroke_margin};
+use wf_art::slug::{Edges, Target, add_layer, gpu_layer};
+use wf_art::{BAND_TEX_WIDTH, CURVE_TEX_WIDTH, GpuLayer, LAYER_TEX_WIDTH, LAYER_TEXELS, Pack, paint};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,18 +32,10 @@ struct Instance {
     layers: [u32; 4],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShapeVertex {
-    pos: [f32; 2],
-    color: [f32; 4],
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BatchKind {
     Sprites,
     Bitmaps,
-    Shapes,
 }
 
 struct Batch {
@@ -63,44 +62,111 @@ pub struct Renderer {
     view_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     sprite_pipelines: [wgpu::RenderPipeline; 2],
-    shape_pipelines: [wgpu::RenderPipeline; 2],
     bitmap_pipelines: [wgpu::RenderPipeline; 2],
     sprites: Vec<SpriteInfo>,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
-    shape_buffer: wgpu::Buffer,
-    shape_capacity: usize,
     // Scratch, reused every frame.
     instances: Vec<Instance>,
-    shape_vertices: Vec<ShapeVertex>,
     batches: Vec<Batch>,
-    /// The multisampled colour target and its size, resolved into the frame.
-    msaa: Option<(wgpu::TextureView, (u32, u32))>,
+    dynamic: Dynamic,
     pub time: f32,
 }
 
-/// Samples a pixel. Slug sprites antialias themselves (one shading per pixel);
-/// the multisampling is what antialiases the untextured shapes (lines, the
-/// option hexagons, bars) and the hard edges of texel regions.
-const SAMPLES: u32 = 4;
+/// Rows of the dynamic region: 2048 curves, 8192 band texels, 128 layers.
+const DYN_CURVE_ROWS: u32 = 1;
+const DYN_BAND_ROWS: u32 = 2;
+const DYN_LAYER_ROWS: u32 = 1;
 
-fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, image: &wf_art::Image, format: wgpu::TextureFormat) -> wgpu::TextureView {
-    let texture = device.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+/// The line width of strokes in pixels of the 640x480 screen (D3D7's
+/// one-pixel lines), whatever the transform.
+const LINE_WIDTH: f32 = 1.0;
+
+/// The dynamic region of the curve, band and layer textures.
+struct Dynamic {
+    curves: wgpu::Texture,
+    bands: wgpu::Texture,
+    layers: wgpu::Texture,
+    /// The first row of the region in each texture.
+    curve_row: u32,
+    band_row: u32,
+    layer_row: u32,
+    /// The shapes built in the region: key -> (layer index, bounds).
+    built: HashMap<u64, (u32, [f32; 4])>,
+    warned: bool,
+}
+
+/// Uploads `image` into a texture with `extra` more rows; returns the
+/// texture and its first free row.
+fn upload(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    image: &wf_art::Image,
+    format: wgpu::TextureFormat,
+    extra: u32,
+) -> (wgpu::Texture, u32) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: image.width, height: image.height + extra, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    write_rows(queue, &texture, 0, image.width * image.bytes_per_texel, image.data);
+    (texture, image.height)
+}
+
+/// Writes whole rows of `bytes` (row length `row_bytes`) from row `row` on.
+fn write_rows(queue: &wgpu::Queue, texture: &wgpu::Texture, row: u32, row_bytes: u32, bytes: &[u8]) {
+    let rows = (bytes.len() as u32).div_ceil(row_bytes);
+    if rows == 0 {
+        return;
+    }
+    let mut data = bytes.to_vec();
+    data.resize((rows * row_bytes) as usize, 0);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: 0, y: row, z: 0 },
+            aspect: wgpu::TextureAspect::All,
         },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        image.data,
+        &data,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row_bytes), rows_per_image: Some(rows) },
+        wgpu::Extent3d { width: texture.width(), height: rows, depth_or_array_layers: 1 },
     );
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The power-of-two bucket of the smallest scale (logical pixels per local
+/// unit) of `t`, rounded down: a stroke built for it reaches far enough at
+/// that scale or more. None for a degenerate transform.
+fn scale_bucket(t: &super::Transform) -> Option<i32> {
+    let m = &t.m;
+    let sx = (m[0][0] * m[0][0] + m[0][1] * m[0][1]).sqrt();
+    let sy = (m[1][0] * m[1][0] + m[1][1] * m[1][1]).sqrt();
+    let s = sx.min(sy);
+    (s > 1e-6).then(|| s.log2().floor().clamp(-16.0, 16.0) as i32)
+}
+
+/// The key of a dynamic shape: its primitive, its points and, for lines, the
+/// scale bucket its stroke margin was built for.
+fn shape_key(primitive: Primitive, points: &[[f32; 2]], bucket: i32) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |v: u32| {
+        h ^= v as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    };
+    mix(primitive as u32);
+    mix(bucket as u32);
+    for p in points {
+        mix(p[0].to_bits());
+        mix(p[1].to_bits());
+    }
+    h
 }
 
 fn blend_state(blend: Blend) -> wgpu::BlendState {
@@ -109,7 +175,11 @@ fn blend_state(blend: Blend) -> wgpu::BlendState {
         Blend::Normal => wgpu::BlendFactor::OneMinusSrcAlpha,
         Blend::Additive => wgpu::BlendFactor::One,
     };
-    let c = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: dst, operation: wgpu::BlendOperation::Add };
+    let c = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: dst,
+        operation: wgpu::BlendOperation::Add,
+    };
     wgpu::BlendState { color: c, alpha: c }
 }
 
@@ -123,11 +193,26 @@ fn blend_index(blend: Blend) -> usize {
 impl Renderer {
     /// Uploads the art's GPU half and builds the pipelines for `format`.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat, art: &Pack) -> Self {
-        let curves = upload(&device, &queue, "slug curves", &art.curves, wgpu::TextureFormat::Rgba32Float);
-        let bands = upload(&device, &queue, "slug bands", &art.bands, wgpu::TextureFormat::Rg32Uint);
-        let layers = upload(&device, &queue, "slug layers", &art.layer_image, wgpu::TextureFormat::Rgba32Uint);
-        let ramps = upload(&device, &queue, "ramps", &art.ramps, wgpu::TextureFormat::Rgba8Unorm);
-        let bitmaps = upload(&device, &queue, "bitmaps", &art.bitmaps, wgpu::TextureFormat::Rgba8Unorm);
+        let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+        let (curve_tex, curve_row) =
+            upload(&device, &queue, "slug curves", &art.curves, wgpu::TextureFormat::Rgba32Float, DYN_CURVE_ROWS);
+        let (band_tex, band_row) =
+            upload(&device, &queue, "slug bands", &art.bands, wgpu::TextureFormat::Rg32Uint, DYN_BAND_ROWS);
+        let (layer_tex, layer_row) =
+            upload(&device, &queue, "slug layers", &art.layer_image, wgpu::TextureFormat::Rgba32Uint, DYN_LAYER_ROWS);
+        let (curves, bands, layers) = (view(&curve_tex), view(&band_tex), view(&layer_tex));
+        let ramps = view(&upload(&device, &queue, "ramps", &art.ramps, wgpu::TextureFormat::Rgba8Unorm, 0).0);
+        let bitmaps = view(&upload(&device, &queue, "bitmaps", &art.bitmaps, wgpu::TextureFormat::Rgba8Unorm, 0).0);
+        let dynamic = Dynamic {
+            curves: curve_tex,
+            bands: band_tex,
+            layers: layer_tex,
+            curve_row,
+            band_row,
+            layer_row,
+            built: HashMap::new(),
+            warned: false,
+        };
         let bitmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sharp bilinear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -144,7 +229,11 @@ impl Renderer {
         let tex_entry = |binding: u32, sample_type: wgpu::TextureSampleType| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture { sample_type, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            ty: wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
             count: None,
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -153,7 +242,11 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 tex_entry(1, wgpu::TextureSampleType::Float { filterable: false }),
@@ -191,22 +284,10 @@ impl Renderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let instance_attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2, 3 => Float32x4, 4 => Uint32x4];
-        let shape_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+        let instance_attrs =
+            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2, 3 => Float32x4, 4 => Uint32x4];
         let make = |blend: Blend, kind: BatchKind| {
-            let shapes = kind == BatchKind::Shapes;
-            let (vs, fs, topology, buffers) = if shapes {
-                (
-                    "vs_shape",
-                    "fs_shape",
-                    wgpu::PrimitiveTopology::TriangleList,
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<ShapeVertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &shape_attrs,
-                    },
-                )
-            } else {
+            let (vs, fs, topology, buffers) = {
                 (
                     if kind == BatchKind::Bitmaps { "vs_bitmap" } else { "vs_main" },
                     if kind == BatchKind::Bitmaps { "fs_bitmap" } else { "fs_main" },
@@ -220,7 +301,6 @@ impl Renderer {
             };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(match kind {
-                    BatchKind::Shapes => "shapes",
                     BatchKind::Bitmaps => "bitmaps",
                     BatchKind::Sprites => "sprites",
                 }),
@@ -233,7 +313,7 @@ impl Renderer {
                 },
                 primitive: wgpu::PrimitiveState { topology, ..Default::default() },
                 depth_stencil: None,
-                multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+                multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
@@ -250,7 +330,6 @@ impl Renderer {
         };
         let sprite_pipelines = [make(Blend::Normal, BatchKind::Sprites), make(Blend::Additive, BatchKind::Sprites)];
         let bitmap_pipelines = [make(Blend::Normal, BatchKind::Bitmaps), make(Blend::Additive, BatchKind::Bitmaps)];
-        let shape_pipelines = [make(Blend::Normal, BatchKind::Shapes), make(Blend::Additive, BatchKind::Shapes)];
         let sprites = art
             .sprites
             .iter()
@@ -264,9 +343,7 @@ impl Renderer {
             })
             .collect();
         let instance_capacity = 1024;
-        let shape_capacity = 4096;
         let instance_buffer = Self::buffer(&device, "instances", instance_capacity * std::mem::size_of::<Instance>());
-        let shape_buffer = Self::buffer(&device, "shapes", shape_capacity * std::mem::size_of::<ShapeVertex>());
         Renderer {
             device,
             queue,
@@ -274,17 +351,13 @@ impl Renderer {
             view_buffer,
             bind_group,
             sprite_pipelines,
-            shape_pipelines,
             bitmap_pipelines,
             sprites,
             instance_buffer,
             instance_capacity,
-            shape_buffer,
-            shape_capacity,
             instances: Vec::new(),
-            shape_vertices: Vec::new(),
             batches: Vec::new(),
-            msaa: None,
+            dynamic,
             time: 0.0,
         }
     }
@@ -310,50 +383,71 @@ impl Renderer {
 
     fn push_batch(&mut self, kind: BatchKind, blend: Blend, start: u32, end: u32) {
         if let Some(last) = self.batches.last_mut()
-            && last.kind == kind && last.blend == blend && last.end == start {
-                last.end = end;
-                return;
-            }
+            && last.kind == kind
+            && last.blend == blend
+            && last.end == start
+        {
+            last.end = end;
+            return;
+        }
         self.batches.push(Batch { kind, blend, start, end });
     }
 
-    fn push_shape(&mut self, primitive: Primitive, points: &[[f32; 2]], colors: &[super::Argb], blend: Blend) {
-        let start = self.shape_vertices.len() as u32;
-        let v = |i: usize| ShapeVertex { pos: points[i], color: colors[i].to_f32() };
-        let n = points.len();
-        let tri = |out: &mut Vec<ShapeVertex>, a: usize, b: usize, c: usize| {
-            out.push(v(a));
-            out.push(v(b));
-            out.push(v(c));
-        };
-        let line = |out: &mut Vec<ShapeVertex>, a: usize, b: usize| {
-            // A line one logical pixel wide, like the original's 1 px lines
-            // at 640x480.
-            let (pa, pb) = (points[a], points[b]);
-            let d = [pb[0] - pa[0], pb[1] - pa[1]];
-            let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-6);
-            let nrm = [-d[1] / len * 0.5, d[0] / len * 0.5];
-            let (ca, cb) = (colors[a].to_f32(), colors[b].to_f32());
-            let q = [
-                ShapeVertex { pos: [pa[0] + nrm[0], pa[1] + nrm[1]], color: ca },
-                ShapeVertex { pos: [pa[0] - nrm[0], pa[1] - nrm[1]], color: ca },
-                ShapeVertex { pos: [pb[0] + nrm[0], pb[1] + nrm[1]], color: cb },
-                ShapeVertex { pos: [pb[0] - nrm[0], pb[1] - nrm[1]], color: cb },
-            ];
-            out.extend_from_slice(&[q[0], q[1], q[2], q[2], q[1], q[3]]);
-        };
-        let out = &mut self.shape_vertices;
-        match primitive {
-            Primitive::TriangleStrip => (0..n.saturating_sub(2)).for_each(|i| tri(out, i, i + 1, i + 2)),
-            Primitive::TriangleFan => (1..n.saturating_sub(1)).for_each(|i| tri(out, 0, i, i + 1)),
-            Primitive::TriangleList => (0..n / 3).for_each(|i| tri(out, 3 * i, 3 * i + 1, 3 * i + 2)),
-            Primitive::LineStrip => (0..n.saturating_sub(1)).for_each(|i| line(out, i, i + 1)),
-            Primitive::LineList => (0..n / 2).for_each(|i| line(out, 2 * i, 2 * i + 1)),
+    /// Builds the frame's dynamic shapes into the dynamic region, unless all
+    /// of them are already there (their points did not change).
+    fn build_dynamic(&mut self, list: &DrawList) {
+        let mut wanted: Vec<(u64, Primitive, &[[f32; 2]], i32)> = Vec::new();
+        for draw in &list.draws {
+            if let Draw::Shape { primitive, points, transform, .. } = draw {
+                let Some(bucket) = scale_bucket(transform) else {
+                    continue;
+                };
+                let bucket = if primitive.is_line() { bucket } else { 0 };
+                let key = shape_key(*primitive, points, bucket);
+                if !wanted.iter().any(|w| w.0 == key) {
+                    wanted.push((key, *primitive, points, bucket));
+                }
+            }
         }
-        let end = self.shape_vertices.len() as u32;
-        if end > start {
-            self.push_batch(BatchKind::Shapes, blend, start, end);
+        if wanted.iter().all(|w| self.dynamic.built.contains_key(&w.0)) {
+            return;
         }
+        let dy = &mut self.dynamic;
+        dy.built.clear();
+        let (mut curves, mut bands, mut layers) = (Vec::new(), Vec::new(), Vec::<GpuLayer>::new());
+        let layers_per_row = LAYER_TEX_WIDTH / LAYER_TEXELS;
+        for (key, primitive, points, bucket) in wanted {
+            let mut target = Target {
+                curves: &mut curves,
+                bands: &mut bands,
+                curve_base: dy.curve_row * CURVE_TEX_WIDTH,
+                band_base: dy.band_row * BAND_TEX_WIDTH,
+            };
+            let (g, flags) = match outline(primitive, points) {
+                Outline::Fill(c) => (add_layer(&mut target, Edges::Fill(&c)), 0),
+                Outline::Stroke(e) => {
+                    (add_layer(&mut target, Edges::Stroke(&e, stroke_margin(2f32.powi(bucket)))), paint::FLAG_STROKE)
+                }
+            };
+            if curves.len() as u32 > DYN_CURVE_ROWS * CURVE_TEX_WIDTH
+                || bands.len() as u32 > DYN_BAND_ROWS * BAND_TEX_WIDTH
+                || layers.len() as u32 >= DYN_LAYER_ROWS * layers_per_row
+            {
+                if !dy.warned {
+                    crate::log::warn("gfx: the dynamic shapes do not fit their region; some are not drawn");
+                    dy.warned = true;
+                }
+                break;
+            }
+            let mut layer = gpu_layer(&g);
+            layer.paint = paint::SOLID | flags;
+            layer.color = [1.0f32; 4].map(f32::to_bits);
+            dy.built.insert(key, (dy.layer_row * layers_per_row + layers.len() as u32, g.bbox));
+            layers.push(layer);
+        }
+        write_rows(&self.queue, &dy.curves, dy.curve_row, CURVE_TEX_WIDTH * 16, bytemuck::cast_slice(&curves));
+        write_rows(&self.queue, &dy.bands, dy.band_row, BAND_TEX_WIDTH * 8, bytemuck::cast_slice(&bands));
+        write_rows(&self.queue, &dy.layers, dy.layer_row, LAYER_TEX_WIDTH * 16, bytemuck::cast_slice(&layers));
     }
 
     /// Renders `list` into `target` (of `size` pixels), letterboxing the
@@ -366,12 +460,14 @@ impl Renderer {
         let vy = ((size.1 as f32 - vh) * 0.5).floor();
 
         self.instances.clear();
-        self.shape_vertices.clear();
         self.batches.clear();
+        self.build_dynamic(list);
         for draw in &list.draws {
             match draw {
                 Draw::Sprite { sprite, transform, color, blend, clip } => {
-                    let Some(info) = self.sprites.get(sprite.0 as usize) else { continue };
+                    let Some(info) = self.sprites.get(sprite.0 as usize) else {
+                        continue;
+                    };
                     if let Some(rect) = info.bitmap {
                         let m = &transform.m;
                         let i = self.instances.len() as u32;
@@ -413,26 +509,41 @@ impl Renderer {
                         m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
                         m1: [m[2][0], m[2][1]],
                         tint: color.to_f32(),
-                        layers: [info.first_layer, info.layer_count, info.compose, 0],
+                        layers: [info.first_layer, info.layer_count, info.compose, LINE_WIDTH.to_bits()],
                     });
                     self.push_batch(BatchKind::Sprites, *blend, i, i + 1);
                 }
-                Draw::Shape { primitive, points, colors, blend } => {
-                    self.push_shape(*primitive, points, colors, *blend);
+                Draw::Shape { primitive, points, transform, color, blend } => {
+                    let m = &transform.m;
+                    let Some(bucket) = scale_bucket(transform) else {
+                        continue;
+                    };
+                    let key = shape_key(*primitive, points, if primitive.is_line() { bucket } else { 0 });
+                    let Some(&(layer, b)) = self.dynamic.built.get(&key) else {
+                        continue;
+                    };
+                    let sx = (m[0][0] * m[0][0] + m[0][1] * m[0][1]).sqrt();
+                    let sy = (m[1][0] * m[1][0] + m[1][1] * m[1][1]).sqrt();
+                    let d = 1.0 / (sx.min(sy) * k).max(1e-6);
+                    let i = self.instances.len() as u32;
+                    self.instances.push(Instance {
+                        bounds: [b[0] - d, b[1] - d, b[2] + d, b[3] + d],
+                        m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
+                        m1: [m[2][0], m[2][1]],
+                        tint: color.to_f32(),
+                        layers: [layer, 1, 0, LINE_WIDTH.to_bits()],
+                    });
+                    self.push_batch(BatchKind::Sprites, *blend, i, i + 1);
                 }
             }
         }
 
         if self.instances.len() > self.instance_capacity {
             self.instance_capacity = self.instances.len().next_power_of_two();
-            self.instance_buffer = Self::buffer(&self.device, "instances", self.instance_capacity * std::mem::size_of::<Instance>());
-        }
-        if self.shape_vertices.len() > self.shape_capacity {
-            self.shape_capacity = self.shape_vertices.len().next_power_of_two();
-            self.shape_buffer = Self::buffer(&self.device, "shapes", self.shape_capacity * std::mem::size_of::<ShapeVertex>());
+            self.instance_buffer =
+                Self::buffer(&self.device, "instances", self.instance_capacity * std::mem::size_of::<Instance>());
         }
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
-        self.queue.write_buffer(&self.shape_buffer, 0, bytemuck::cast_slice(&self.shape_vertices));
         let view = ViewUniform {
             scale: [2.0 / SCREEN_WIDTH, -2.0 / SCREEN_HEIGHT],
             offset: [-1.0, 1.0],
@@ -441,29 +552,15 @@ impl Renderer {
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
 
-        if self.msaa.as_ref().is_none_or(|m| m.1 != size) {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("msaa"),
-                size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: SAMPLES,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            self.msaa = Some((texture.create_view(&wgpu::TextureViewDescriptor::default()), size));
-        }
-        let msaa = &self.msaa.as_ref().expect("msaa target").0;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         {
             let clear = list.clear.to_f32();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: msaa,
+                    view: target,
                     depth_slice: None,
-                    resolve_target: Some(target),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: clear[0] as f64,
@@ -471,7 +568,7 @@ impl Renderer {
                             b: clear[2] as f64,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -492,11 +589,6 @@ impl Renderer {
                         pass.set_pipeline(&self.bitmap_pipelines[blend_index(batch.blend)]);
                         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
                         pass.draw(0..4, batch.start..batch.end);
-                    }
-                    BatchKind::Shapes => {
-                        pass.set_pipeline(&self.shape_pipelines[blend_index(batch.blend)]);
-                        pass.set_vertex_buffer(0, self.shape_buffer.slice(..));
-                        pass.draw(batch.start..batch.end, 0..1);
                     }
                 }
             }
@@ -526,12 +618,17 @@ impl Renderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
+        let mut encoder =
+            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(height),
+                },
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
@@ -556,7 +653,10 @@ impl Renderer {
 }
 
 /// Creates a device for `surface` (or a headless one when `None`).
-pub fn create_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface>) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+pub fn create_device(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface>,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,

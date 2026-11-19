@@ -93,10 +93,6 @@ const TITLE_BAR_TEXELS: [[i16; 2]; 4] = [[0, 16], [768, 16], [0, 32], [768, 32]]
 /// The volume of each step of the volume items.
 const VOLUME_STEP: f32 = 1.0 / 9.0;
 
-/// g_hexagon (0x45d0a0): the corners of the unit hexagon, closed.
-pub const HEXAGON: [[f32; 2]; 7] =
-    [[0.0, -2.0], [1.732_051, -1.0], [1.732_051, 1.0], [0.0, 2.0], [-1.732_051, 1.0], [-1.732_051, -1.0], [0.0, -2.0]];
-
 /// The fields of g_fn_option that outlive the screen.
 #[derive(Clone, Debug)]
 pub struct OptionState {
@@ -492,7 +488,7 @@ impl Stage for FnOption {
         let t = super::background::rotate(&t, cx.app.frame_count.wrapping_mul(3) as i32);
         let mut t = t;
         t.translate(300.0, 320.0);
-        cx.draw.shape(Primitive::LineStrip, &t, &HEXAGON, Argb(0x6400_ff80), Blend::Normal);
+        cx.draw.sprite(cx.art.shapes.hexagon, &t, Argb(0x6400_ff80), Blend::Normal);
 
         let id = Transform::IDENTITY;
         let mut y = 140.0f32;

@@ -82,6 +82,8 @@ pub struct Config {
     pub glyph_patterns: Vec<String>,
     /// The table of the cut glyphs, for the `{csv}` pattern.
     pub glyph_csv: PathBuf,
+    /// The game's constant shapes, cooked as `shape/<name>`.
+    pub shapes: &'static [wf_art::shape::ShapeDef],
 }
 
 /// Splits one CSV line (fields may be quoted, with "" for a quote).
@@ -124,7 +126,7 @@ impl Config {
     pub fn new(art_dir: PathBuf, font_dir: PathBuf, bitmap_dir: PathBuf) -> Self {
         let glyph_dir = art_dir.join("fonts");
         let glyph_csv = art_dir.join("../fonts/glyphs.csv");
-        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect(), glyph_csv }
+        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect(), glyph_csv, shapes: &[] }
     }
 
     /// The vector glyph for the cell at (`x`, `y`) of `grid`, if there is
@@ -261,6 +263,26 @@ impl Cooker {
         }
         self.noise_tables.push((seed.to_bits(), base));
         base
+    }
+
+    /// A constant shape of the game: one white layer, filled or stroked,
+    /// in the shape's own coordinates.
+    fn cook_shape(&mut self, def: &wf_art::shape::ShapeDef) {
+        use wf_art::shape::{Outline, outline, stroke_margin};
+        let (g, flags) = match outline(def.primitive, def.points) {
+            Outline::Fill(curves) => {
+                self.report.curves += curves.len();
+                (slug::add_layer(&mut self.w, &curves), 0)
+            }
+            Outline::Stroke(edges) => {
+                self.report.curves += edges.len();
+                (slug::add_edges(&mut self.w, slug::Edges::Stroke(&edges, stroke_margin(def.min_scale))), paint::FLAG_STROKE)
+            }
+        };
+        let mut layer = slug::gpu_layer(&g);
+        layer.paint = paint::SOLID | flags;
+        layer.color = bits4([1.0; 4]);
+        self.add_sprite(format!("shape/{}", def.name), vec![layer], [0.0, 0.0], Vec2::new(0.0, 0.0), compose::OVER, 0);
     }
 
     fn cook_svg(&mut self, name: String, art: svg::Art) {
@@ -442,6 +464,9 @@ fn read_png(path: &Path) -> Result<(usize, usize, Vec<u8>), Error> {
 
 pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
     let mut c = Cooker { w: Writer::new(), shelf: (0, 0, 0), ramp_rows: Vec::new(), noise_tables: Vec::new(), report: Report::default() };
+    for def in config.shapes {
+        c.cook_shape(def);
+    }
     for sheet in SHEETS {
         let dir = config.art_dir.join(sheet);
         let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)

@@ -18,3 +18,4 @@ raw-window-handle = "0.6"
 
 [build-dependencies]
 wf-cook.workspace = true
+wf-art.workspace = true

@@ -1,22 +1,18 @@
 //! BackgroundGrid (background.cpp, vtable 0x452878): the scrolling grid
 //! behind a game. One tile of 10 x 10 squares, drawn four times around the
 //! scroll position so that it wraps. Untextured lines (DrawPoints with
-//! D3DPT_LINELIST after ClearTexture), so it goes through the solid path.
+//! D3DPT_LINELIST after ClearTexture): the cooked `shape/grid_tile`.
 
 use super::Cx;
 use super::input;
 use super::math::sin;
 use super::task::Task;
-use crate::gfx::{Argb, Blend, Primitive, Transform};
-
-const SQUARES: i32 = 10;
-const SIZE: i32 = 96;
-const HALF_TILE: f32 = (SQUARES * SIZE / 2) as f32; // 480
+use crate::gfx::shape_table::GRID_HALF_TILE as HALF_TILE;
+use crate::gfx::{Argb, Blend, Transform};
 
 pub struct BackgroundGrid {
     pub speed: f32,
     pub color: Argb,
-    points: Vec<[f32; 2]>,
     tiles: [[f32; 2]; 4],
     angle: i16,
     x: f32,
@@ -26,7 +22,7 @@ pub struct BackgroundGrid {
 impl BackgroundGrid {
     /// BackgroundGrid (0x415fe0) with the fields fnGame sets.
     pub fn new(color: u32, speed: f32) -> Self {
-        BackgroundGrid { speed, color: Argb(color), points: Vec::new(), tiles: [[0.0; 2]; 4], angle: 0, x: 0.0, y: 0.0 }
+        BackgroundGrid { speed, color: Argb(color), tiles: [[0.0; 2]; 4], angle: 0, x: 0.0, y: 0.0 }
     }
 
     /// RotateTransform (0x415f30): turns `t` by `angle` 1024ths of a turn.
@@ -43,17 +39,7 @@ impl BackgroundGrid {
 impl Task for BackgroundGrid {
     /// Initialize (0x415b90).
     fn initialize(&mut self, cx: &mut Cx) -> bool {
-        self.points.clear();
-        for i in 0..SQUARES {
-            let y = (i * SIZE) as f32 - HALF_TILE;
-            self.points.push([-HALF_TILE, y]);
-            self.points.push([HALF_TILE, y]);
-        }
-        for i in 0..SQUARES {
-            let x = (i * SIZE) as f32 - HALF_TILE;
-            self.points.push([x, -HALF_TILE]);
-            self.points.push([x, HALF_TILE]);
-        }
+        // The tile's lines are the cooked shape (shape_table::GRID_TILE).
         self.tiles = [[-HALF_TILE, -HALF_TILE], [HALF_TILE, -HALF_TILE], [-HALF_TILE, HALF_TILE], [HALF_TILE, HALF_TILE]];
         self.x = 0.0;
         self.y = 0.0;
@@ -62,9 +48,7 @@ impl Task for BackgroundGrid {
         true
     }
 
-    fn finalize(&mut self, _cx: &mut Cx) {
-        self.points.clear();
-    }
+    fn finalize(&mut self, _cx: &mut Cx) {}
 
     /// IsProtected (0x415e50): turns by the pad every fourth frame (the
     /// live pad, not the replay's keys) and scrolls.
@@ -105,7 +89,7 @@ impl Task for BackgroundGrid {
             let mut t = Self::rotate_by(&t, -(self.angle as i32));
             t.m[2][0] += 320.0;
             t.m[2][1] += 240.0;
-            cx.draw.shape(Primitive::LineList, &t, &self.points, self.color, Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.grid_tile, &t, self.color, Blend::Normal);
         }
     }
 }

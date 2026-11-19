@@ -5,14 +5,13 @@ use super::actor::{self, ActorDesc, Aid, Obj, sheet};
 use super::app::Stage;
 use super::background::BackgroundGrid;
 use super::fn_game::{self, FnGame, FnGameState};
-use super::fn_option::HEXAGON;
 use super::input;
 use super::math::sin;
 use super::records;
 use super::sounds;
 use super::task::{self, ListId, Place, TaskId};
 use super::text::{FontId, ObjText};
-use crate::gfx::{Argb, Blend, Primitive, Transform};
+use crate::gfx::{Argb, Blend, Transform};
 
 const FLAG_MENU_CURSOR: u32 = 0x1;
 const FLAG_TITLE_SHOWN: u32 = 0x2;
@@ -32,10 +31,6 @@ const MENU_ITEM_COUNT: i16 = 4;
 
 const TITLE: &[u8] = b"WARNING   FOREVER"; // 0x45dbbc
 const MENU_ITEMS: [&str; 4] = ["GAME_START", "  REPLAY", "  OPTION", "   EXIT"]; // 0x45dbd0
-/// The arrows above and below the menu item (0x45dbe8).
-const MENU_CURSOR: [[f32; 2]; 8] =
-    [[0.0, -24.0], [-8.0, -16.0], [0.0, -24.0], [8.0, -16.0], [0.0, 24.0], [-8.0, 16.0], [0.0, 24.0], [8.0, 16.0]];
-
 const SKIP_KEYS: u16 = input::SHOT | input::SLOW | input::WEAPON_SELECT;
 
 #[derive(Default)]
@@ -154,11 +149,11 @@ impl Stage for FnTitle {
             let mut t = super::background::rotate(&t, cx.app.frame_count.wrapping_mul(3) as i32);
             t.m[2][0] += 300.0;
             t.m[2][1] += 320.0;
-            cx.draw.shape(Primitive::LineStrip, &t, &HEXAGON, Argb(0x8000_ff80), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.hexagon, &t, Argb(0x8000_ff80), Blend::Normal);
         }
         if self.flags & FLAG_MENU_CURSOR != 0 {
             let t = Transform::translation(128.0, 408.0);
-            cx.draw.shape(Primitive::LineList, &t, &MENU_CURSOR, Argb(((self.cursor_alpha as u32) << 24) | 0xffdd00), Blend::Normal);
+            cx.draw.sprite(cx.art.shapes.menu_cursor, &t, Argb(((self.cursor_alpha as u32) << 24) | 0xffdd00), Blend::Normal);
         }
         cx.fonts.text.print(&mut cx.draw, (self.menu_x + 48) as f32, 400.0, &self.menu_text, None, Argb(0x80ff_ffff), -1, Blend::Normal);
         if self.time >= 301 {

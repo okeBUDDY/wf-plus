@@ -115,8 +115,15 @@ crossings into coverage. Layers are painted (solid, linear or radial ramp,
 the sys0_008 combined ramps, and add0_027's SVG `feTurbulence` fractal noise,
 evaluated on the spec's lattice, which the cooker bakes per seed) and
 composed in the shader, then blended once, normal or additive, in gamma space
-as on the original's Direct3D 7. Untextured shapes (lines, bars, the option
-hexagon) are antialiased with 4x multisampling. Glyphs come from vector SVGs
+as on the original's Direct3D 7. Untextured shapes go through Slug too. The
+constant point tables (`gfx/shape_table.rs`, addresses cited) are cooked as
+sprites `shape/<name>` in local coordinates, transformed per instance on the
+GPU like any sprite. Lines are stroke layers: each edge is stored as centre
+points plus unit normals, and the shader offsets them by half a pixel under
+the instance's transform, so lines stay one pixel wide at any scale, as
+Direct3D 7's did. Shapes whose points come from game logic (lasers, the game
+over chart, the options' bars) are rebuilt on the CPU into a small dynamic
+region of the textures, only when their points change. Glyphs come from vector SVGs
 when present, else from exact traces of the font sheets. The title character
 stays the original pixels in a bitmap atlas, drawn with sharp-bilinear
 sampling.

@@ -1154,9 +1154,6 @@ pub fn move_all(cx: &mut Cx) {
     }
 }
 
-/// The triangle of a shockwave ring (0x45d5bc).
-const SHOCKWAVE_POINTS: [[f32; 2]; 3] = [[-18.0, -960.0], [18.0, -960.0], [-2.0, 0.0]];
-
 /// Draws `obj` under `t` (HLSObject::Draw), stepping animations while the
 /// time moves.
 pub fn draw_obj(cx: &mut Cx, obj: Obj, t: &Transform, color: u32, blend: Blend) {
@@ -1175,7 +1172,7 @@ pub fn draw_obj(cx: &mut Cx, obj: Obj, t: &Transform, color: u32, blend: Blend) 
             if color & 0xff00_0000 == 0 {
                 return;
             }
-            cx.draw.shape(Primitive::TriangleStrip, t, &SHOCKWAVE_POINTS, Argb(color), blend);
+            cx.draw.sprite(cx.art.shapes.shockwave, t, Argb(color), blend);
         }
         Obj::Laser => {
             if color & 0xff00_0000 == 0 {

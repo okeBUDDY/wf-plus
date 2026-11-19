@@ -94,7 +94,13 @@ impl Task for FadeTask {
     fn run(&mut self, cx: &mut Cx) {
         if cx.fade.rgba[3] != 0 {
             let c = cx.fade.color();
-            cx.draw.fill_screen(c);
+            let screen = cx.art.shapes.screen;
+            cx.draw.sprite(
+                screen,
+                &crate::gfx::Transform::IDENTITY,
+                c,
+                crate::gfx::Blend::Normal,
+            );
         }
     }
 }

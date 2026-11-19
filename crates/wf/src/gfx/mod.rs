@@ -7,11 +7,17 @@
 //! * [`DrawList::sprite`] = `HLSPat::Draw` (a pattern under a transform,
 //!   tinted, normal or additive), now drawn from cooked Slug art;
 //! * [`DrawList::shape`] = `HL3D::DrawPoints` (untextured strips, fans,
-//!   lines);
-//! * [`DrawList::fill_screen`] = the screen-fade `Sprite` overlay.
+//!   lines) whose points come from game logic. The constant shapes (see
+//!   [`shape_table`]) are cooked sprites, drawn with [`DrawList::sprite`].
+//!
+//! Shapes are Slug layers too: filled triangles, and lines one screen pixel
+//! wide whatever the transform, as Direct3D 7 drew them.
 
 pub mod gpu;
+pub mod shape_table;
 pub mod transform;
+
+pub use wf_art::shape::Primitive;
 
 pub use transform::Transform;
 
@@ -64,23 +70,13 @@ impl Blend {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SpriteId(pub u32);
 
-/// The primitive of an untextured shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Primitive {
-    TriangleStrip,
-    TriangleFan,
-    TriangleList,
-    LineStrip,
-    LineList,
-}
-
 #[derive(Clone, Debug)]
 pub enum Draw {
     /// `clip` (min x, min y, max x, max y in the sprite's own space) cuts
     /// the sprite to a rect with hard edges: a texel region of a sheet.
     Sprite { sprite: SpriteId, transform: Transform, color: Argb, blend: Blend, clip: Option<[f32; 4]> },
-    /// Points already transformed to screen space.
-    Shape { primitive: Primitive, points: Vec<[f32; 2]>, colors: Vec<Argb>, blend: Blend },
+    /// A shape whose local points come from game logic, under `transform`.
+    Shape { primitive: Primitive, points: Vec<[f32; 2]>, transform: Transform, color: Argb, blend: Blend },
 }
 
 /// One frame's worth of drawing, in order.
@@ -118,19 +114,12 @@ impl DrawList {
     }
 
     /// Draws `points` (in the shape's own space) under `transform` in one
-    /// colour.
+    /// colour. The backend rebuilds the shape's curves only when its points
+    /// change; the transform is applied on the GPU.
     pub fn shape(&mut self, primitive: Primitive, transform: &Transform, points: &[[f32; 2]], color: Argb, blend: Blend) {
-        let points: Vec<[f32; 2]> = points.iter().map(|p| transform.apply(p[0], p[1])).collect();
-        let colors = vec![color; points.len()];
-        self.draws.push(Draw::Shape { primitive, points, colors, blend });
-    }
-
-    /// Covers the screen in `color` (the screen fade).
-    pub fn fill_screen(&mut self, color: Argb) {
         if color.alpha() == 0 {
             return;
         }
-        let points = vec![[0.0, 0.0], [SCREEN_WIDTH, 0.0], [0.0, SCREEN_HEIGHT], [SCREEN_WIDTH, SCREEN_HEIGHT]];
-        self.draws.push(Draw::Shape { primitive: Primitive::TriangleStrip, points, colors: vec![color; 4], blend: Blend::Normal });
+        self.draws.push(Draw::Shape { primitive, points: points.to_vec(), transform: *transform, color, blend });
     }
 }

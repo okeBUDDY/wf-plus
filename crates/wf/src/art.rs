@@ -12,11 +12,43 @@ pub fn pack() -> Pack<'static> {
 /// Sprite lookups by name.
 pub struct Art {
     pub pack: Pack<'static>,
+    /// The cooked constant shapes (`gfx::shape_table`).
+    pub shapes: Shapes,
+}
+
+/// The sprites of the constant shapes.
+pub struct Shapes {
+    pub hexagon: SpriteId,
+    pub menu_cursor: SpriteId,
+    pub title_line: SpriteId,
+    pub weapon_bar: SpriteId,
+    pub backdrop: SpriteId,
+    pub name_cursor: SpriteId,
+    pub char_cursor: SpriteId,
+    pub shockwave: SpriteId,
+    pub grid_tile: SpriteId,
+    pub screen: SpriteId,
 }
 
 impl Art {
     pub fn load() -> Self {
-        Art { pack: pack() }
+        let pack = pack();
+        let s = |name: &str| {
+            SpriteId(pack.find(&format!("shape/{name}")).expect("cooked shape") as u32)
+        };
+        let shapes = Shapes {
+            hexagon: s("hexagon"),
+            menu_cursor: s("menu_cursor"),
+            title_line: s("title_line"),
+            weapon_bar: s("weapon_bar"),
+            backdrop: s("backdrop"),
+            name_cursor: s("name_cursor"),
+            char_cursor: s("char_cursor"),
+            shockwave: s("shockwave"),
+            grid_tile: s("grid_tile"),
+            screen: s("screen"),
+        };
+        Art { pack, shapes }
     }
 
     pub fn find(&self, name: &str) -> Option<SpriteId> {

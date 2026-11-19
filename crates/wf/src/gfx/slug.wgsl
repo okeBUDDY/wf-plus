@@ -35,13 +35,14 @@ const PAINT_LINEAR: u32 = 1u;
 const PAINT_RADIAL: u32 = 2u;
 const FLAG_COMBINE: u32 = 0x100u;
 const FLAG_NOISE: u32 = 0x200u;
+const FLAG_STROKE: u32 = 0x400u;
 
 struct Instance {
     @location(0) bounds: vec4<f32>,   // dilated local quad (min, max)
     @location(1) m0: vec4<f32>,       // m00 m01 m10 m11
     @location(2) m1: vec2<f32>,       // m20 m21
     @location(3) tint: vec4<f32>,     // straight RGBA
-    @location(4) layers: vec4<u32>,   // first layer, count, compose, flags
+    @location(4) layers: vec4<u32>,   // first layer, count, compose, line width (f32 bits)
 };
 
 struct VsOut {
@@ -49,6 +50,8 @@ struct VsOut {
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) tint: vec4<f32>,
     @location(2) @interpolate(flat) layers: vec4<u32>,
+    // The instance's linear part, for the strokes' constant pixel width.
+    @location(3) @interpolate(flat) m0: vec4<f32>,
 };
 
 @vertex
@@ -64,6 +67,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Instance) -> VsOut {
     out.local = local;
     out.tint = inst.tint;
     out.layers = inst.layers;
+    out.m0 = inst.m0;
     return out;
 }
 
@@ -104,7 +108,40 @@ fn solve(p1: vec2<f32>, p2: vec2<f32>, p3: vec2<f32>) -> vec2<f32> {
     return vec2<f32>((a.x * t1 - b.x * 2.0) * t1 + p1.x, (a.x * t2 - b.x * 2.0) * t2 + p1.x);
 }
 
-fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32) -> f32 {
+// A curve relative to the sample. A stroke edge is stored as centre points
+// and signed unit normals; its corners go half the line width (in pixels of
+// the 640x480 screen) out along the normals, converted to local units under the
+// instance's transform, and its control point is their midpoint.
+struct Quad {
+    p1: vec2<f32>,
+    p2: vec2<f32>,
+    p3: vec2<f32>,
+};
+
+fn stroke_offset(n: vec2<f32>, m0: vec4<f32>, half_px: f32) -> vec2<f32> {
+    // Logical (640x480) pixels per local unit along n: lines are one pixel
+    // of the original screen wide, scaled with the window like the rest.
+    let px_per_unit = length(n.x * m0.xy + n.y * m0.zw);
+    return n * (half_px / max(px_per_unit, 1.0 / 65536.0));
+}
+
+fn load_curve(ci: u32, rc: vec2<f32>, stroke: bool, m0: vec4<f32>, half_px: f32) -> Quad {
+    let a = textureLoad(curve_tex, tex2d(ci, CURVE_W), 0);
+    let c = textureLoad(curve_tex, tex2d(ci + 1u, CURVE_W), 0);
+    var q: Quad;
+    if (stroke) {
+        q.p1 = a.xy + stroke_offset(c.xy, m0, half_px) - rc;
+        q.p3 = a.zw + stroke_offset(c.zw, m0, half_px) - rc;
+        q.p2 = (q.p1 + q.p3) * 0.5;
+    } else {
+        q.p1 = a.xy - rc;
+        q.p2 = a.zw - rc;
+        q.p3 = c.xy - rc;
+    }
+    return q;
+}
+
+fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f32) -> f32 {
     let t0 = layer_texel(layer, 0u);
     let bbox = bitcast<vec4<f32>>(t0);
     let margin = 0.5 / ppe;
@@ -116,19 +153,23 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32) -> f32 {
     let hbands = t1.y;
     let vbands = t1.z;
     let band_scale = bitcast<vec2<f32>>(layer_texel(layer, 7u).xy);
+    // Stroke edges are sorted by their widest extent, not their drawn one:
+    // no early exit for them.
+    let stroke = (t1.w & FLAG_STROKE) != 0u;
 
     var xcov = 0.0;
     var xwgt = 0.0;
     let hb = u32(clamp(i32(floor((rc.y - bbox.y) * band_scale.y)), 0, i32(hbands) - 1));
     let hh = band(band_base + hb);
     for (var k = 0u; k < hh.x; k++) {
-        let ci = band(hh.y + k).x;
-        let a = textureLoad(curve_tex, tex2d(ci, CURVE_W), 0);
-        let c = textureLoad(curve_tex, tex2d(ci + 1u, CURVE_W), 0);
-        let p1 = a.xy - rc;
-        let p2 = a.zw - rc;
-        let p3 = c.xy - rc;
+        let q = load_curve(band(hh.y + k).x, rc, stroke, m0, half_px);
+        let p1 = q.p1;
+        let p2 = q.p2;
+        let p3 = q.p3;
         if (max(max(p1.x, p2.x), p3.x) * ppe.x < -0.5) {
+            if (stroke) {
+                continue;
+            }
             break;
         }
         let code = root_code(p1.y, p2.y, p3.y);
@@ -150,14 +191,15 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32) -> f32 {
     let vb = u32(clamp(i32(floor((rc.x - bbox.x) * band_scale.x)), 0, i32(vbands) - 1));
     let vh = band(band_base + hbands + vb);
     for (var k = 0u; k < vh.x; k++) {
-        let ci = band(vh.y + k).x;
-        let a = textureLoad(curve_tex, tex2d(ci, CURVE_W), 0);
-        let c = textureLoad(curve_tex, tex2d(ci + 1u, CURVE_W), 0);
+        let q = load_curve(band(vh.y + k).x, rc, stroke, m0, half_px);
         // Swap the axes: the vertical ray is the horizontal case on (y, x).
-        let p1 = (a.xy - rc).yx;
-        let p2 = (a.zw - rc).yx;
-        let p3 = (c.xy - rc).yx;
+        let p1 = q.p1.yx;
+        let p2 = q.p2.yx;
+        let p3 = q.p3.yx;
         if (max(max(p1.x, p2.x), p3.x) * ppe.y < -0.5) {
+            if (stroke) {
+                continue;
+            }
             break;
         }
         let code = root_code(p1.y, p2.y, p3.y);
@@ -286,7 +328,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let compose_max = in.layers.z == 1u;
     for (var i = 0u; i < count; i++) {
         let layer = first + i;
-        let cov = coverage(rc, ppe, layer);
+        let cov = coverage(rc, ppe, layer, in.m0, bitcast<f32>(in.layers.w) * 0.5);
         if (cov <= 0.0) {
             continue;
         }
@@ -300,25 +342,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     // Tint (the D3D diffuse colour modulates the texel, straight alpha).
     return vec4<f32>(out.rgb * in.tint.rgb * in.tint.a, out.a * in.tint.a);
-}
-
-// Untextured shapes: screen-space triangles with per-vertex colour.
-struct ShapeOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-@vertex
-fn vs_shape(@location(0) pos: vec2<f32>, @location(1) color: vec4<f32>) -> ShapeOut {
-    var out: ShapeOut;
-    out.pos = vec4<f32>(pos * view.scale + view.offset, 0.5, 1.0);
-    out.color = color;
-    return out;
-}
-
-@fragment
-fn fs_shape(in: ShapeOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color.rgb * in.color.a, in.color.a);
 }
 
 // Bitmap sprites (original pixel art without a faithful vector version):

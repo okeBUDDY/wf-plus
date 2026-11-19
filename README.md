@@ -13,10 +13,16 @@ frame-exact (see [Verification](#verification)).
 
 | | |
 |---|---|
-| ![title](docs/title.png) | ![game](docs/game.png) |
-| ![boss](docs/boss.png) | ![explosions](docs/explosions.png) |
-| ![game over](docs/game-over.png) | ![name entry](docs/name-entry.png) |
-| ![options](docs/options.png) | ![fonts](docs/viewer-fonts.png) |
+| ![title](docs/title.png) | ![classic arena in a 16:9 window](docs/game.png) |
+| ![HD arena](docs/hd.png) | ![boss](docs/boss.png) |
+| ![explosions](docs/explosions.png) | ![name entry, HD scores](docs/name-entry.png) |
+| ![options: game](docs/options.png) | ![options: display](docs/options-display.png) |
+| ![options: controls](docs/options-controls.png) | ![fonts](docs/viewer-fonts.png) |
+
+The Classic arena in a 21:9 window, with its border:
+![classic arena border](docs/arena-border.png)
+
+The screenshots are made by `scripts/docs-screenshots.sh`.
 
 ## The game data
 
@@ -33,7 +39,26 @@ address cited.
 Settings (`wf.ini`), the score table (`wf.sco`, the original's format) and
 replays (`rec/*.rec`, the original's format) live in the home folder:
 `--home <dir>`, else `WF_HOME`, else the working directory. The original's
-own `wf.ini`, `wf.sco` and `.rec` files work as they are.
+own `wf.ini`, `wf.sco` and `.rec` files work as they are. The port's own
+settings (display, mouse and touch, the last arena) go to `wf-plus.ini` beside
+them, and HD scores to `wf-hd.sco`; `wf.ini` keeps only the
+original's keys and values.
+
+## Arena modes
+
+After GAME START the title asks for the arena; the choice is remembered.
+
+* **Classic** is the original's 640x480 arena, exactly: its replays and
+  scores are the original's formats, byte for byte. In a window of another
+  shape it is drawn 4:3 in the middle, the background grid running into the
+  margins and a faint border around the arena.
+* **HD** is 480 high and as wide as the window's shape (clamped to
+  270..1920). Every screen-derived value (player and boss bounds, spawn and
+  aim points, culling, the grid, the HUD's anchors) comes from the arena in
+  one place (`game/arena.rs`). The arena is locked when the game starts and
+  stored in the recording (version 1103, which the original refuses), so
+  replays and resizes keep it, letter- or pillarboxed. HD scores have
+  their own table with each entry's arena size.
 
 ## Build and run
 
@@ -60,22 +85,43 @@ Options:
 
 | | |
 |---|---|
-| `--size WxH` | Window size (the 640x480 screen is letterboxed and scaled). |
+| `--size WxH` | Window size (default 1280x720, resizable; the arena is fitted and centred). |
+| `--arena classic\|hd` | The arena of new games (else the last choice). |
+| `--fps-cap off\|vsync\|N` | Frame cap (default off: uncapped, interpolated). |
+| `--fullscreen`, `--borderless`, `--windowed` | Window mode. |
+| `--render-scale K` | Render at K times the window's pixels, then stretch. |
+| `--show-fps` | Show the frame rate. |
+| `--bench SECONDS` | With `--headless`: measure the uncapped frame rate offscreen. |
 | `--replay rec/<file>.rec` | Play a replay (relative to the home folder). |
 | `--headless` | No window and no audio device: run frames as fast as possible. |
 | `--frames N --screenshot out.png` | Stop after frame N and save it. |
-| `--script FRAME:KEY,...` | Press keys at given frames (up, down, left, right, z, x, d, f, esc, f12). |
+| `--script FRAME[-LAST]:KEY,...` | Hold keys over frames (up, down, left, right, z, x, d, f, q, e, pageup, pagedown, esc, f12). |
 | `--hash-log out.txt` | Write a hash of the game state after every game frame (desync hunting). |
 | `--viewer` | The art and sound viewer instead of the game. |
 | `WF_LOG=error\|warn\|info\|debug` | Log level (stage results, game over, file errors). |
 
 ## Controls
 
-Arrows (or numpad) move. Z shoots, X moves slowly, D selects the weapon and
-F pauses (when pausing is enabled in the options); these are the original's
-triggers and can be remapped in the options screen. On a gamepad
-(SDL_Gamepad), the left stick or d-pad moves and the buttons are triggers,
-mapped in the options too. Esc quits and F12 resets to the title.
+Input is action based: every device makes the same actions, and the game
+reduces them each tick to the original's eight directions and eight
+triggers, which is all a `.rec` stores. Devices work side by side, and the
+last one used picks the prompts.
+
+* Keyboard: arrows (or numpad) move; Z shoots, X moves slowly, D selects the
+  weapon, F pauses (when enabled). Esc quits, F12 resets to the title.
+* Mouse: the ship steers toward the pointer; left shoots, right moves
+  slowly, middle selects the weapon (all rebindable).
+* Gamepad (SDL_Gamepad, hot-plugged): left stick or d-pad, with a dead zone;
+  buttons are triggers. A gamepad touchpad drags the ship.
+* Touch: drag anywhere to move the ship relative to the finger; a finger
+  down shoots.
+
+The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS,
+RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel
+over the strip, or a sideways swipe change tabs. Keys and pad buttons are
+remapped separately there, along with the mouse buttons, mouse steering,
+the pad dead zone and the touch speed; the display settings (window mode,
+resolution, render scale, FPS cap, show FPS) apply at once.
 
 ## Architecture and seams
 
@@ -83,28 +129,52 @@ mapped in the options too. Esc quits and F12 resets to the title.
 |---|---|
 | `crates/wf-art` | The cooked art format: a GPU half (texture images uploaded as they are) and a CPU half (the sprite table). |
 | `crates/wf-cook` | The build-time cooker: SVG art to Slug curves and bands, vector or traced glyphs, the bitmap atlas, the baked feTurbulence lattice. |
-| `crates/wf` | The game. |
+| `crates/wf-engine` | The engine: app loop, time, renderer, layout, input, audio mixer, config, asset registry, platform (SDL3). |
+| `crates/wf` | The game: deterministic state that emits a draw list each tick. |
 
-Inside `crates/wf/src`, platform code sits behind seams that the game uses,
-never the other way round:
+The engine owns the loop. The game advances in fixed 17 ms ticks from an
+accumulator (at most 8 per frame), exactly in the original's order and float
+order; the display runs uncapped by default (Mailbox or Immediate present)
+or capped (VSync on Fifo, or 60/120/144/240/custom by a sleep-then-spin
+limiter), and draws between the last two ticks' snapshots with alpha
+interpolation. Interpolation only reads the snapshots: draws are matched
+by key, and snap across teleports, wraps, flips and sharp turns. A
+`Layout` fits the arena into the window (DPI-aware, render scale by an
+offscreen target), with background draws over the whole window and arena
+draws scissored to the arena. Instances go through a persistent three-deep
+ring buffer.
+
+| Engine module | |
+|---|---|
+| `app.rs` | The `Game` trait, the windowed loop, headless ticks and the bench, the arena border. |
+| `time.rs` | `FixedStep`, `FpsCap`, `Limiter`, `FpsCounter`. |
+| `gfx/` | `DrawList` (the snapshot), `Layout`, interpolation, the wgpu Slug renderer (`gpu.rs`, `slug.wgsl`), the render-scale blit (`scale.rs`). |
+| `input.rs` | Actions, bindings (`wf-plus.ini`), and the device providers. |
+| `platform/` | **Seam**: `RawInput` (keys, gamepads, mouse, fingers, last device), events, window modes and icon; `sdl.rs` is the SDL3 backend. |
+| `audio/` | The software mixer the audio callback pulls from. |
+| `assets.rs` | The asset registry over mounted sources (data.bin, directories). |
+| `config.rs` | `wf-plus.ini`, display settings. |
+| `log.rs` | **Seam**: logging (`WF_LOG`). |
+
+Inside `crates/wf/src`:
 
 | Module | |
 |---|---|
-| `game/` | The port, file by file from the decompilation: `app.rs` (Application::Run), `task.rs` (task lists), the stages `fn_title.rs`, `fn_game.rs`, `fn_option.rs`, `hud.rs` (game HUD, game over, name entry, results), `actor/` (actor system and every control), `enm/` (boss generator), `replay.rs`, `records.rs`, `score_table.rs`, `profile.rs` (portable ini), `math.rs` (the f32/x87 maths), `debug.rs` (state hash). |
-| `gfx/` | **Seam**: `DrawList`: sprites under a 2D transform with an ARGB tint, normal or additive blend, optional texel-region clip; untextured shapes. `gpu.rs` + `slug.wgsl` is the wgpu backend. |
-| `platform/` | **Seam**: `RawInput` (keys and gamepads held), events, local time. `sdl.rs` is the SDL3 backend (window, keyboard, SDL_Gamepad, audio stream). |
-| `sound/` | The sound system (channels, fades, the original's volume and pan curves, the `.seq` sequencer) on a software mixer that the audio callback pulls from. Ogg via lewton, WAV. |
-| `log.rs` | **Seam**: logging (`WF_LOG`). |
+| `game/` | The port, file by file from the decompilation: `app.rs` (Application::Run), `task.rs` (task lists), the stages `fn_title.rs`, `fn_game.rs`, `fn_option.rs`, `hud.rs` (game HUD, game over, name entry, results), `actor/` (actor system and every control), `enm/` (boss generator), `replay.rs`, `records.rs`, `score_table.rs`, `profile.rs` (portable ini), `math.rs` (the f32/x87 maths), `debug.rs` (state hash); and the port's own `arena.rs` (arena modes), `settings.rs` (`wf-plus.ini` settings, menu input), `input.rs` (actions to the original's input bits). |
 | `data/` | data.bin and the .pat pattern files. |
+| `main.rs` | The command line, and `WfGame`, the game as the engine drives it. |
+
+Icons are in `assets/icon` (the window icon, and the exe's on Windows).
 
 ### Bit-exact simulation
 
 The simulation keeps the original's float behaviour: f32 maths in the
 decompilation's operation order, no fused multiply-add, transcendentals as
-`(x as f64).fn() as f32`, `_ftol` truncation, and the C runtime's `rand()`.
+`(x as f64).fn() as f32` with `fn` from the pure-Rust `libm` crate (the same
+bits on every platform), `_ftol` truncation, and the C runtime's `rand()`.
 The sine table is baked from the x87's FSIN and checked against the x87 (with
 24-bit precision control) by `game/x87_tests.rs` on x86-64, along with
-`atan2` and `sqrt`.
+libm's `sin`, `cos` and `atan2` over sweeps, and `sqrt`.
 
 ### Rendering
 
@@ -140,6 +210,12 @@ sampling.
   recordings match: normal, 3 ships, 5-minute attack and sudden death,
   including a 19,085-frame stage with pauses.
 * `--hash-log` gives identical files across runs of the same replay.
+* `scripts/hd-determinism.sh [data.bin]` records an HD game in
+  4:3, 16:9, 21:9 and portrait windows and replays each at its own size and
+  another: the hash logs match and each replay ends on the live result.
+* Uncapped frame rate, headless and offscreen (`--bench 5`), on this
+  project's CI container (lavapipe, a 4-core CPU rasterizer, so it measures
+  pixel fill): 5 fps at 1280x720 and 71 fps at 320x180. A GPU is far faster.
 
 ## Known gaps
 

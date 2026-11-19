@@ -524,7 +524,7 @@ impl GameHud {
         cx.fonts.small_text.print(&mut cx.draw, 116.0, 268.0, &self.texts[3], None, white, -1, Blend::Normal);
         // The table the name goes into (display only).
         let mode = mode_label(cx);
-        cx.fonts.small_text.print(&mut cx.draw, 320.0 - 4.0 * mode.len() as f32, 288.0, mode.as_bytes(), None, white, -1, Blend::Normal);
+        cx.fonts.small_text.print(&mut cx.draw, 320.0 - 4.0 * mode.len() as f32, 168.0, mode.as_bytes(), None, white, -1, Blend::Normal);
         cx.draw.set_origin([0.0; 2]);
     }
 

@@ -15,6 +15,7 @@ mod art;
 mod data;
 mod game;
 mod gfx;
+mod log;
 mod platform;
 mod sound;
 
@@ -22,7 +23,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use game::assets::{Assets, CHANNELS};
-use game::task::{self, ListId, Place};
 use game::{App, Cx};
 use platform::{Key, RawInput};
 
@@ -108,22 +108,8 @@ fn options() -> Options {
 
 /// cGlobal::Initialize and WinMain's setup: everything the stages share.
 fn startup(o: &Options) -> Result<(Cx, App), String> {
-    let art = art::Art::load();
-    let fonts = game::text::Fonts::load(&art);
     let assets = Assets::load(&o.data)?;
-    let mut cx = Cx {
-        draw: gfx::DrawList::new(),
-        art,
-        assets,
-        fonts,
-        input: game::input::Input::default(),
-        sound: sound::SoundSystem::new(CHANNELS),
-        tasks: Default::default(),
-        overlays: Default::default(),
-        app: Default::default(),
-        screen_fade: None,
-    };
-    cx.screen_fade = task::add(&mut cx, ListId::Overlays, Box::new(game::fade::ScreenFade::default()), 1, Place::Back);
+    let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
     let mut app = App::new(Some(|| Box::new(game::viewer::Viewer::new())));
     if !app.start(&mut cx, Box::new(game::viewer::Viewer::new())) {
         return Err("the first stage could not start".into());
@@ -287,6 +273,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
 }
 
 fn main() {
+    log::init_from_env();
     let o = options();
     let result = if o.headless { run_headless(&o) } else { run_windowed(&o) };
     if let Err(e) = result {

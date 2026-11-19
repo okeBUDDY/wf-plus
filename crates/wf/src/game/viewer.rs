@@ -8,7 +8,6 @@
 use super::Cx;
 use super::app::Stage;
 use super::assets::{CHANNEL_BGM, SOUNDS};
-use super::fade::ScreenFade;
 use super::input::{DOWN, LEFT, RIGHT, SHOT, SLOW, UP};
 use super::text::{self, Fonts};
 use crate::gfx::{Argb, Blend, SpriteId, Transform};
@@ -67,9 +66,7 @@ impl Stage for Viewer {
             .map(SpriteId)
             .filter(|&id| !cx.art.name(id).starts_with("font/"))
             .collect();
-        if let Some(fade) = cx.screen_fade.and_then(|id| cx.overlays.get_mut::<ScreenFade>(id)) {
-            fade.fade_in(30);
-        }
+        cx.fade.fade_in(30);
         if let Some(bgm) = &cx.assets.bgm {
             cx.sound.play(CHANNEL_BGM, bgm, true, 1.0);
         }

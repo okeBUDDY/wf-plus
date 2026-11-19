@@ -46,21 +46,8 @@ impl ScreenFade {
         self.frames
     }
 
-    fn color(&self) -> Argb {
-        let c = |v: i16| (v as i32).clamp(0, 255) as u8;
-        Argb::from_rgba(c(self.rgba[0]), c(self.rgba[1]), c(self.rgba[2]), c(self.rgba[3]))
-    }
-}
-
-impl Task for ScreenFade {
-    fn initialize(&mut self, _cx: &mut Cx) -> bool {
-        self.set_color(0, 0, 0, 0);
-        self.time = 0;
-        true
-    }
-
-    /// Advances the fade (0x41bb60); the sweep calls it every frame.
-    fn is_protected(&mut self, _cx: &mut Cx) -> bool {
+    /// Sprite::IsProtected (0x41bb60): advances the fade one frame.
+    pub fn advance(&mut self) {
         if self.frames != 0 {
             self.time += 1;
             if self.time >= self.frames {
@@ -76,12 +63,38 @@ impl Task for ScreenFade {
                 }
             }
         }
+    }
+
+    pub fn alpha(&self) -> i16 {
+        self.rgba[3]
+    }
+
+    pub fn color(&self) -> Argb {
+        let c = |v: i16| (v as i32).clamp(0, 255) as u8;
+        Argb::from_rgba(c(self.rgba[0]), c(self.rgba[1]), c(self.rgba[2]), c(self.rgba[3]))
+    }
+}
+
+/// The overlay task that advances and draws `Cx::fade` (the Sprite task
+/// g_global.screen_fade points at).
+pub struct FadeTask;
+
+impl Task for FadeTask {
+    fn initialize(&mut self, cx: &mut Cx) -> bool {
+        cx.fade.set_color(0, 0, 0, 0);
+        cx.fade.time = 0;
+        true
+    }
+
+    fn is_protected(&mut self, cx: &mut Cx) -> bool {
+        cx.fade.advance();
         true
     }
 
     fn run(&mut self, cx: &mut Cx) {
-        if self.rgba[3] != 0 {
-            cx.draw.fill_screen(self.color());
+        if cx.fade.rgba[3] != 0 {
+            let c = cx.fade.color();
+            cx.draw.fill_screen(c);
         }
     }
 }

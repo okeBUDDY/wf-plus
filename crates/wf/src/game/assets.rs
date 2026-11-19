@@ -48,7 +48,7 @@ pub struct Assets {
     pub pack: Pack,
     pub pats: Vec<(&'static str, PatFile)>,
     pub sounds: Vec<Option<SoundBuffer>>,
-    pub bgm: Option<SoundBuffer>,
+    pub bgm: Option<crate::sound::Music>,
 }
 
 impl Assets {
@@ -66,12 +66,8 @@ impl Assets {
             let bytes = pack.get(name).ok_or_else(|| format!("{name} が見つかりません"))?;
             sounds[slot] = Some(ogg::decode(bytes, 0).map_err(|e| format!("{name}: {e}"))?);
         }
-        // The user's music, if any (bgm.seq and bgm.wav are not supported yet).
-        let bgm = path
-            .parent()
-            .map(|d| d.join("bgm.ogg"))
-            .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| ogg::decode(&b, 1).ok());
+        // The user's music, if any, next to data.bin.
+        let bgm = path.parent().and_then(crate::sound::Music::load);
         Ok(Assets { pack, pats, sounds, bgm })
     }
 

@@ -376,6 +376,7 @@ impl Stage for FnGame {
             let seconds = (cx.game.timer / 60).min(127);
             cx.seq_flags[3] = seconds as u8;
         }
+        cx.sound.set_seq_flags(&cx.seq_flags);
         actor::move_all(cx);
         if let Some(hook) = cx.frame_hook {
             hook(cx);

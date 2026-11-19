@@ -151,7 +151,7 @@ impl Cx {
     /// Starts the music (`channel(kChannelBgm)->Assign(&g_bgm, kLoop)`).
     pub fn play_bgm(&mut self) {
         if let Some(bgm) = &self.assets.bgm {
-            self.sound.play(assets::CHANNEL_BGM, bgm, true, 1.0);
+            self.sound.play_music(assets::CHANNEL_BGM, bgm, true, 1.0);
         }
     }
 

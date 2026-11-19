@@ -4,6 +4,8 @@
 //! ([`Mixer::mix`]) from its audio callback.
 
 pub mod ogg;
+pub mod seq;
+pub mod wav;
 
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +24,41 @@ pub struct SoundBuffer {
 impl SoundBuffer {
     pub fn seconds(&self) -> f32 {
         (self.samples.len() / 2) as f32 / self.rate as f32
+    }
+}
+
+/// The music: a sound, or a .seq of pieces (g_bgm, a CSndStrm).
+#[derive(Clone)]
+pub enum Music {
+    Sound(Arc<SoundBuffer>),
+    Seq(Arc<seq::SeqData>),
+}
+
+impl Music {
+    /// g_bgm.Load: bgm.seq, else bgm.ogg, else bgm.wav, in `dir`.
+    pub fn load(dir: &std::path::Path) -> Option<Music> {
+        let seq = dir.join("bgm.seq");
+        if seq.exists() {
+            match seq::SeqData::load(&seq) {
+                Ok(d) => return Some(Music::Seq(Arc::new(d))),
+                Err(e) => crate::log::warn(&format!("{}: {e}", seq.display())),
+            }
+        }
+        let ogg = dir.join("bgm.ogg");
+        if let Ok(b) = std::fs::read(&ogg) {
+            match ogg::decode(&b, 1) {
+                Ok(s) => return Some(Music::Sound(Arc::new(s))),
+                Err(e) => crate::log::warn(&format!("{}: {e}", ogg.display())),
+            }
+        }
+        let wav = dir.join("bgm.wav");
+        if let Ok(b) = std::fs::read(&wav) {
+            match wav::decode(&b, 1) {
+                Ok(s) => return Some(Music::Sound(Arc::new(s))),
+                Err(e) => crate::log::warn(&format!("{}: {e}", wav.display())),
+            }
+        }
+        None
     }
 }
 
@@ -54,6 +91,8 @@ struct Voice {
     volume: f32,
     pan: f32,
     fade: Option<Fade>,
+    /// A .seq: where the next piece comes from.
+    seq: Option<Box<seq::SeqPlayer>>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,46 +128,71 @@ impl Mixer {
         let frames = out.len() / 2;
         let MixerState { voices, group_volume, muted, .. } = &mut *s;
         for v in voices.iter_mut() {
-            let Some(samples) = v.samples.clone() else { continue };
             if *muted & (1 << v.group) != 0 {
                 continue;
             }
-            let src_frames = samples.len() / 2;
             let step = v.rate as f64 / OUTPUT_RATE as f64;
             let (pl, pr) = pan_gains(v.pan);
-            for f in 0..frames {
-                if let Some(fade) = &mut v.fade {
-                    fade.elapsed += dt;
-                    if fade.elapsed >= fade.time {
-                        v.volume = fade.from + fade.delta;
-                        let stop = fade.stop;
-                        v.fade = None;
-                        if stop {
-                            v.samples = None;
-                            break;
+            let mut start = 0;
+            'piece: while let Some(samples) = v.samples.clone() {
+                let src_frames = samples.len() / 2;
+                for f in start..frames {
+                    if let Some(fade) = &mut v.fade {
+                        fade.elapsed += dt;
+                        if fade.elapsed >= fade.time {
+                            v.volume = fade.from + fade.delta;
+                            let stop = fade.stop;
+                            v.fade = None;
+                            if stop {
+                                v.samples = None;
+                                break 'piece;
+                            }
+                        } else {
+                            v.volume = fade.from + fade.delta * fade.elapsed / fade.time;
                         }
-                    } else {
-                        v.volume = fade.from + fade.delta * fade.elapsed / fade.time;
                     }
-                }
-                let mut i = v.pos as usize;
-                if i + 1 >= src_frames {
-                    if v.looping && src_frames > 0 {
-                        v.pos -= src_frames as f64;
-                        i = v.pos.max(0.0) as usize;
-                    } else {
-                        v.samples = None;
-                        break;
+                    let mut i = v.pos as usize;
+                    if i + 1 >= src_frames {
+                        if let Some(player) = &mut v.seq {
+                            // CSndFileSEQ::Read: on to the next piece; at
+                            // the end, a looping channel starts the music
+                            // again (Seek(0)).
+                            let mut next = player.next_piece();
+                            if next.is_none() && v.looping {
+                                player.rewind();
+                                next = player.next_piece();
+                            }
+                            match next {
+                                Some(n) if n.len() >= 4 => {
+                                    v.pos = (v.pos - src_frames as f64).max(0.0);
+                                    v.samples = Some(n);
+                                    start = f;
+                                    continue 'piece;
+                                }
+                                _ => {
+                                    v.samples = None;
+                                    break 'piece;
+                                }
+                            }
+                        }
+                        if v.looping && src_frames > 0 {
+                            v.pos -= src_frames as f64;
+                            i = v.pos.max(0.0) as usize;
+                        } else {
+                            v.samples = None;
+                            break 'piece;
+                        }
                     }
+                    let frac = (v.pos - i as f64) as f32;
+                    let j = (i + 1).min(src_frames - 1);
+                    let l = samples[2 * i] + (samples[2 * j] - samples[2 * i]) * frac;
+                    let r = samples[2 * i + 1] + (samples[2 * j + 1] - samples[2 * i + 1]) * frac;
+                    let g = gain(v.volume * group_volume[v.group]);
+                    out[2 * f] += l * g * pl;
+                    out[2 * f + 1] += r * g * pr;
+                    v.pos += step;
                 }
-                let frac = (v.pos - i as f64) as f32;
-                let j = (i + 1).min(src_frames - 1);
-                let l = samples[2 * i] + (samples[2 * j] - samples[2 * i]) * frac;
-                let r = samples[2 * i + 1] + (samples[2 * j + 1] - samples[2 * i + 1]) * frac;
-                let g = gain(v.volume * group_volume[v.group]);
-                out[2 * f] += l * g * pl;
-                out[2 * f + 1] += r * g * pr;
-                v.pos += step;
+                break;
             }
         }
         for s in out.iter_mut() {
@@ -140,6 +204,7 @@ impl Mixer {
 /// The game-facing sound system.
 pub struct SoundSystem {
     mixer: Mixer,
+    seq_flags: seq::SeqFlags,
 }
 
 impl SoundSystem {
@@ -151,6 +216,7 @@ impl SoundSystem {
                 muted: 0,
                 paused: false,
             }))),
+            seq_flags: Arc::new(Default::default()),
         }
     }
 
@@ -176,9 +242,44 @@ impl SoundSystem {
                     volume,
                     pan: 0.0,
                     fade: None,
+                    seq: None,
                 };
             }
         });
+    }
+
+    /// Plays the music on `channel` (Channel::Assign of g_bgm), from its
+    /// start.
+    pub fn play_music(&self, channel: usize, music: &Music, looping: bool, volume: f32) {
+        match music {
+            Music::Sound(s) => self.play(channel, s, looping, volume),
+            Music::Seq(d) => {
+                let mut player = seq::SeqPlayer::new(d.clone(), self.seq_flags.clone());
+                let Some(first) = player.next_piece() else { return };
+                self.with(|s| {
+                    if let Some(v) = s.voices.get_mut(channel) {
+                        *v = Voice {
+                            samples: Some(first),
+                            rate: d.rate,
+                            group: 1,
+                            pos: 0.0,
+                            looping,
+                            volume,
+                            pan: 0.0,
+                            fade: None,
+                            seq: Some(Box::new(player)),
+                        };
+                    }
+                });
+            }
+        }
+    }
+
+    /// Publishes g_seq_flags to the music.
+    pub fn set_seq_flags(&self, flags: &[u8; 8]) {
+        for (f, &v) in self.seq_flags.iter().zip(flags) {
+            f.store(v, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn is_playing(&self, channel: usize) -> bool {

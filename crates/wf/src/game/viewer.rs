@@ -68,7 +68,7 @@ impl Stage for Viewer {
             .collect();
         cx.fade.fade_in(30);
         if let Some(bgm) = &cx.assets.bgm {
-            cx.sound.play(CHANNEL_BGM, bgm, true, 1.0);
+            cx.sound.play_music(CHANNEL_BGM, bgm, true, 1.0);
         }
         true
     }

@@ -15,8 +15,18 @@ use wf_art::{GpuLayer, RAMP_WIDTH, Sprite, Writer, compose, paint, sprite_flags}
 /// The sprite sheets of the vector art, one directory each.
 pub const SHEETS: &[&str] = &["add0", "enm0", "etc0", "etc1", "etc2", "sys0"];
 
-/// Art the cooker leaves out: it has no faithful vector version yet.
-pub const SKIPPED: &[&str] = &["etc2_001_character"];
+/// Art the cooker leaves out: the title character (drawn from its original
+/// pixels, see [`BITMAPS`]) and the artist's spacing helpers
+/// (`*_extra00`), which are not game art. Listed so the build works
+/// whether or not those files exist.
+pub const SKIPPED: &[&str] = &["etc2_001_character", "add0_extra00", "enm0_extra00"];
+
+/// Where vector glyphs are looked for, relative to `Config::glyph_dir`,
+/// first match wins. `{font}` is the grid name (`text`, `kana`, ...),
+/// `{sheet}` the font sheet (`font0`..`font2`), `{index}` the glyph in its
+/// grid (3 digits), `{x}`/`{y}` the cell's pixel position on the sheet.
+/// The SVG is in cell coordinates (the glyph's top-left corner at 0, 0). A glyph with no SVG is traced from the sheet's pixels.
+pub const GLYPH_PATTERNS: &[&str] = &["{font}/{font}_{index}.svg", "{sheet}/{sheet}_{x}_{y}.svg", "{sheet}_{x}_{y}.svg"];
 
 /// Original pixel art cooked as bitmaps (no faithful vector version yet):
 /// (sprite name, PNG under `Config::bitmap_dir`, pivot in the PNG).
@@ -58,6 +68,31 @@ pub struct Config {
     pub font_dir: PathBuf,
     /// The cut original sprites (`sprites/sheets`), for [`BITMAPS`].
     pub bitmap_dir: PathBuf,
+    /// Vector glyphs, preferred over tracing the font sheets when present.
+    pub glyph_dir: PathBuf,
+    /// File name patterns under `glyph_dir` (see [`GLYPH_PATTERNS`]).
+    pub glyph_patterns: Vec<String>,
+}
+
+impl Config {
+    /// The usual layout: glyphs under `<art_dir>/fonts`.
+    pub fn new(art_dir: PathBuf, font_dir: PathBuf, bitmap_dir: PathBuf) -> Self {
+        let glyph_dir = art_dir.join("fonts");
+        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect() }
+    }
+
+    /// The vector glyph for cell `rect` of `grid`, if there is one.
+    fn glyph_svg(&self, grid: &FontGrid, index: usize, x: usize, y: usize) -> Option<PathBuf> {
+        self.glyph_patterns.iter().map(|p| {
+            self.glyph_dir.join(
+                p.replace("{font}", grid.name)
+                    .replace("{sheet}", grid.sheet)
+                    .replace("{index}", &format!("{index:03}"))
+                    .replace("{x}", &x.to_string())
+                    .replace("{y}", &y.to_string()),
+            )
+        }).find(|p| p.is_file())
+    }
 }
 
 #[derive(Default)]
@@ -68,6 +103,10 @@ pub struct Report {
     pub curves: usize,
     pub bitmaps: usize,
     pub skipped: Vec<String>,
+    /// Glyphs cooked from vector SVGs (the rest are traced).
+    pub vector_glyphs: usize,
+    /// Directories whose contents decide the output (for rerun-if-changed).
+    pub dirs: Vec<PathBuf>,
 }
 
 pub type Error = String;
@@ -233,13 +272,25 @@ impl Cooker {
         self.report.bitmaps += 1;
     }
 
-    fn cook_font(&mut self, grid: &FontGrid, bitmap: &trace::Bitmap) {
+    fn cook_font(&mut self, config: &Config, grid: &FontGrid, bitmap: &trace::Bitmap) -> Result<(), Error> {
         for index in 0..grid.count {
             let col = index % grid.columns;
             let row = index / grid.columns;
             let rect = trace::Rect { x: grid.u + col * grid.width, y: grid.v + row * grid.height, w: grid.width, h: grid.height };
             if rect.x + rect.w > bitmap.width || rect.y + rect.h > bitmap.height {
                 break;
+            }
+            if let Some(path) = config.glyph_svg(grid, index, rect.x, rect.y) {
+                self.report.inputs.push(path.clone());
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let mut art = svg::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+                // Glyphs are placed by their top-left corner.
+                art.origin = Vec2::new(0.0, 0.0);
+                art.width = grid.width as f32;
+                art.height = grid.height as f32;
+                self.cook_svg(glyph_name(grid.name, index), art);
+                self.report.vector_glyphs += 1;
+                continue;
             }
             // Keep every alpha the glyph has, unless it is antialiased with
             // more than 16 (font1), which is rounded to 16 steps.
@@ -272,6 +323,7 @@ impl Cooker {
                 sprite_flags::TRACED,
             );
         }
+        Ok(())
     }
 }
 
@@ -315,11 +367,12 @@ pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
             c.cook_svg(name, art);
         }
     }
+    c.report.dirs.push(config.glyph_dir.clone());
     for grid in FONTS {
         let path = config.font_dir.join(format!("{}.png", grid.sheet));
         c.report.inputs.push(path.clone());
         let (width, height, rgba) = read_png(&path)?;
-        c.cook_font(grid, &trace::Bitmap { width, height, rgba: &rgba });
+        c.cook_font(config, grid, &trace::Bitmap { width, height, rgba: &rgba })?;
     }
     for (name, file, origin) in BITMAPS {
         let path = config.bitmap_dir.join(file);
@@ -330,4 +383,30 @@ pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
     c.w.ramps = std::mem::take(&mut c.ramp_rows);
     let report = std::mem::take(&mut c.report);
     Ok((c.w.finish(), report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glyph_patterns_find_vector_glyphs() {
+        let dir = std::env::temp_dir().join(format!("wf-cook-glyphs-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("digit")).unwrap();
+        std::fs::write(dir.join("digit/digit_003.svg"), "<svg/>").unwrap();
+        std::fs::write(dir.join("font0_48_96.svg"), "<svg/>").unwrap();
+        let mut config = Config::new(PathBuf::new(), PathBuf::new(), PathBuf::new());
+        config.glyph_dir = dir.clone();
+        let digit = FONTS.iter().find(|g| g.name == "digit").unwrap();
+        let large = FONTS.iter().find(|g| g.name == "large_digit").unwrap();
+        assert_eq!(config.glyph_svg(digit, 3, 72, 48), Some(dir.join("digit/digit_003.svg")));
+        assert_eq!(config.glyph_svg(digit, 4, 96, 48), None);
+        assert_eq!(config.glyph_svg(large, 1, 48, 96), Some(dir.join("font0_48_96.svg")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn spacing_helpers_are_skipped() {
+        assert!(SKIPPED.contains(&"add0_extra00") && SKIPPED.contains(&"enm0_extra00"));
+    }
 }

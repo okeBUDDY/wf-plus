@@ -7,7 +7,7 @@ fn main() {
         eprintln!("usage: wf-cook <art dir> <font dir> <bitmap dir> <out file>");
         std::process::exit(2);
     }
-    let config = wf_cook::Config { art_dir: args[1].clone().into(), font_dir: args[2].clone().into(), bitmap_dir: args[3].clone().into() };
+    let config = wf_cook::Config::new(args[1].clone().into(), args[2].clone().into(), args[3].clone().into());
     match wf_cook::cook(&config) {
         Ok((blob, report)) => {
             std::fs::write(&args[4], &blob).expect("write pack");

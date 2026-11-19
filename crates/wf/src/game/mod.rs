@@ -4,6 +4,7 @@
 
 pub mod actor;
 pub mod app;
+pub mod arena;
 pub mod assets;
 pub mod background;
 pub mod debug;
@@ -78,6 +79,9 @@ pub struct Cx {
     pub profile: profile::Profile,
     /// g_score_table.
     pub scores: score_table::ScoreTable,
+    /// The other arena mode's table (wf-hd.sco or wf.sco), swapped
+    /// with `scores` by `select_scores`.
+    pub scores_alt: score_table::ScoreTable,
     /// g_fn_option's settings.
     pub options: fn_option::OptionState,
     /// What fnGame asked of its HUD.
@@ -88,6 +92,17 @@ pub struct Cx {
     /// Debug: called after every game frame's MoveAll (the state hash for
     /// replay desync checks, see `debug::start_hash_log`).
     pub frame_hook: Option<fn(&mut Cx)>,
+    /// The arena the game runs in (Classic outside a game; locked when a
+    /// game starts, or read from the replay).
+    pub arena: arena::Arena,
+    /// The arena a game started now would get: the mode the player picked
+    /// and the width the window gives (not game state until a game locks
+    /// it).
+    pub arena_choice: arena::Mode,
+    pub window_arena_width: f32,
+    /// The port's own settings (wf-plus.ini): the engine's display and
+    /// input settings and the game's new ones; wf.ini stays the original's.
+    pub port: wf_engine::config::Config,
 }
 
 impl Cx {
@@ -121,10 +136,15 @@ impl Cx {
             home: std::path::PathBuf::from("."),
             profile: Default::default(),
             scores: Default::default(),
+            scores_alt: Default::default(),
             options: Default::default(),
             hud: Default::default(),
             seq_flags: [0; 8],
             frame_hook: None,
+            arena: arena::Arena::CLASSIC,
+            arena_choice: arena::Mode::Classic,
+            window_arena_width: 640.0,
+            port: Default::default(),
         };
         actor::controls::register_all(&mut cx);
         let Cx { enm, rng, .. } = &mut cx;
@@ -139,11 +159,43 @@ impl Cx {
         self.home = home;
         let _ = std::fs::create_dir_all(&self.home);
         self.profile = profile::Profile::open(self.home.join("wf.ini"));
+        self.port = wf_engine::config::Config::load(&self.home.join("wf-plus.ini"));
+        arena::load_choice(self);
         let path = self.home.join("wf.sco");
         let Cx { scores, profile, .. } = self;
         scores.init(path, profile);
+        self.scores_alt.init_hd(self.home.join("wf-hd.sco"));
         fn_option::load_settings(self);
+        self.select_scores(self.arena_choice);
         records::init_records(self);
+    }
+
+    /// Locks `arena` for the game: the bounds, the culling and the hit
+    /// image follow it, and the frames are drawn in it.
+    pub fn set_arena(&mut self, arena: arena::Arena) {
+        self.arena = arena;
+        // Only the sides: bounds_.top moves in the game (Control32::Dash),
+        // and the original keeps it from game to game.
+        let [left, _, right, _] = arena.boss_bounds();
+        self.ctl.boss_bounds.left = left;
+        self.ctl.boss_bounds.right = right;
+        self.actors.set_arena(&arena);
+        self.draw.arena = [arena.width, arena.height];
+    }
+
+    /// Makes `scores` the table of arena mode `mode`.
+    pub fn select_scores(&mut self, mode: arena::Mode) {
+        if self.scores.is_hd() != (mode == arena::Mode::Hd) {
+            std::mem::swap(&mut self.scores, &mut self.scores_alt);
+        }
+    }
+
+    /// The arena a game started now gets.
+    pub fn chosen_arena(&self) -> arena::Arena {
+        match self.arena_choice {
+            arena::Mode::Classic => arena::Arena::CLASSIC,
+            arena::Mode::Hd => arena::Arena::hd(self.window_arena_width),
+        }
     }
 
     /// The screen fade (g_global.screen_fade).

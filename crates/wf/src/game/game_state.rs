@@ -171,7 +171,7 @@ pub fn spawn_player(cx: &mut Cx) {
     } else if g.flags & GAME_OVER != 0 {
         return;
     }
-    cx.game.player = actor::create(cx, -1, None, 320.0, 400.0, 8, 0, Param::None);
+    cx.game.player = actor::create(cx, -1, None, cx.arena.center_x(), 400.0, 8, 0, Param::None);
 }
 
 /// A score of the score table (ScoreEntry).

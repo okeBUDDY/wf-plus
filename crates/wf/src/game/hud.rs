@@ -282,10 +282,14 @@ impl GameHud {
         let mut band = t;
         band.m[2][0] += 160.0;
         band.m[2][1] += 200.0;
-        texels::draw(cx, &texels::ETC0_BAND, &band, &BAND, &BAND_TEXELS, 0xc8ff_4000);
+        for k in band_copies(cx) {
+            texels::draw(cx, &texels::ETC0_BAND, &along(&band, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+        }
         let mut t = super::background::rotate(&t, 0x200);
         t.translate(160.0, 200.0);
-        texels::draw(cx, &texels::ETC0_BAND, &t, &BAND, &BAND_TEXELS, 0xc8ff_4000);
+        for k in band_copies(cx) {
+            texels::draw(cx, &texels::ETC0_BAND, &along(&t, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+        }
 
         let chart_color = alpha(self.chart_alpha, 200.0) | 0xff80;
         let info_color = alpha(self.info_alpha, 128.0) | 0xff_8000;
@@ -459,6 +463,7 @@ impl GameHud {
                     self.flags &= !FLAG_NAME_CURSOR;
                     cx.global.entry.name = self.name;
                     let entry = cx.global.entry;
+                    cx.scores.arena = cx.arena.size_u16();
                     cx.scores.insert(&entry, -1);
                     cx.scores.store();
                     self.step = 20;
@@ -482,6 +487,8 @@ impl GameHud {
 
     /// DrawNameEntry (0x41f830).
     fn draw_name_entry(&mut self, cx: &mut Cx) {
+        // Centred in a wider arena.
+        cx.draw.set_origin([cx.arena.center_offset_x(320.0) - 320.0, 0.0]);
         let t = Transform::translation(320.0, 240.0);
         cx.draw.sprite(cx.art.shapes.backdrop, &t, Argb(alpha(self.back_alpha, 160.0)), Blend::Normal);
         // The bars, scrolling apart as the window opens.
@@ -493,10 +500,14 @@ impl GameHud {
         t.m[2][0] += 320.0;
         t.m[2][1] += 240.0;
         let strip = texels::font2_strip(2);
-        texels::draw(cx, &strip, &t, &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx) {
+            texels::draw(cx, &strip, &along(&t, k), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        }
         turned.m[2][0] += 320.0;
         turned.m[2][1] += 240.0;
-        texels::draw(cx, &strip, &turned, &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx) {
+            texels::draw(cx, &strip, &along(&turned, k), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        }
 
         if self.flags & FLAG_NAME_CURSOR != 0 {
             let t = Transform::translation(self.cursor as f32 * 16.0 + 296.0, 244.0);
@@ -511,6 +522,10 @@ impl GameHud {
         cx.fonts.small_text.print(&mut cx.draw, 228.0, 228.0, &self.texts[1], None, white, -1, Blend::Normal);
         cx.fonts.text.print(&mut cx.draw, 296.0, 244.0, &self.texts[2], None, color, -1, Blend::Normal);
         cx.fonts.small_text.print(&mut cx.draw, 116.0, 268.0, &self.texts[3], None, white, -1, Blend::Normal);
+        // The table the name goes into (display only).
+        let mode = mode_label(cx);
+        cx.fonts.small_text.print(&mut cx.draw, 320.0 - 4.0 * mode.len() as f32, 288.0, mode.as_bytes(), None, white, -1, Blend::Normal);
+        cx.draw.set_origin([0.0; 2]);
     }
 
     /// MoveResult (0x41ff20).
@@ -572,7 +587,9 @@ impl GameHud {
         let mut t = Transform::IDENTITY;
         t.scale(1.0, self.result_bar);
         t.translate(-(((cx.app.frame_count & 0x3f) * 2) as f32), 460.0);
-        texels::draw(cx, &texels::font2_strip(0), &t, &RESULT_BAR, &RESULT_BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx) {
+            texels::draw(cx, &texels::font2_strip(0), &along(&t, k), &RESULT_BAR, &RESULT_BAR_TEXELS, 0xc800_ff80);
+        }
         let mut palette = [Argb(0); 10];
         palette[0] = Argb(alpha(self.result_alpha, 128.0) | 0xff_ffff);
         palette[1] = Argb(alpha(self.result_alpha, 200.0) | 0xffc800);
@@ -657,6 +674,8 @@ impl Task for GameHud {
                 }
             }
         }
+        // The timer and the replay's name keep to the right edge.
+        cx.draw.set_origin([cx.arena.right_x(640.0) - 640.0, 0.0]);
         if self.flags & FLAG_TIMER != 0 {
             let seconds = cx.game.timer / 60;
             if seconds >= 100 {
@@ -669,13 +688,45 @@ impl Task for GameHud {
             let s = format!("{:02}", cx.game.timer % 60);
             cx.fonts.digit.print(&mut cx.draw, 592.0, 1.0, s.as_bytes(), None, c, -1, Blend::Normal);
         }
+        if self.flags & FLAG_REPLAY == 0 {
+            cx.draw.set_origin([0.0; 2]);
+        }
         if self.flags & FLAG_REPLAY != 0 {
             cx.fonts.small_text.print(&mut cx.draw, self.replay_name_x as f32, 456.0, &self.replay_name, None, c, -1, Blend::Normal);
             cx.fonts.small_text.print(&mut cx.draw, 512.0, 468.0, &self.replay_date, None, c, -1, Blend::Normal);
+            cx.draw.set_origin([0.0; 2]);
             if cx.fn_game.mode == 1 {
                 let help = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
                 cx.fonts.small_text.print(&mut cx.draw, 0.0, 460.0, help, None, c, -1, Blend::Normal);
             }
         }
+    }
+}
+
+/// The copies of a scrolling band (768 units of texels long) that cover
+/// the arena: one in Classic; in a wider HD arena, more on each side
+/// along the band.
+fn band_copies(cx: &Cx) -> std::ops::RangeInclusive<i32> {
+    let extra = (cx.arena.width - 640.0).max(0.0);
+    let k = (extra / 600.0).ceil() as i32;
+    -k..=k
+}
+
+/// `t` moved `k` band lengths along its own x.
+fn along(t: &Transform, k: i32) -> Transform {
+    let mut t = *t;
+    if k != 0 {
+        let d = 768.0 * k as f32;
+        t.m[2][0] += t.m[0][0] * d;
+        t.m[2][1] += t.m[0][1] * d;
+    }
+    t
+}
+
+/// The arena mode of the scores, as the score screens show it.
+pub fn mode_label(cx: &super::Cx) -> String {
+    match cx.arena.mode {
+        super::arena::Mode::Classic => "CLASSIC SCORES".to_string(),
+        super::arena::Mode::Hd => format!("HD SCORES ({}X{})", cx.arena.width, cx.arena.height),
     }
 }

@@ -231,20 +231,21 @@ fn run_program_9c(cx: &mut Cx, a: Aid, p: &mut EnmList) {
                 // The arguments go right to left: y's rand() first.
                 let power = dash_power(p);
                 let y = (cx.rng.rand() % 100 - 50) as f32 + 160.0;
-                let x = (cx.rng.rand() % 320 - 160) as f32 + 320.0;
+                let x = cx.arena.spread((cx.rng.rand() % 320 - 160) as f32) + cx.arena.center_x();
                 dash(cx, a, p, x, y, power, false)
             }
             0x10005 => {
                 let power = dash_power(p);
                 let (x, y) = match cx.game.player {
                     Some(pl) => (cx.actors.get(pl).x(), cx.actors.get(pl).y()),
-                    None => (320.0, 400.0),
+                    None => (cx.arena.center_x(), 400.0),
                 };
                 dash(cx, a, p, x, y, power, true)
             }
             0x10004 => {
                 let power = dash_power(p);
-                dash(cx, a, p, 320.0, 160.0, power, false)
+                let cx0 = cx.arena.center_x();
+                dash(cx, a, p, cx0, 160.0, power, false)
             }
             0x10003 => {
                 let power = dash_power(p);
@@ -324,7 +325,7 @@ fn angle_to_player(cx: &mut Cx, a: Aid) -> u16 {
             let (x, y) = (cx.actors.get(p).sx(), cx.actors.get(p).sy());
             cx.actors.angle_to(a, x, y) as u16
         }
-        None => cx.actors.angle_to(a, 320.0, 400.0) as u16,
+        None => cx.actors.angle_to(a, cx.arena.center_x(), 400.0) as u16,
     }
 }
 

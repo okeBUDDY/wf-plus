@@ -28,7 +28,6 @@ static FLAME_ANIM: AnmData = AnmData { set: sheet::ADD, script: &[8, 2, 9, 2, 8,
 /// g_weapon_sounds (0x45d4e0).
 const WEAPON_SOUNDS: [usize; 2] = [13, 14];
 /// g_player_bounds (0x45d4e8).
-const BOUNDS: [f32; 4] = [16.0, 32.0, 624.0, 448.0];
 /// g_direction_angles (0x45d4f8) by the direction bits.
 const DIRECTION_ANGLES: [i16; 16] = [-1, 0, 512, -1, 768, 896, 640, -1, 256, 128, 384, -1, -1, -1, -1, -1];
 
@@ -221,6 +220,9 @@ pub fn on_move(cx: &mut Cx, a: Aid) -> bool {
     } else {
         7.0
     };
+    // The bounds: 16, 32, 624, 448 in Classic (see `Arena::player_bounds`).
+    #[allow(non_snake_case)]
+    let BOUNDS = cx.arena.player_bounds();
     let (tx, ty) = (cx.actors.get(a).x(), cx.actors.get(a).y());
     let mut x = sin(direction as i32) * speed + tx;
     let mut y = ty - cos(direction as i32) * speed;

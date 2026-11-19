@@ -12,6 +12,10 @@ use std::path::PathBuf;
 
 pub const VERSION: i32 = 103;
 pub const OLD_VERSION: i32 = 101;
+/// The port's HD recordings: version 103's header, then the arena's
+/// width and height (u16 each). Outside 101..=103, so the original's
+/// IsReplayFile rejects them cleanly instead of misplaying them.
+pub const HD_VERSION: i32 = 1103;
 
 /// Reads little-endian values from a replay.
 pub struct Reader {
@@ -83,7 +87,7 @@ pub fn is_replay_file(path: &std::path::Path) -> bool {
     match std::fs::read(path) {
         Ok(b) if b.len() >= 4 => {
             let v = u32::from_le_bytes(b[0..4].try_into().unwrap());
-            (OLD_VERSION as u32..=VERSION as u32).contains(&v)
+            (OLD_VERSION as u32..=VERSION as u32).contains(&v) || v == HD_VERSION as u32
         }
         _ => false,
     }
@@ -219,7 +223,7 @@ pub fn load_header(cx: &mut Cx) -> bool {
             lives = -1;
             extend_count = -1;
         }
-        VERSION => {
+        VERSION | HD_VERSION => {
             let Some(h) = r.pod::<Header>() else { return false };
             header = h;
             lives = h.lives as i32;
@@ -228,6 +232,13 @@ pub fn load_header(cx: &mut Cx) -> bool {
         }
         _ => return false,
     }
+    let arena = if version == HD_VERSION {
+        let (Some(w), Some(_h)) = (r.u16(), r.u16()) else { return false };
+        super::arena::Arena::hd(w as f32)
+    } else {
+        super::arena::Arena::CLASSIC
+    };
+    cx.set_arena(arena);
     cx.replay.seed = header.seed;
     cx.game.start(&rules);
     cx.game.timer = header.timer;
@@ -264,7 +275,8 @@ pub fn start(cx: &mut Cx, player: Option<Aid>) {
             cx.replay.close();
             cx.replay.seed = cx.rng.rand();
             let mut w = Vec::new();
-            w.extend_from_slice(&VERSION.to_le_bytes());
+            let classic = cx.arena.is_classic();
+            w.extend_from_slice(&if classic { VERSION } else { HD_VERSION }.to_le_bytes());
             let h = Header {
                 seed: cx.replay.seed,
                 stage: cx.global.stage,
@@ -275,6 +287,11 @@ pub fn start(cx: &mut Cx, player: Option<Aid>) {
                 rules: cx.game.rules,
             };
             w.extend_from_slice(bytemuck::bytes_of(&h));
+            if !classic {
+                for v in cx.arena.size_u16() {
+                    w.extend_from_slice(&v.to_le_bytes());
+                }
+            }
             cx.enm.save(&mut w);
             if let Some(p) = player {
                 w.extend_from_slice(bytemuck::bytes_of(&player::save(cx, p)));

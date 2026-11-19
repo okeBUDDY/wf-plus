@@ -141,6 +141,12 @@ impl FnGame {
 impl Stage for FnGame {
     /// Initialize (0x41bf50).
     fn initialize(&mut self, cx: &mut Cx) -> bool {
+        // A new game gets the chosen arena; a replay's header sets its own.
+        let arena = if cx.fn_game.mode == 0 { cx.chosen_arena() } else { super::arena::Arena::CLASSIC };
+        cx.set_arena(arena);
+        if cx.fn_game.mode == 0 {
+            cx.select_scores(arena.mode);
+        }
         clear_stage(cx);
         reset_game(cx);
         let rules = cx.global.rules;
@@ -178,6 +184,7 @@ impl Stage for FnGame {
     /// Finalize (0x41c0e0).
     fn finalize(&mut self, cx: &mut Cx) {
         cx.replay.close();
+        cx.set_arena(super::arena::Arena::CLASSIC);
         cx.input.time_stop_mask = 0;
         actor::destroy_all(cx);
         reset_sound(cx);

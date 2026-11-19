@@ -239,6 +239,10 @@ pub struct HitImage {
 }
 
 impl HitImage {
+    pub fn size(&self) -> (i32, i32) {
+        (self.width << self.shift, self.height << self.shift)
+    }
+
     pub const MAX_HEIGHT: i32 = 120;
 
     /// HLSHitImage::Create (0x407650).
@@ -706,6 +710,15 @@ impl ActorSystem {
             }
         }
         None
+    }
+
+    /// The culling rect and the hit image of `arena`.
+    pub fn set_arena(&mut self, arena: &crate::game::arena::Arena) {
+        [self.left, self.top, self.right, self.bottom] = arena.cull();
+        let (w, h) = arena.hit_size();
+        if self.hit.size() != (w, h) {
+            self.hit = HitImage::new(w, h);
+        }
     }
 
     /// Actor::ScreenAngle (0x4113d0).

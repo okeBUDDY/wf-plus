@@ -127,6 +127,9 @@ pub struct DrawList {
     key: u32,
     sub: u32,
     pass: Pass,
+    /// Added to every transform's translation (a HUD block anchored to
+    /// another edge of a wider arena).
+    origin: [f32; 2],
 }
 
 impl DrawList {
@@ -140,6 +143,21 @@ impl DrawList {
         self.key = 0;
         self.sub = 0;
         self.pass = Pass::Arena;
+        self.origin = [0.0; 2];
+    }
+
+    /// Moves the draws that follow by `origin` (0, 0 to stop).
+    pub fn set_origin(&mut self, origin: [f32; 2]) {
+        self.origin = origin;
+    }
+
+    fn place(&self, t: &Transform) -> Transform {
+        let mut t = *t;
+        if self.origin != [0.0; 2] {
+            t.m[2][0] += self.origin[0];
+            t.m[2][1] += self.origin[1];
+        }
+        t
     }
 
     /// The draws that follow belong to object `key` (non-zero, stable
@@ -169,8 +187,8 @@ impl DrawList {
         if color.alpha() == 0 {
             return;
         }
-        let (key, pass) = (self.next_key(), self.pass);
-        self.draws.push(Draw::Sprite { sprite, transform: *transform, color, blend, clip: None, key, pass });
+        let (key, pass, transform) = (self.next_key(), self.pass, self.place(transform));
+        self.draws.push(Draw::Sprite { sprite, transform, color, blend, clip: None, key, pass });
     }
 
     /// Draws the part of `sprite` inside `clip` (in the sprite's space).
@@ -178,8 +196,8 @@ impl DrawList {
         if color.alpha() == 0 || clip[0] >= clip[2] || clip[1] >= clip[3] {
             return;
         }
-        let (key, pass) = (self.next_key(), self.pass);
-        self.draws.push(Draw::Sprite { sprite, transform: *transform, color, blend, clip: Some(clip), key, pass });
+        let (key, pass, transform) = (self.next_key(), self.pass, self.place(transform));
+        self.draws.push(Draw::Sprite { sprite, transform, color, blend, clip: Some(clip), key, pass });
     }
 
     /// Draws `points` (in the shape's own space) under `transform` in one
@@ -189,8 +207,8 @@ impl DrawList {
         if color.alpha() == 0 {
             return;
         }
-        let (key, pass) = (self.next_key(), self.pass);
-        self.draws.push(Draw::Shape { primitive, points: points.to_vec(), transform: *transform, color, blend, key, pass });
+        let (key, pass, transform) = (self.next_key(), self.pass, self.place(transform));
+        self.draws.push(Draw::Shape { primitive, points: points.to_vec(), transform, color, blend, key, pass });
     }
 }
 

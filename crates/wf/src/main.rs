@@ -45,10 +45,13 @@ struct Options {
     fps_cap: Option<wf_engine::time::FpsCap>,
     window_mode: Option<wf_engine::config::WindowMode>,
     show_fps: bool,
+    /// The arena of new games (else the last choice).
+    arena: Option<game::arena::Mode>,
     /// Measure the uncapped frame rate for this many seconds (headless).
     bench: Option<f64>,
     /// Headless input: keys held on given frames.
-    script: Vec<(u32, Key)>,
+    /// Keys held over frame ranges (FRAME or FIRST-LAST, inclusive).
+    script: Vec<(u32, u32, Key)>,
     /// Where wf.ini, wf.sco and rec/ live.
     home: PathBuf,
     /// Start in the art viewer instead of the title.
@@ -76,7 +79,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps]\n          [--headless [--bench SECONDS] --script FRAME:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--arena classic|hd]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -94,6 +97,7 @@ fn options() -> Options {
         window_mode: None,
         show_fps: false,
         bench: None,
+        arena: None,
         script: Vec::new(),
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
         viewer: false,
@@ -122,11 +126,20 @@ fn options() -> Options {
             "--borderless" => o.window_mode = Some(wf_engine::config::WindowMode::Borderless),
             "--windowed" => o.window_mode = Some(wf_engine::config::WindowMode::Windowed),
             "--show-fps" => o.show_fps = true,
+            "--arena" => {
+                o.arena = Some(match value().as_str() {
+                    "classic" => game::arena::Mode::Classic,
+                    "hd" => game::arena::Mode::Hd,
+                    _ => usage(),
+                })
+            }
             "--bench" => o.bench = Some(value().parse().unwrap_or_else(|_| usage())),
             "--script" => {
                 for item in value().split(',') {
                     let (f, k) = item.split_once(':').unwrap_or_else(|| usage());
-                    o.script.push((f.parse().unwrap_or_else(|_| usage()), parse_key(k).unwrap_or_else(|| usage())));
+                    let (a, b) = f.split_once('-').unwrap_or((f, f));
+                    let n = |s: &str| s.parse().unwrap_or_else(|_| usage());
+                    o.script.push((n(a), n(b), parse_key(k).unwrap_or_else(|| usage())));
                 }
             }
             _ => usage(),
@@ -237,20 +250,18 @@ impl wf_engine::app::Game for WfGame {
         }
         self.synced = Some(maps);
     }
-    fn wants_border(&self) -> bool {
-        true
+    fn set_window_arena(&mut self, arena: [f32; 2]) {
+        self.cx.window_arena_width = arena[0];
     }
-}
-
-fn engine_config(o: &Options) -> wf_engine::config::Config {
-    let _ = std::fs::create_dir_all(&o.home);
-    wf_engine::config::Config::load(&o.home.join("wf-plus.ini"))
+    fn wants_border(&self) -> bool {
+        self.cx.arena.is_classic()
+    }
 }
 
 fn script_input(o: &Options, frame: u32) -> RawInput {
     let mut raw = RawInput::default();
-    for &(f, k) in &o.script {
-        if f == frame {
+    for &(first, last, k) in &o.script {
+        if (first..=last).contains(&frame) {
             raw.keys[k as usize] = true;
         }
     }
@@ -262,9 +273,13 @@ fn script_input(o: &Options, frame: u32) -> RawInput {
 fn run_headless(o: &Options) -> Result<(), String> {
     let (cx, app) = startup(o)?;
     let mut game = WfGame { cx, app, synced: None };
-    let cfg = engine_config(o);
-    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
     let size = o.size.unwrap_or((1280, 720));
+    game.cx.window_arena_width = wf_engine::app::window_arena(size)[0];
+    if let Some(mode) = o.arena {
+        game.cx.arena_choice = mode;
+    }
+    let cfg = game.cx.port.clone();
+    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
     let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &game.cx.art.pack);
@@ -286,7 +301,12 @@ fn run_headless(o: &Options) -> Result<(), String> {
 }
 
 fn run_windowed(o: &Options) -> Result<(), String> {
-    let cfg = engine_config(o);
+    let (cx, app) = startup(o)?;
+    let mut game = WfGame { cx, app, synced: None };
+    if let Some(mode) = o.arena {
+        game.cx.arena_choice = mode;
+    }
+    let cfg = game.cx.port.clone();
     let mut display_cfg = wf_engine::config::DisplayConfig::from_config(&cfg);
     if let Some((w, h)) = o.size {
         (display_cfg.width, display_cfg.height) = (w, h);
@@ -300,8 +320,6 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     display_cfg.show_fps |= o.show_fps;
     let mut platform = platform::sdl::Platform::new("WARNING FOREVER", display_cfg.width, display_cfg.height)?;
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
-    let (cx, app) = startup(o)?;
-    let mut game = WfGame { cx, app, synced: None };
     let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
     platform.start_audio(game.cx.sound.mixer());
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));

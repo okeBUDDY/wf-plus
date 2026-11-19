@@ -54,6 +54,8 @@ pub struct FnTitle {
     time: i16,
     step_time: i16,
     background: Option<TaskId>,
+    /// The arena choice after GAME_START (the port's addition).
+    choosing: bool,
 }
 
 impl FnTitle {
@@ -87,9 +89,7 @@ impl Stage for FnTitle {
         fn_game::clear_stage(cx);
         self.background = task::add(cx, ListId::Tasks, Box::new(BackgroundGrid::new(0xff00_4030, 8.0)), 2, Place::Back);
         cx.obj_texts = vec![ObjText { font: FontId::Text, text: Vec::new() }];
-        let (scores, len) = cx.scores.format();
-        self.scores = scores;
-        self.scores_length = len as i16;
+        self.show_scores(cx);
         self.title_length = TITLE.len() as i16;
 
         let mut desc = ActorDesc { hit_points: 1, y: 240.0, layer: 4, color: 0xffff_ffff, x: 800.0, ..Default::default() };
@@ -156,12 +156,23 @@ impl Stage for FnTitle {
             cx.draw.sprite(cx.art.shapes.menu_cursor, &t, Argb(((self.cursor_alpha as u32) << 24) | 0xffdd00), Blend::Normal);
         }
         cx.fonts.text.print(&mut cx.draw, (self.menu_x + 48) as f32, 400.0, &self.menu_text, None, Argb(0x80ff_ffff), -1, Blend::Normal);
+        if self.choosing {
+            let a = cx.chosen_arena();
+            let note = match a.mode {
+                super::arena::Mode::Classic => "640x480 ARENA".to_string(),
+                super::arena::Mode::Hd => format!("{}x{} ARENA, FITS THE WINDOW", a.width, a.height),
+            };
+            cx.fonts.small_text.print(&mut cx.draw, 48.0, 436.0, note.as_bytes(), None, Argb(0x8000_ff80), -1, Blend::Normal);
+            cx.fonts.small_text.print(&mut cx.draw, 48.0, 380.0, b"SELECT ARENA", None, Argb(0x80ff_c800), -1, Blend::Normal);
+        }
         if self.time >= 301 {
             let alpha = (-1i32).wrapping_sub(cx.app.frame_count.wrapping_mul(4) as i32) & 0xff;
             let mut palette = [Argb(0); 10];
             palette[0] = Argb(0x8000_ff80);
             palette[1] = Argb(((((((alpha >> 1) - 0x80) << 8) | alpha) << 16) as u32) | 0xff80);
             cx.fonts.small_text.print(&mut cx.draw, 32.0, 48.0, &self.scores, Some(&palette), palette[0], self.scores_shown as i32, Blend::Normal);
+            let mode: &[u8] = if cx.scores.is_hd() { b"HD SCORES" } else { b"CLASSIC SCORES" };
+            cx.fonts.small_text.print(&mut cx.draw, 32.0, 24.0, mode, None, palette[0], self.scores_shown.min(mode.len() as i16) as i32, Blend::Normal);
         }
         actor::draw_all(cx);
     }
@@ -330,9 +341,67 @@ impl Stage for FnTitle {
 }
 
 impl FnTitle {
+    /// The score text of the chosen arena mode's table.
+    fn show_scores(&mut self, cx: &mut Cx) {
+        cx.select_scores(cx.arena_choice);
+        let (scores, len) = cx.scores.format();
+        self.scores = scores;
+        self.scores_length = len as i16;
+        self.scores_shown = self.scores_shown.min(self.scores_length);
+    }
+
+    fn set_arena_text(&mut self, cx: &Cx) {
+        let name = match cx.arena_choice {
+            super::arena::Mode::Classic => " CLASSIC",
+            super::arena::Mode::Hd => "    HD",
+        };
+        self.menu_text = name.as_bytes().to_vec();
+    }
+
+    /// The arena choice: up and down switch, shot starts, slow goes back.
+    fn choose_arena(&mut self, cx: &mut Cx, pressed: u16) {
+        use super::arena::Mode;
+        if pressed & input::SLOW != 0 {
+            self.choosing = false;
+            self.menu_text = MENU_ITEMS[self.menu as usize].as_bytes().to_vec();
+            cx.play_sound(sounds::FIRE_ME);
+            return;
+        }
+        if pressed & (input::SHOT | input::WEAPON_SELECT) != 0 {
+            self.choosing = false;
+            super::arena::save_choice(cx);
+            FnGameState::set_mode(cx, 0, None);
+            cx.play_sound(sounds::SWITCH);
+            cx.app.finish(Some(Box::new(FnGame::new())));
+            return;
+        }
+        if pressed & (input::UP | input::DOWN) != 0 {
+            cx.arena_choice = if cx.arena_choice == Mode::Classic { Mode::Hd } else { Mode::Classic };
+            self.set_arena_text(cx);
+            self.show_scores(cx);
+            self.cursor_alpha = 255;
+            cx.play_sound(sounds::FIRE_ME);
+            if self.step_time > 480 {
+                self.step_time = 480;
+            }
+        }
+    }
+
     /// The menu (steps 301 and 302).
     fn menu_input(&mut self, cx: &mut Cx) {
         let pressed = cx.input.pad(0).pressed;
+        if self.choosing {
+            self.choose_arena(cx, pressed);
+            return;
+        }
+        if pressed & SKIP_KEYS != 0 && self.menu == MENU_START {
+            // Pick the arena first, starting on the last choice.
+            self.choosing = true;
+            self.set_arena_text(cx);
+            self.cursor_alpha = 255;
+            cx.play_sound(sounds::SWITCH);
+            return;
+        }
         if pressed & SKIP_KEYS != 0 {
             match self.menu {
                 MENU_START => {

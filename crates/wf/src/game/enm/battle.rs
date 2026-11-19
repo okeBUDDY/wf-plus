@@ -48,7 +48,7 @@ pub fn start_battle(cx: &mut Cx, player: Option<Aid>) -> Option<Aid> {
     e.parts_alive = [0, 0];
     e.armored_parts = [0, 0];
     e.unknown_104 = [0, 0];
-    let boss = actor::create(cx, -32, None, 320.0, -480.0, 4, 0, core.map_or(Param::None, Param::Slot));
+    let boss = actor::create(cx, -32, None, cx.arena.center_x(), -480.0, 4, 0, core.map_or(Param::None, Param::Slot));
     let e = &mut cx.enm;
     e.parts_alive[0] -= 1;
     e.core_total = e.core_count;

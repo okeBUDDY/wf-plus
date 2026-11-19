@@ -19,11 +19,16 @@ pub struct ScoreTable {
     pub entries: [ScoreEntry; ENTRIES],
     rank: i32,
     path: Option<PathBuf>,
+    /// The HD table (the port's own file): each entry's arena,
+    /// stored after the entries of its record. None for Classic.
+    pub arenas: Option<[[u16; 2]; ENTRIES]>,
+    /// The arena of the entry `insert` adds.
+    pub arena: [u16; 2],
 }
 
 impl Default for ScoreTable {
     fn default() -> Self {
-        ScoreTable { rules: GameRules::default(), entries: [ScoreEntry::default(); ENTRIES], rank: -1, path: None }
+        ScoreTable { rules: GameRules::default(), entries: [ScoreEntry::default(); ENTRIES], rank: -1, path: None, arenas: None, arena: [640, 480] }
     }
 }
 
@@ -56,6 +61,9 @@ impl ScoreTable {
             *e = ScoreEntry { score, time: 0, stage: 1, deaths: 0, name: name("---") };
             score -= 10000;
         }
+        if let Some(a) = &mut self.arenas {
+            *a = [[0; 2]; ENTRIES];
+        }
         self.rank = -1;
     }
 
@@ -81,6 +89,12 @@ impl ScoreTable {
                 self.entries[i] = self.entries[i - 1];
             }
             self.entries[r] = *entry;
+            if let Some(a) = &mut self.arenas {
+                for i in (r + 1..ENTRIES).rev() {
+                    a[i] = a[i - 1];
+                }
+                a[r] = self.arena;
+            }
         }
         self.rank = rank;
     }
@@ -88,7 +102,11 @@ impl ScoreTable {
     /// Format (0x4210c0): the table as text, "@@1"/"@@0" around the last
     /// inserted rank; returns it and its visible length.
     pub fn format(&self) -> (Vec<u8>, i32) {
-        let mut text = b"   NAME SCORE      STG DEAD TIME\n\n\n".to_vec();
+        let mut text = if self.arenas.is_some() {
+            b"   NAME SCORE      STG DEAD TIME     ARENA\n\n\n".to_vec()
+        } else {
+            b"   NAME SCORE      STG DEAD TIME\n\n\n".to_vec()
+        };
         for (i, e) in self.entries.iter().enumerate() {
             let (begin, end) = if i as i32 == self.rank { ("@@1", "@@0") } else { ("", "") };
             let n: Vec<u8> = e.name.iter().copied().take_while(|&c| c != 0).take(3).collect();
@@ -97,13 +115,18 @@ impl ScoreTable {
             text.extend(std::iter::repeat_n(b' ', 3 - n.len()));
             text.extend_from_slice(
                 format!(
-                    " {:010} {:3} {:3}  {:02}:{:02}:{:02}{end}\n\n\n",
+                    " {:010} {:3} {:3}  {:02}:{:02}:{:02}{}{end}\n\n\n",
                     e.score as i32,
                     e.stage,
                     e.deaths,
                     e.time / 3600,
                     e.time % 3600 / 60,
-                    e.time % 60
+                    e.time % 60,
+                    match self.arenas {
+                        Some(a) if a[i][0] != 0 => format!("  {:>4}X{}", a[i][0], a[i][1]),
+                        Some(_) => "      ---".to_string(),
+                        None => String::new(),
+                    }
                 )
                 .as_bytes(),
             );
@@ -115,6 +138,9 @@ impl ScoreTable {
     fn record(&self) -> Vec<u8> {
         let mut r = bytemuck::bytes_of(&self.rules).to_vec();
         r.extend_from_slice(bytemuck::cast_slice(&self.entries));
+        if let Some(a) = &self.arenas {
+            r.extend_from_slice(bytemuck::cast_slice(a));
+        }
         r
     }
 
@@ -123,8 +149,9 @@ impl ScoreTable {
         let Some(path) = &self.path else { return false };
         let mut d = FILE_VERSION.to_le_bytes().to_vec();
         d.extend_from_slice(&1i32.to_le_bytes());
-        d.extend_from_slice(&(RECORD_SIZE as i32).to_le_bytes());
-        d.extend_from_slice(&self.record());
+        let rec = self.record();
+        d.extend_from_slice(&(rec.len() as i32).to_le_bytes());
+        d.extend_from_slice(&rec);
         std::fs::write(path, d).is_ok()
     }
 
@@ -169,6 +196,13 @@ impl ScoreTable {
                     return false;
                 };
                 self.entries = bytemuck::pod_read_unaligned(e);
+                if let Some(a) = &mut self.arenas {
+                    let at = at + ENTRIES * std::mem::size_of::<ScoreEntry>();
+                    *a = match data.get(at..at + ENTRIES * 4) {
+                        Some(b) => bytemuck::pod_read_unaligned(b),
+                        None => [[0; 2]; ENTRIES],
+                    };
+                }
                 return true;
             }
             pos += size;
@@ -228,6 +262,21 @@ impl ScoreTable {
         if !self.save() {
             self.path = None;
         }
+    }
+
+    /// The HD table's file (no import from wf.ini).
+    pub fn init_hd(&mut self, path: PathBuf) {
+        self.rules = GameRules::default();
+        self.arenas = Some([[0; 2]; ENTRIES]);
+        self.path = Some(path.clone());
+        self.reset();
+        if !path.exists() && !self.save() {
+            self.path = None;
+        }
+    }
+
+    pub fn is_hd(&self) -> bool {
+        self.arenas.is_some()
     }
 
     /// Init (0x421990).

@@ -107,7 +107,7 @@ pub fn prepare(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
 /// ScoredControl::IsOffScreen (0x4146a0).
 pub fn is_off_screen(cx: &Cx, a: Aid) -> bool {
     let x = cx.actors.get(a);
-    x.sx() < 0.0 || x.sx() > 640.0 || x.sy() < 0.0 || x.sy() > 480.0
+    x.sx() < 0.0 || x.sx() > cx.arena.width || x.sy() < 0.0 || x.sy() > cx.arena.height
 }
 
 /// PartControl::Schedule (0x418c90): waits `delay`, then OnDamage(`next`).

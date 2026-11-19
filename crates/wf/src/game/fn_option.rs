@@ -169,16 +169,20 @@ pub fn apply(cx: &mut Cx) {
         r.extend = v[Item::Extend as usize];
     }
     let rules = cx.global.rules;
-    cx.scores.set_rules(&rules);
-    if !cx.scores.load() {
-        cx.scores.reset();
+    let reset = cx.options.values[Item::ScoreReset as usize] != 0;
+    // Both arena modes' tables follow the rules (and the score reset).
+    for scores in [&mut cx.scores, &mut cx.scores_alt] {
+        scores.set_rules(&rules);
+        if !scores.load() {
+            scores.reset();
+        }
+        if reset {
+            scores.reset();
+            scores.store();
+        }
+        scores.clear_rank();
     }
-    if cx.options.values[Item::ScoreReset as usize] != 0 {
-        cx.scores.reset();
-        cx.scores.store();
-        cx.options.values[Item::ScoreReset as usize] = 0;
-    }
-    cx.scores.clear_rank();
+    cx.options.values[Item::ScoreReset as usize] = 0;
 }
 
 /// LoadSettings (0x41caf0). The boss names default to English unless the

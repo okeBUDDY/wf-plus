@@ -95,9 +95,14 @@ impl Task for FadeTask {
         if cx.fade.rgba[3] != 0 {
             let c = cx.fade.color();
             let screen = cx.art.shapes.screen;
+            // The whole arena (the shape is the 640x480 screen).
+            let mut t = crate::gfx::Transform::IDENTITY;
+            if !cx.arena.is_classic() {
+                t.scale(cx.arena.width / 640.0, cx.arena.height / 480.0);
+            }
             cx.draw.sprite(
                 screen,
-                &crate::gfx::Transform::IDENTITY,
+                &t,
                 c,
                 crate::gfx::Blend::Normal,
             );

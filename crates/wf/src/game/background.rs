@@ -94,7 +94,7 @@ impl Task for BackgroundGrid {
             t.m[2][0] = -self.x + tile[0];
             t.m[2][1] = -self.y + tile[1];
             let mut t = Self::rotate_by(&t, -(self.angle as i32));
-            t.m[2][0] += 320.0;
+            t.m[2][0] += cx.arena.center_x();
             t.m[2][1] += 240.0;
             cx.draw.sprite(cx.art.shapes.grid_tile, &t, self.color, Blend::Normal);
         }

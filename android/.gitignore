@@ -1,0 +1,7 @@
+# Build output, including the generated jniLibs and the bundled data.bin.
+/.gradle/
+/build/
+/app/build/
+/local.properties
+data.bin
+*.so

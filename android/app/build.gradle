@@ -1,0 +1,96 @@
+// Warning Forever for Android.
+//
+// The native code is the Rust crate `wf` (crates/wf), built by cargo-ndk as
+// libmain.so with SDL3 linked in statically; the cooked art is inside it.
+// data.bin (the original game's data, not redistributable) is bundled from
+// outside the repository: pass -PWF_DATA=/path/to/data.bin or set WF_DATA.
+//
+//   ./gradlew assembleDebug -PWF_DATA=/path/to/data.bin   (or gradle, 8.9+)
+//
+// Properties: WF_DATA (required), skipCargo (use the jniLibs already built),
+// cargoProfile (release, the default, or dev).
+
+plugins {
+    id 'com.android.application'
+}
+
+def abis = ['arm64-v8a', 'x86_64']
+def minSdk = 24
+def repoRoot = rootProject.projectDir.parentFile
+def rustLibs = layout.buildDirectory.dir('rust/jniLibs')
+def wfAssets = layout.buildDirectory.dir('generated/wfAssets')
+
+android {
+    namespace = 'io.github.okebuddy.wfplus'
+    compileSdk = 35
+    buildToolsVersion = '35.0.1'
+    ndkVersion = '27.3.13750724'
+
+    defaultConfig {
+        applicationId 'io.github.okebuddy.wfplus'
+        minSdkVersion minSdk
+        targetSdkVersion 35
+        versionCode 1
+        versionName '0.1.0'
+        ndk { abiFilters(*abis) }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    sourceSets.main {
+        jniLibs.srcDir rustLibs
+        assets.srcDir wfAssets
+    }
+    packagingOptions {
+        // cargo-ndk already strips the release libraries.
+        jniLibs { keepDebugSymbols += ['**/libmain.so'] }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint { abortOnError = false }
+}
+
+// libmain.so for each ABI, through cargo-ndk. SDL3 is built from source by
+// sdl3-sys with CMake, which needs the NDK's toolchain file.
+def cargoNdk = tasks.register('cargoNdk', Exec) {
+    def ndkDir = android.ndkDirectory
+    def profile = project.findProperty('cargoProfile') ?: 'release'
+    workingDir repoRoot
+    environment 'ANDROID_NDK_HOME', ndkDir.absolutePath
+    environment 'CMAKE_TOOLCHAIN_FILE', new File(ndkDir, 'build/cmake/android.toolchain.cmake').absolutePath
+    environment 'CMAKE_GENERATOR', 'Ninja'
+    def cmd = ['cargo', 'ndk', '-P', "$minSdk", '-o', rustLibs.get().asFile.absolutePath]
+    abis.each { cmd += ['-t', it] }
+    cmd += ['build', '-p', 'wf', '--lib']
+    if (profile == 'release') cmd += ['--release']
+    commandLine cmd
+    onlyIf { !project.hasProperty('skipCargo') }
+}
+
+// data.bin into the APK's assets, from outside the repository. The build
+// fails when WF_DATA is not given.
+def bundleData = tasks.register('bundleWfData') {
+    def src = project.findProperty('WF_DATA') ?: System.getenv('WF_DATA')
+    def srcFile = src ? file(src) : null
+    def out = wfAssets.get().file('data.bin').asFile
+    if (srcFile?.isFile()) inputs.file(srcFile)
+    outputs.file(out)
+    outputs.upToDateWhen { srcFile != null }
+    doLast {
+        if (srcFile == null) {
+            throw new GradleException(
+                "WF_DATA is not set. data.bin is the original game's data and is not in the repository: " +
+                'pass -PWF_DATA=/path/to/data.bin or set the WF_DATA environment variable.')
+        }
+        if (!srcFile.isFile()) throw new GradleException("WF_DATA: there is no file at ${srcFile}")
+        out.parentFile.mkdirs()
+        java.nio.file.Files.copy(srcFile.toPath(), out.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+tasks.named('preBuild') { dependsOn cargoNdk, bundleData }

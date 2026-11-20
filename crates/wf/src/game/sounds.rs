@@ -1,6 +1,11 @@
 //! The sound effects (sounds.h): sound i is loaded into slot i and plays
 //! on channel i.
 
+/// The volume groups (kSoundEffects, kSoundMusic): MuteGroup and
+/// SetGroupVolume.
+pub const SOUND_EFFECTS: usize = 0;
+pub const SOUND_MUSIC: usize = 1;
+
 pub const BOMB1: usize = 0;
 pub const BOMB2: usize = 1;
 pub const BOMB3: usize = 2;

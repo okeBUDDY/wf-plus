@@ -1,7 +1,7 @@
 //! Replays (replay.cpp, Replay g_replay): the player's buttons of a stage,
 //! recorded as runs of (buttons, frames) after a header that restores the
 //! game: the rand() seed, the stage, the score, the clock, the stock, the
-//! rules, the boss plan (CEnmParam::Save) and the player (Control01::Save).
+//! rules, the boss plan (CEnmParam::Save) and the player (PlayerControl::Save).
 //! Versions 101 and 103 of the original play back bit-exact.
 
 use super::Cx;

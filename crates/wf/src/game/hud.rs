@@ -1,6 +1,7 @@
 //! GameHud (game_hud*.cpp, vtable 0x453494): the in-game display, an
 //! overlay task of fnGame. Besides the status texts it runs one screen at
-//! a time: the game over screen, the name entry and the boss result.
+//! a time: the stage-start warning (game_hud_warning.cpp), the name entry
+//! (game_hud_name_entry.cpp) and the boss result (game_hud_result.cpp).
 
 use super::Cx;
 use super::game_state::FLAG_ENGLISH;
@@ -14,9 +15,27 @@ use crate::shape_table::HEXAGON;
 use crate::gfx::{Argb, Blend, Primitive, Transform};
 
 pub const MODE_NONE: i32 = 0;
-pub const MODE_GAME_OVER: i32 = 1;
+/// The next boss: its title, stage and parameters (at each stage start).
+pub const MODE_WARNING: i32 = 1;
+/// "PLEASE ENTER YOUR NAME!" after the game.
 pub const MODE_NAME_ENTRY: i32 = 2;
+/// The boss result (EnmParam::format_result).
 pub const MODE_RESULT: i32 = 3;
+
+/// params: the corners of the boss chart, then the level of each weapon
+/// (kChartCorners).
+const CHART_CORNERS: usize = 6;
+/// The screens' texts (`GameHud::texts`): WarningText ...
+const WARNING_NAME: usize = 0;
+const WARNING_STAGE: usize = 1;
+const WARNING_TITLE: usize = 2;
+/// ... NameEntryText ...
+const ENTRY_SCORE: usize = 0;
+const ENTRY_PROMPT: usize = 1;
+const ENTRY_NAME: usize = 2;
+const ENTRY_CHARS: usize = 3;
+/// ... and result_text_.
+const RESULT_TEXT: usize = 0;
 
 const FLAG_NAME_CURSOR: u32 = 0x1;
 const FLAG_SKIP: u32 = 0x100;
@@ -51,7 +70,7 @@ impl HudState {
     }
 }
 
-// The game over screen's tables.
+// The warning screen's tables.
 const BAND: [[f32; 2]; 4] = [[-256.0, -24.0], [768.0, -24.0], [-256.0, 24.0], [768.0, 24.0]]; // 0x45dd48
 const BAND_TEXELS: [[i16; 2]; 4] = [[0, 208], [1024, 208], [0, 256], [1024, 256]]; // 0x45dd78
 const WEAPON_ICON: [[f32; 2]; 4] = [[-16.0, 0.0], [64.0, 0.0], [-16.0, 24.0], [64.0, 24.0]]; // 0x45ddac
@@ -124,6 +143,8 @@ pub struct GameHud {
     replay_name_x: i32,
     replay_name: Vec<u8>,
     replay_date: Vec<u8>,
+    /// warning_texts_, name_entry_texts_ or result_text_ by the screen
+    /// (one storage, as in the original).
     texts: [Vec<u8>; 4],
     // The name entry.
     cursor: i32,
@@ -140,7 +161,7 @@ pub struct GameHud {
     result_height: i32,
     result_shown: i16,
     result_length: i16,
-    // The game over screen.
+    // The warning screen.
     title_pos: (i32, i32),
     title_slide: f32,
     frame_open: f32,
@@ -174,7 +195,7 @@ impl GameHud {
 
     /// UpdateChart (0x420330).
     fn update_chart(&mut self) {
-        for i in 0..6 {
+        for i in 0..CHART_CORNERS {
             let scale = self.shown_params[i] as f32 * 0.0625;
             self.chart[1 + i] = [HEXAGON[i][0] * scale, HEXAGON[i][1] * scale];
         }
@@ -202,8 +223,8 @@ impl GameHud {
         }
     }
 
-    /// MoveGameOver (0x420bd0).
-    fn move_game_over(&mut self, cx: &mut Cx) -> bool {
+    /// MoveWarning (0x420bd0).
+    fn move_warning(&mut self, cx: &mut Cx) -> bool {
         let step = self.step;
         match step {
             0 => {
@@ -213,12 +234,12 @@ impl GameHud {
                 self.info_alpha = 1.0;
                 self.chart_alpha = 0.0;
                 self.title_slide = 400.0;
-                self.texts[0] = b"NAME:".to_vec();
-                self.texts[1] = format!("STAGE:{:02}", cx.global.stage).into_bytes();
+                self.texts[WARNING_NAME] = b"NAME:".to_vec();
+                self.texts[WARNING_STAGE] = format!("STAGE:{:02}", cx.global.stage).into_bytes();
                 let english = cx.global.flags & FLAG_ENGLISH != 0;
-                self.texts[2] = if english { cx.enm.format_title_en(&cx.fonts.title) } else { cx.enm.format_title_ja() };
+                self.texts[WARNING_TITLE] = if english { cx.enm.format_title_en(&cx.fonts.title) } else { cx.enm.format_title_ja() };
                 let font = if english { &cx.fonts.title } else { &cx.fonts.kana };
-                let (_, h) = font.measure(&self.texts[2]);
+                let (_, h) = font.measure(&self.texts[WARNING_TITLE]);
                 self.title_pos = (self.title_slide as i32 + 360, 400 - h as i32);
                 cx.play_sound(sounds::WARNING);
                 self.step += 1;
@@ -251,7 +272,7 @@ impl GameHud {
                             self.shown_params[i] = self.params[i];
                         }
                         self.update_chart();
-                        if i < 6 {
+                        if i < CHART_CORNERS {
                             break;
                         }
                     } else {
@@ -288,8 +309,8 @@ impl GameHud {
         false
     }
 
-    /// DrawGameOver (0x420500).
-    fn draw_game_over(&mut self, cx: &mut Cx) {
+    /// DrawWarning (0x420500).
+    fn draw_warning(&mut self, cx: &mut Cx) {
         warning_bands(cx, cx.app.frame_count, self.frame_open);
 
         let chart_color = alpha(self.chart_alpha, 200.0) | 0xff80;
@@ -318,7 +339,7 @@ impl GameHud {
         let (mut x, mut y) = (360.0f32, 172.0f32);
         for i in 0..count.min(8) {
             let mut t = Transform::IDENTITY;
-            t.scale(self.shown_params[6 + i] as f32 / 1024.0, 1.0);
+            t.scale(self.shown_params[CHART_CORNERS + i] as f32 / 1024.0, 1.0);
             t.translate(x, y);
             cx.draw.sprite(cx.art.shapes.weapon_bar, &t, Argb(info_color), Blend::Normal);
             x -= 21.0;
@@ -332,11 +353,11 @@ impl GameHud {
         cx.draw.sprite(cx.art.shapes.title_line, &t, Argb(0xc8ff_c800), Blend::Normal);
         let (px, py) = (self.title_pos.0 as f32, self.title_pos.1 as f32);
         let c = Argb(0xc8ff_c800);
-        cx.fonts.text.print(&mut cx.draw, px, py - 20.0, &self.texts[0], None, c, -1, Blend::Normal);
+        cx.fonts.text.print(&mut cx.draw, px, py - 20.0, &self.texts[WARNING_NAME], None, c, -1, Blend::Normal);
         let english = cx.global.flags & FLAG_ENGLISH != 0;
         let font = if english { &cx.fonts.title } else { &cx.fonts.kana };
-        font.print(&mut cx.draw, px + 20.0, py, &self.texts[2], None, c, -1, Blend::Normal);
-        cx.fonts.text.print(&mut cx.draw, px + 144.0, 408.0, &self.texts[1], None, c, -1, Blend::Normal);
+        font.print(&mut cx.draw, px + 20.0, py, &self.texts[WARNING_TITLE], None, c, -1, Blend::Normal);
+        cx.fonts.text.print(&mut cx.draw, px + 144.0, 408.0, &self.texts[WARNING_STAGE], None, c, -1, Blend::Normal);
         cx.draw.set_origin([0.0; 2]);
     }
 
@@ -355,7 +376,7 @@ impl GameHud {
             self.dirs_time = 0;
             self.last_dirs = dirs;
         }
-        let text = &mut self.texts[2];
+        let text = &mut self.texts[ENTRY_NAME];
         if pressed & (input::UP | input::DOWN | input::LEFT | input::RIGHT) != 0 {
             // No delete or end at the first letter, only those after the last.
             let (first, last) = self.char_range();
@@ -412,7 +433,7 @@ impl GameHud {
                 }
             }
         }
-        let text = &mut self.texts[2];
+        let text = &mut self.texts[ENTRY_NAME];
         text[self.cursor as usize] = NAME_CHARS[self.char_index as usize];
         false
     }
@@ -482,10 +503,10 @@ impl GameHud {
                 if rank < 0 {
                     return true;
                 }
-                self.texts[0] = format!("{}: {:012}", RANK_NAMES[rank as usize], cx.global.entry.score as i32).into_bytes();
-                self.texts[1] = b"PLEASE ENTER YOUR NAME!".to_vec();
-                self.texts[2] = b"A-- ".to_vec();
-                self.texts[3] = NAME_CHARS.to_vec();
+                self.texts[ENTRY_SCORE] = format!("{}: {:012}", RANK_NAMES[rank as usize], cx.global.entry.score as i32).into_bytes();
+                self.texts[ENTRY_PROMPT] = b"PLEASE ENTER YOUR NAME!".to_vec();
+                self.texts[ENTRY_NAME] = b"A-- ".to_vec();
+                self.texts[ENTRY_CHARS] = NAME_CHARS.to_vec();
                 self.cursor = 0;
                 self.char_index = 0;
                 self.back_alpha = 0.0;
@@ -522,8 +543,8 @@ impl GameHud {
                     // Streamer mode: the confirmed name is masked as it
                     // fades out (display only).
                     if cx.settings.hide_names {
-                        let n = self.texts[2].len().min(NAME_LENGTH as usize);
-                        self.texts[2][..n].copy_from_slice(&super::score_table::MASK[..n]);
+                        let n = self.texts[ENTRY_NAME].len().min(NAME_LENGTH as usize);
+                        self.texts[ENTRY_NAME][..n].copy_from_slice(&super::score_table::MASK[..n]);
                     }
                     let entry = cx.global.entry;
                     cx.scores.arena = cx.arena.size_u16();
@@ -582,10 +603,10 @@ impl GameHud {
         }
         let color = Argb(alpha(self.text_alpha, 200.0) | 0xffc800);
         let white = Argb(alpha(self.text_alpha, 128.0) | 0xff_ffff);
-        cx.fonts.text.print(&mut cx.draw, 184.0, 204.0, &self.texts[0], None, color, -1, Blend::Normal);
-        cx.fonts.small_text.print(&mut cx.draw, 228.0, 228.0, &self.texts[1], None, white, -1, Blend::Normal);
-        cx.fonts.text.print(&mut cx.draw, 296.0, 244.0, &self.texts[2], None, color, -1, Blend::Normal);
-        cx.fonts.small_text.print(&mut cx.draw, NAME_CHARS_X, NAME_CHARS_Y, &self.texts[3], None, white, -1, Blend::Normal);
+        cx.fonts.text.print(&mut cx.draw, 184.0, 204.0, &self.texts[ENTRY_SCORE], None, color, -1, Blend::Normal);
+        cx.fonts.small_text.print(&mut cx.draw, 228.0, 228.0, &self.texts[ENTRY_PROMPT], None, white, -1, Blend::Normal);
+        cx.fonts.text.print(&mut cx.draw, 296.0, 244.0, &self.texts[ENTRY_NAME], None, color, -1, Blend::Normal);
+        cx.fonts.small_text.print(&mut cx.draw, NAME_CHARS_X, NAME_CHARS_Y, &self.texts[ENTRY_CHARS], None, white, -1, Blend::Normal);
         // The table the name goes into (display only).
         let mode = mode_label(cx);
         cx.fonts.small_text.print(&mut cx.draw, 320.0 - 4.0 * mode.len() as f32, 168.0, mode.as_bytes(), None, white, -1, Blend::Normal);
@@ -599,7 +620,7 @@ impl GameHud {
             0 => {
                 let rules = cx.game.rules;
                 let (text, columns, lines) = cx.enm.format_result(cx.global.stage, &rules);
-                self.texts[0] = text.into_bytes();
+                self.texts[RESULT_TEXT] = text.into_bytes();
                 self.result_bar = 0.0;
                 self.result_alpha = 1.0;
                 self.result_shown = 0;
@@ -662,7 +683,7 @@ impl GameHud {
         let len = (self.result_length as i32).max(1);
         let y = 448 - self.result_height * self.result_shown as i32 / len;
         cx.draw.set_origin([cx.hud_view().0, -lift]);
-        cx.fonts.small_text.print(&mut cx.draw, 16.0, y as f32, &self.texts[0], Some(&palette), palette[0], self.result_shown as i32, Blend::Normal);
+        cx.fonts.small_text.print(&mut cx.draw, 16.0, y as f32, &self.texts[RESULT_TEXT], Some(&palette), palette[0], self.result_shown as i32, Blend::Normal);
         cx.draw.set_origin([0.0; 2]);
     }
 }
@@ -707,7 +728,7 @@ impl Task for GameHud {
             self.flags |= FLAG_SKIP;
         }
         let done = match cx.hud.mode {
-            MODE_GAME_OVER => self.move_game_over(cx),
+            MODE_WARNING => self.move_warning(cx),
             MODE_NAME_ENTRY => self.move_name_entry(cx),
             MODE_RESULT => self.move_result(cx),
             _ => false,
@@ -724,7 +745,7 @@ impl Task for GameHud {
         cx.draw.set_pass(crate::gfx::Pass::Overlay);
         let (left, width) = cx.hud_view();
         match cx.hud.mode {
-            MODE_GAME_OVER => self.draw_game_over(cx),
+            MODE_WARNING => self.draw_warning(cx),
             MODE_NAME_ENTRY => self.draw_name_entry(cx),
             MODE_RESULT => self.draw_result(cx),
             _ => {}
@@ -780,7 +801,7 @@ impl Task for GameHud {
             let right = [left + width - 640.0, -lift];
             put(cx, "replay name", Font::Small, right, [self.replay_name_x as f32, 456.0], &self.replay_name.clone());
             put(cx, "replay date", Font::Small, right, [512.0, 468.0], &self.replay_date.clone());
-            if cx.fn_game.mode == 1 {
+            if cx.fn_game.mode == super::fn_game::FnGameState::MODE_REPLAY {
                 let help: &[u8] = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
                 // Above the name and date when they would meet.
                 let help_w = cx.fonts.small_text.measure(help).0;
@@ -1007,7 +1028,7 @@ mod tests {
         cx.game.timer = 199 * 60 + 59;
         cx.game.lives = 9;
         cx.game.extend_count = 99;
-        cx.fn_game.mode = 1;
+        cx.fn_game.mode = crate::game::fn_game::FnGameState::MODE_REPLAY;
         cx.settings.input_guide = if with_guide { guide::Policy::Always } else { guide::Policy::Off };
         cx.settings.display.show_fps = true;
         cx.settings.fps = 165.0;

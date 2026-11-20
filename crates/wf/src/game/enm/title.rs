@@ -116,7 +116,7 @@ impl EnmParam {
         let count = self.title_count as usize;
         let mut i = (0..count).find(|&i| self.titles[i].words == title.words).unwrap_or(count);
         if i != count {
-            let parts = &self.u10c[0..7];
+            let parts = &self.tally[0..7];
             if self.new_weapon >= 0 && parts[self.new_weapon as usize] != 0 {
                 title.weapon = self.new_weapon as i16;
                 title.level = (parts[self.new_weapon as usize] * 2) as i16;

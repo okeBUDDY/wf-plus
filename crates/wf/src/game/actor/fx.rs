@@ -1,19 +1,21 @@
-//! Effects and explosions: control 8 (an EffectDesc sprite), 16..20 (the
-//! explosions of the player and the boss), 22 (the glow of a part) and 23
+//! Effects and explosions: EffectControl (an EffectDesc sprite), the
+//! explosions of the player and the boss (PlayerExplosionControl ..
+//! BossExplosionControl), GlowControl (the glow of a part) and FlareControl
 //! (the flare of a part). effect_controls.cpp, explosion_controls.cpp,
 //! actor_control.cpp.
 
+use super::controls::ids;
 use super::{ActorDesc, AnmData, Aid, Obj, Param, create, destroy, flags, sheet, spawn};
 use crate::game::Cx;
 use crate::game::math::{cos, sin};
 use crate::game::sounds;
 use bytemuck::{Pod, Zeroable};
 
-/// g_explosion_anim (0x45d37c): sys0 16..21 (its set is g_pats.sys, 0x467d70),
+/// g_explosion_anim (0x45d37c): sys0 16..21 (its pat_file is g_pats.sys, 0x467d70),
 /// 3 frames each.
-pub static EXPLOSION_ANIM: AnmData = AnmData { set: sheet::SYS, script: &[16, 3, 17, 3, 18, 3, 19, 3, 20, 3, 21, 3, -1] };
-/// g_fragment_anim (0x45d3a4): sys0 22..28 (set 0x467d70).
-pub static FRAGMENT_ANIM: AnmData = AnmData { set: sheet::SYS, script: &[22, 3, 23, 3, 24, 3, 25, 3, 26, 3, 27, 3, 28, 3, -1] };
+pub static EXPLOSION_ANIM: AnmData = AnmData { pat_file: sheet::SYS, script: &[16, 3, 17, 3, 18, 3, 19, 3, 20, 3, 21, 3, -1] };
+/// g_fragment_anim (0x45d3a4): sys0 22..28 (pat_file 0x467d70).
+pub static FRAGMENT_ANIM: AnmData = AnmData { pat_file: sheet::SYS, script: &[22, 3, 23, 3, 24, 3, 25, 3, 26, 3, 27, 3, 28, 3, -1] };
 
 /// Actor::work of control 8.
 #[repr(C)]
@@ -30,7 +32,7 @@ fn argb(c: [i16; 4]) -> u32 {
     ((((((c[3] as i32) << 8) | c[0] as i32) << 8 | c[1] as i32) << 8) | c[2] as i32) as u32
 }
 
-/// Control08::OnCreate (0x412cb0).
+/// EffectControl::OnCreate (0x412cb0).
 pub fn effect_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let desc = match param {
         Param::Effect(d) => d,
@@ -79,7 +81,7 @@ pub fn effect_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     true
 }
 
-/// Control08::OnMove (0x412e70).
+/// EffectControl::OnMove (0x412e70).
 pub fn effect_move(cx: &mut Cx, a: Aid) -> bool {
     let w = *cx.actors.w::<EffectWork>(a);
     let x = cx.actors.get_mut(a);
@@ -110,8 +112,8 @@ pub fn effect_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control16::OnCreate (0x410640): the player's explosion.
-pub fn c16_create(cx: &mut Cx, a: Aid) -> bool {
+/// PlayerExplosionControl::OnCreate (0x410640): the player's explosion.
+pub fn player_explosion_create(cx: &mut Cx, a: Aid) -> bool {
     cx.ctl.explosion_depth += 1;
     let (x, y) = {
         let act = cx.actors.get_mut(a);
@@ -119,7 +121,7 @@ pub fn c16_create(cx: &mut Cx, a: Aid) -> bool {
         act.team = 0;
         (act.x(), act.y())
     };
-    create(cx, 18, None, x, y, 8, 0, Param::None);
+    create(cx, ids::MEDIUM_EXPLOSION.into(), None, x, y, 8, 0, Param::None);
     cx.ctl.explosion_depth -= 1;
     cx.ctl.spark_desc.x = x;
     cx.ctl.spark_desc.y = y;
@@ -134,8 +136,8 @@ pub fn c16_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control17::OnCreate (0x410930): a small explosion.
-pub fn c17_create(cx: &mut Cx, a: Aid) -> bool {
+/// SmallExplosionControl::OnCreate (0x410930): a small explosion.
+pub fn small_explosion_create(cx: &mut Cx, a: Aid) -> bool {
     let anim = cx.actors.play(&EXPLOSION_ANIM);
     cx.actors.set_sprite(a, anim);
     let (x, y) = {
@@ -150,7 +152,7 @@ pub fn c17_create(cx: &mut Cx, a: Aid) -> bool {
     let count = if cx.actors.count >= 700 { 2 } else { 8 };
     for _ in 0..count {
         let e = cx.ctl.smoke_effect;
-        create(cx, 8, None, x, y, 9, 0, Param::Effect(e));
+        create(cx, ids::EFFECT.into(), None, x, y, 9, 0, Param::Effect(e));
     }
     if cx.ctl.explosion_depth == 0 {
         cx.play_sound(sounds::BOMB1);
@@ -166,8 +168,8 @@ fn scatter(cx: &mut Cx, x: f32, y: f32, mx: i32, ox: i32, my: i32, oy: i32) -> (
     (x + rx as f32, y + ry as f32)
 }
 
-/// Control18::OnCreate (0x410a00): a medium explosion.
-pub fn c18_create(cx: &mut Cx, a: Aid) -> bool {
+/// MediumExplosionControl::OnCreate (0x410a00): a medium explosion.
+pub fn medium_explosion_create(cx: &mut Cx, a: Aid) -> bool {
     let (x, y) = {
         let act = cx.actors.get_mut(a);
         act.hit_points = 1;
@@ -176,7 +178,7 @@ pub fn c18_create(cx: &mut Cx, a: Aid) -> bool {
     };
     cx.actors.set_layer(a, 8);
     cx.ctl.explosion_depth += 1;
-    create(cx, 17, None, x, y, 9, 0, Param::None);
+    create(cx, ids::SMALL_EXPLOSION.into(), None, x, y, 9, 0, Param::None);
     cx.ctl.explosion_depth -= 1;
     if cx.ctl.explosion_depth == 0 {
         cx.play_sound(sounds::BOMB2);
@@ -184,8 +186,8 @@ pub fn c18_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control18::OnMove (0x410a80).
-pub fn c18_move(cx: &mut Cx, a: Aid) -> bool {
+/// MediumExplosionControl::OnMove (0x410a80).
+pub fn medium_explosion_move(cx: &mut Cx, a: Aid) -> bool {
     let (age, x, y) = {
         let act = cx.actors.get(a);
         (act.age, act.x(), act.y())
@@ -194,7 +196,7 @@ pub fn c18_move(cx: &mut Cx, a: Aid) -> bool {
         4 | 8 | 12 => {
             cx.ctl.explosion_depth += 1;
             let (px, py) = scatter(cx, x, y, 0x7f, 64, 0x7f, 64);
-            create(cx, 17, None, px, py, 9, 0, Param::None);
+            create(cx, ids::SMALL_EXPLOSION.into(), None, px, py, 9, 0, Param::None);
             cx.ctl.explosion_depth -= 1;
         }
         13 => return false,
@@ -217,10 +219,10 @@ pub fn c18_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Actor::work of control 19.
+/// Actor::work of LargeExplosionControl (LargeExplosionWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct C19Work {
+struct LargeExplosionWork {
     pieces: [u32; 3],
     spins: [i16; 3],
     alpha: i16,
@@ -241,8 +243,8 @@ fn spawn_rings(cx: &mut Cx, a: Aid, min_spin: i32) -> ([u32; 3], [i16; 3]) {
     (pieces, spins)
 }
 
-/// Control19::OnCreate (0x410be0): a large explosion.
-pub fn c19_create(cx: &mut Cx, a: Aid) -> bool {
+/// LargeExplosionControl::OnCreate (0x410be0): a large explosion.
+pub fn large_explosion_create(cx: &mut Cx, a: Aid) -> bool {
     let (x, y) = {
         let act = cx.actors.get_mut(a);
         act.hit_points = 1;
@@ -260,12 +262,12 @@ pub fn c19_create(cx: &mut Cx, a: Aid) -> bool {
         }
     }
     let (pieces, spins) = spawn_rings(cx, a, 2);
-    let w = cx.actors.w::<C19Work>(a);
+    let w = cx.actors.w::<LargeExplosionWork>(a);
     w.pieces = pieces;
     w.spins = spins;
     w.alpha = 0x7e;
     cx.ctl.explosion_depth += 1;
-    create(cx, 18, None, x, y, 8, 0, Param::None);
+    create(cx, ids::MEDIUM_EXPLOSION.into(), None, x, y, 8, 0, Param::None);
     cx.ctl.explosion_depth -= 1;
     if cx.ctl.explosion_depth == 0 {
         cx.play_sound(sounds::BOMB3);
@@ -286,9 +288,9 @@ fn spin_rings(cx: &mut Cx, rings: [u32; 3], spins: [i16; 3], color: u32) {
     }
 }
 
-/// Control19::OnMove (0x410710).
-pub fn c19_move(cx: &mut Cx, a: Aid) -> bool {
-    let w = cx.actors.w::<C19Work>(a);
+/// LargeExplosionControl::OnMove (0x410710).
+pub fn large_explosion_move(cx: &mut Cx, a: Aid) -> bool {
+    let w = cx.actors.w::<LargeExplosionWork>(a);
     if w.alpha > 0 {
         w.alpha -= 3;
     }
@@ -302,7 +304,7 @@ pub fn c19_move(cx: &mut Cx, a: Aid) -> bool {
         4 | 8 | 12 => {
             cx.ctl.explosion_depth += 1;
             let (px, py) = scatter(cx, x, y, 0x7f, 64, 0x7f, 64);
-            create(cx, 18, None, px, py, 8, 0, Param::None);
+            create(cx, ids::MEDIUM_EXPLOSION.into(), None, px, py, 8, 0, Param::None);
             cx.ctl.explosion_depth -= 1;
         }
         36 => return false,
@@ -311,18 +313,18 @@ pub fn c19_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Actor::work of control 20.
+/// Actor::work of BossExplosionControl (BossExplosionWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct C20Work {
+struct BossExplosionWork {
     core: u32,
     rings: [u32; 3],
     spins: [i16; 3],
     alpha: i16,
 }
 
-/// Control20::OnCreate (0x410d50): the boss blowing up.
-pub fn c20_create(cx: &mut Cx, a: Aid) -> bool {
+/// BossExplosionControl::OnCreate (0x410d50): the boss blowing up.
+pub fn boss_explosion_create(cx: &mut Cx, a: Aid) -> bool {
     let sprite = cx.pats.get(sheet::SYS, 32);
     cx.actors.set_sprite(a, sprite);
     let angle = ((cx.rng.rand() & 0x3f) - 0x20) as i16;
@@ -339,7 +341,7 @@ pub fn c20_create(cx: &mut Cx, a: Aid) -> bool {
     cx.actors.set_layer(a, 4);
     let desc = ActorDesc { color: 0xffc0_6000, hit_points: 1, sprite: cx.pats.get(sheet::ENM, 1), parent: Some(a), layer: 4, ..Default::default() };
     let core = spawn(cx, &desc).map_or(0, |c| c as u32);
-    cx.actors.w::<C20Work>(a).core = core;
+    cx.actors.w::<BossExplosionWork>(a).core = core;
     if cx.ctl.explosion_depth == 0 {
         cx.play_sound(sounds::BOMB3);
     }
@@ -347,8 +349,8 @@ pub fn c20_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control20::OnMove (0x410e70).
-pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
+/// BossExplosionControl::OnMove (0x410e70).
+pub fn boss_explosion_move(cx: &mut Cx, a: Aid) -> bool {
     let (age, x, y) = {
         let act = cx.actors.get(a);
         (act.age, act.x(), act.y())
@@ -362,14 +364,14 @@ pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
             act.start_angle = start;
             act.speed = 2.0;
             act.acceleration = -0.02;
-            create(cx, 18, None, x, y, 8, 0, Param::None);
+            create(cx, ids::MEDIUM_EXPLOSION.into(), None, x, y, 8, 0, Param::None);
         }
         90 => {
             let (rings, spins) = spawn_rings(cx, a, 1);
             for r in rings {
                 cx.actors.get_mut(r as Aid).color = 0;
             }
-            let w = cx.actors.w::<C20Work>(a);
+            let w = cx.actors.w::<BossExplosionWork>(a);
             w.rings = rings;
             w.spins = spins;
             w.alpha = 0;
@@ -382,14 +384,14 @@ pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
             cx.fade().fade_to(28, 0xff, 0xff, 0xff, 0x40);
         }
         150 => {
-            let w = *cx.actors.w::<C20Work>(a);
+            let w = *cx.actors.w::<BossExplosionWork>(a);
             for r in w.rings {
                 destroy(cx, r as Aid, true, true);
             }
             destroy(cx, w.core as Aid, true, true);
             cx.actors.set_sprite(a, Obj::Null);
             cx.ctl.explosion_depth += 1;
-            create(cx, 19, None, x, y, 8, 0, Param::None);
+            create(cx, ids::LARGE_EXPLOSION.into(), None, x, y, 8, 0, Param::None);
             cx.ctl.explosion_depth -= 1;
             cx.fade().set_color(0xff, 0xff, 0xff, 0xff);
             cx.fade().fade_to(120, 0xff, 0xff, 0xff, 0);
@@ -400,21 +402,21 @@ pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
         165 | 180 => {
             cx.ctl.explosion_depth += 1;
             let (px, py) = scatter(cx, x, y, 0x7f, 64, 0x7f, 64);
-            create(cx, 19, None, px, py, 8, 0, Param::None);
+            create(cx, ids::LARGE_EXPLOSION.into(), None, px, py, 8, 0, Param::None);
             cx.ctl.explosion_depth -= 1;
         }
         270 => return false,
         _ => {}
     }
     if age < 150 {
-        let core = cx.actors.w::<C20Work>(a).core as Aid;
+        let core = cx.actors.w::<BossExplosionWork>(a).core as Aid;
         cx.actors.get_mut(core).color = if cx.app.frame_count & 2 != 0 { 0xffff_4000 } else { 0xff00_ff00 };
         if cx.rng.rand() & 7 == 0 {
             let (px, py) = scatter(cx, x, y, 0x3f, 31, 0x7f, 64);
-            create(cx, 17, None, px, py, 9, 0, Param::None);
+            create(cx, ids::SMALL_EXPLOSION.into(), None, px, py, 9, 0, Param::None);
         }
         if age > 90 {
-            let w = cx.actors.w::<C20Work>(a);
+            let w = cx.actors.w::<BossExplosionWork>(a);
             w.alpha += 2;
             let w = *w;
             spin_rings(cx, w.rings, w.spins, grey(w.alpha as i32));
@@ -423,7 +425,7 @@ pub fn c20_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Actor::work of control 22.
+/// Actor::work of GlowControl (GlowWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GlowWork {
@@ -435,7 +437,7 @@ struct GlowWork {
     _pad: i16,
 }
 
-/// Control22::OnCreate (0x410470): `param` is the glow time.
+/// GlowControl::OnCreate (0x410470): `param` is the glow time.
 pub fn glow_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let sprite = cx.pats.get(sheet::ADD, 27);
     cx.actors.set_sprite(a, sprite);
@@ -450,7 +452,7 @@ pub fn glow_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     true
 }
 
-/// Control22::OnMove (0x410350).
+/// GlowControl::OnMove (0x410350).
 pub fn glow_move(cx: &mut Cx, a: Aid) -> bool {
     let mut w = *cx.actors.w::<GlowWork>(a);
     let mut alpha = 0.0f32;
@@ -494,7 +496,7 @@ pub fn glow_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Actor::work of control 23.
+/// Actor::work of FlareControl (FlareWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FlareWork {
@@ -503,7 +505,7 @@ struct FlareWork {
     timer: i32,
 }
 
-/// Control23::OnCreate (0x411380, matched).
+/// FlareControl::OnCreate (0x411380, matched).
 pub fn flare_create(cx: &mut Cx, a: Aid) -> bool {
     let (time, size) = (cx.enm.flare_time, cx.enm.flare_size);
     let act = cx.actors.get_mut(a);
@@ -517,7 +519,7 @@ pub fn flare_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control23::OnMove (0x411450).
+/// FlareControl::OnMove (0x411450).
 pub fn flare_move(cx: &mut Cx, a: Aid) -> bool {
     let w = cx.actors.w::<FlareWork>(a);
     w.timer -= 1;
@@ -540,7 +542,7 @@ pub fn flare_move(cx: &mut Cx, a: Aid) -> bool {
         e.angle_min = angle;
         e.angle_max = angle;
         cx.ctl.flare_trail = e;
-        create(cx, 8, None, x, y, layer, 0, Param::Effect(e));
+        create(cx, ids::EFFECT.into(), None, x, y, layer, 0, Param::Effect(e));
     }
     true
 }

@@ -1,9 +1,9 @@
 //! The battle (enm_battle.cpp, enm_tactic_helpers.cpp): starting it and
 //! running the tactics every frame.
 
-use super::tactics;
+use super::{state_flags, tactics};
 use crate::game::Cx;
-use crate::game::actor::{self, Aid, Param, controls};
+use crate::game::actor::{self, Aid, Param, controls, parts};
 
 /// CEnmParam::StartBattle (0x417170): creates the planned boss.
 pub fn start_battle(cx: &mut Cx, player: Option<Aid>) -> Option<Aid> {
@@ -12,22 +12,22 @@ pub fn start_battle(cx: &mut Cx, player: Option<Aid>) -> Option<Aid> {
     for i in 0..e.slot_count.max(0) as usize {
         e.slots[i].flags &= 0xffff;
     }
-    e.turn_speed = e.state.unknown_2a as i32 * 2 / 1024 + 1;
-    e.fire_rate = e.state.unknown_28 as i32 * 50 / 1024 + 10;
+    e.turn_speed = e.state.aim_speed as i32 * 2 / 1024 + 1;
+    e.fire_rate = e.state.fire_speed as i32 * 50 / 1024 + 10;
     e.state.flags &= 0xffff_0000;
     e.fire_wait = [0, 0];
     e.turret_count = 0;
-    e.unknown_98 = (e.state.max_depth as i32 * 2).max(5);
+    e.turret_weight = (e.state.max_depth as i32 * 2).max(5);
     e.battle_time = 0;
-    e.unknown_344 = 0;
+    e.aimed_frames = 0;
     e.deaths = 0;
-    e.unknown_338 = [0; 3];
+    e.dir_frames = [0; 3];
     e.score_chain = 0;
     e.score_rapid = 0;
     e.score_base = 0;
     e.rapid_count = 0;
     e.chain_count = 0;
-    e.unknown_17c = 0;
+    e.unused_17c = 0;
     e.player_samples = 0;
     e.player_travel = 0.0;
     if let Some(p) = player {
@@ -36,23 +36,23 @@ pub fn start_battle(cx: &mut Cx, player: Option<Aid>) -> Option<Aid> {
     }
     let e = &mut cx.enm;
     for i in 0..14 {
-        e.u10c[i] = 0;
+        e.tally[i] = 0;
     }
-    e.list_9c.op = 0;
-    e.list_b0.op = 0;
-    e.lists_c4[0].op = 0;
-    e.lists_c4[1].op = 0;
-    e.list_218.start(0, 0);
+    e.move_program.op = 0;
+    e.turn_program.op = 0;
+    e.fire_programs[0].op = 0;
+    e.fire_programs[1].op = 0;
+    e.tactic_program.start(0, 0);
     let core = e.find_slot(super::SIDE_MASK);
     e.core_count = 0;
     e.parts_alive = [0, 0];
     e.armored_parts = [0, 0];
-    e.unknown_104 = [0, 0];
-    let boss = actor::create(cx, -32, None, cx.arena.center_x(), -480.0, 4, 0, core.map_or(Param::None, Param::Slot));
+    e.transform_parts = [0, 0];
+    let boss = actor::create(cx, -i32::from(controls::ids::BOSS_BODY), None, cx.arena.center_x(), -480.0, 4, 0, core.map_or(Param::None, Param::Slot));
     let e = &mut cx.enm;
     e.parts_alive[0] -= 1;
     e.core_total = e.core_count;
-    e.unknown_f4 = e.parts_alive;
+    e.start_parts = e.parts_alive;
     e.trans_count = 0;
     boss
 }
@@ -60,9 +60,9 @@ pub fn start_battle(cx: &mut Cx, player: Option<Aid>) -> Option<Aid> {
 /// CEnmParam::IsSideBeaten (0x416170).
 pub fn is_side_beaten(cx: &Cx, percent: i32) -> bool {
     let e = &cx.enm;
-    if e.state.step_mask & 2 != 0 {
-        let left = if e.unknown_f4[0] != 0 { e.parts_alive[0] * 100 / e.unknown_f4[0] } else { 0 };
-        let right = if e.unknown_f4[1] != 0 { e.parts_alive[1] * 100 / e.unknown_f4[1] } else { 0 };
+    if e.state.tactic_mask & 2 != 0 {
+        let left = if e.start_parts[0] != 0 { e.parts_alive[0] * 100 / e.start_parts[0] } else { 0 };
+        let right = if e.start_parts[1] != 0 { e.parts_alive[1] * 100 / e.start_parts[1] } else { 0 };
         if e.player_dir == 2 {
             if left > right && right <= percent {
                 return true;
@@ -80,16 +80,16 @@ pub fn glow_armor(cx: &mut Cx, boss: Aid, time: i32) -> bool {
         return false;
     }
     cx.enm.glow_time = time;
-    controls::send_event(cx, boss, 8, 0x110a);
+    controls::send_event(cx, boss, parts::events::GLOW, 0x110a);
     true
 }
 
-/// CEnmParam::SignalUnknown104 (0x4173f0).
-pub fn signal_unknown_104(cx: &mut Cx, boss: Aid) -> bool {
-    if cx.enm.unknown_104[0] <= 0 && cx.enm.unknown_104[1] <= 0 {
+/// CEnmParam::StartTransform (0x4173f0).
+pub fn start_transform(cx: &mut Cx, boss: Aid) -> bool {
+    if cx.enm.transform_parts[0] <= 0 && cx.enm.transform_parts[1] <= 0 {
         return false;
     }
-    controls::send_event(cx, boss, 4, 0xffff_310au32 as i32);
+    controls::send_event(cx, boss, parts::events::TRANSFORM, 0xffff_310au32 as i32);
     true
 }
 
@@ -123,15 +123,15 @@ pub fn run_battle(cx: &mut Cx, player: Option<Aid>, boss: Option<Aid>) {
         2
     };
     e.battle_time += 1;
-    e.unknown_338[e.player_dir as usize] += 1;
-    if e.state.flags & 1 != 0 {
-        e.unknown_344 += 1;
+    e.dir_frames[e.player_dir as usize] += 1;
+    if e.state.flags & state_flags::AIMED != 0 {
+        e.aimed_frames += 1;
     }
-    if e.state.flags & 0x100 != 0 {
+    if e.state.flags & state_flags::BATTLE != 0 {
         let over = tactics::run(cx, boss);
         if over {
             let next;
-            if cx.enm.state.step_count <= 1 {
+            if cx.enm.state.tactic_count <= 1 {
                 next = 0;
             } else if is_side_beaten(cx, 0) {
                 next = 1;
@@ -139,23 +139,23 @@ pub fn run_battle(cx: &mut Cx, player: Option<Aid>, boss: Option<Aid>) {
                 let mut n;
                 loop {
                     let e = &cx.enm;
-                    let pick = cx.rng.rand() % e.state.step_total.max(1) as i32;
+                    let pick = cx.rng.rand() % e.state.tactic_weight.max(1) as i32;
                     n = 0;
-                    for i in 0..e.state.step_count as usize {
-                        n = e.state.steps[i][0] as i32;
-                        if pick < e.state.steps[i][1] as i32 {
+                    for i in 0..e.state.tactic_count as usize {
+                        n = e.state.tactics[i][0] as i32;
+                        if pick < e.state.tactics[i][1] as i32 {
                             break;
                         }
                     }
-                    if n != cx.enm.list_218.op {
+                    if n != cx.enm.tactic_program.op {
                         break;
                     }
                 }
                 next = n;
             }
-            cx.enm.list_218.start(next, 0);
+            cx.enm.tactic_program.start(next, 0);
         } else {
-            cx.enm.list_218.time -= 1;
+            cx.enm.tactic_program.time -= 1;
         }
     }
     let e = &mut cx.enm;

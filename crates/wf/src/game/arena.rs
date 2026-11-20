@@ -70,12 +70,12 @@ impl Arena {
         if self.is_classic() { dx } else { dx * (self.width / W) }
     }
 
-    /// Control01's bounds (left, top, right, bottom).
+    /// PlayerControl's bounds (left, top, right, bottom).
     pub fn player_bounds(&self) -> [f32; 4] {
         [16.0, 32.0, self.right_x(624.0), 448.0]
     }
 
-    /// Control32::bounds_ of a new game: left, top, right, bottom.
+    /// BossBodyControl::bounds_ of a new game: left, top, right, bottom.
     pub fn boss_bounds(&self) -> [f32; 4] {
         [64.0, 64.0, self.right_x(576.0), 416.0]
     }

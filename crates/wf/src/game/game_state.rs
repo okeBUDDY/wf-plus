@@ -34,6 +34,11 @@ pub const COUNT_UP: u32 = 0x1;
 pub const TIME_BONUS: u32 = 0x2;
 pub const RUNNING: u32 = 0x4;
 pub const GAME_OVER: u32 = 0x8;
+
+/// The stock cap (Game::kMaxLives).
+pub const MAX_LIVES: i16 = 9;
+/// The parts per extend of BY 100 PARTS (Game::kPartsPerExtend).
+pub const PARTS_PER_EXTEND: i16 = 100;
 pub const MAX_TIMER: i32 = 999 * 60;
 
 /// Game (g_game) with g_player and g_boss.
@@ -136,8 +141,8 @@ impl Game {
     pub fn on_part_destroyed(&mut self) {
         if self.rules.stock != 0 && self.rules.extend == EXTEND_PARTS {
             self.extend_count += 1;
-            if self.extend_count == 100 {
-                if self.lives < 9 {
+            if self.extend_count == PARTS_PER_EXTEND {
+                if self.lives < MAX_LIVES {
                     self.lives += 1;
                 }
                 self.extend_count = 0;
@@ -150,7 +155,7 @@ impl Game {
         if self.flags & TIME_BONUS != 0 {
             self.bonus += 30 * 60;
         }
-        if self.rules.stock != 0 && self.rules.extend == EXTEND_BOSS && self.lives < 9 {
+        if self.rules.stock != 0 && self.rules.extend == EXTEND_BOSS && self.lives < MAX_LIVES {
             self.lives += 1;
         }
     }
@@ -171,7 +176,7 @@ pub fn spawn_player(cx: &mut Cx) {
     } else if g.flags & GAME_OVER != 0 {
         return;
     }
-    cx.game.player = actor::create(cx, -1, None, cx.arena.center_x(), 400.0, 8, 0, Param::None);
+    cx.game.player = actor::create(cx, -i32::from(actor::controls::ids::PLAYER), None, cx.arena.center_x(), 400.0, 8, 0, Param::None);
 }
 
 /// A score of the score table (ScoreEntry).

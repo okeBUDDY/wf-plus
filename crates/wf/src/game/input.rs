@@ -25,7 +25,7 @@ pub const TRIGGER_KEYS: [Key; MAX_TRIGGERS] = [Key::Z, Key::X, Key::S, Key::D, K
 /// Marks a gamepad button in a trigger code.
 pub const PAD_CODE: i32 = 0x80;
 
-/// The ship's speed per tick (Control01::OnMove): normal and slow.
+/// The ship's speed per tick (PlayerControl::OnMove): normal and slow.
 const SHIP_SPEED: [f32; 2] = [7.0, 2.0];
 
 /// What the pointer and drag quantizing needs: the ship, and the drag not

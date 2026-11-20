@@ -1,7 +1,7 @@
 //! The player (control 1, player.cpp) and its laser (LaserSprite,
 //! line_sprites.cpp).
 
-use super::controls::LaserSprite;
+use super::controls::{LaserSprite, ids};
 use super::{ActorDesc, AnmData, Aid, EffectDesc, Obj, Param, create, sheet, spawn};
 use crate::game::Cx;
 use crate::game::input::{DOWN, LEFT, RIGHT, SHOT, SLOW, UP, WEAPON_SELECT};
@@ -24,7 +24,7 @@ struct PlayerWork {
 }
 
 /// g_flame_anim (0x45d4a4): add0 8, 9 looping.
-static FLAME_ANIM: AnmData = AnmData { set: sheet::ADD, script: &[8, 2, 9, 2, 8, 1, 9, 1, -2, 0, -1] };
+static FLAME_ANIM: AnmData = AnmData { pat_file: sheet::ADD, script: &[8, 2, 9, 2, 8, 1, 9, 1, -2, 0, -1] };
 /// g_weapon_sounds (0x45d4e0).
 const WEAPON_SOUNDS: [usize; 2] = [13, 14];
 /// g_player_bounds (0x45d4e8).
@@ -73,7 +73,7 @@ impl LaserSprite {
     }
 }
 
-/// Control01::SelectWeapon: `weapon` (the next one when negative).
+/// PlayerControl::SelectWeapon: `weapon` (the next one when negative).
 fn select_weapon(cx: &mut Cx, a: Aid, mut weapon: i32, x: f32, y: f32) {
     let w = *cx.actors.w::<PlayerWork>(a);
     if weapon < 0 {
@@ -94,13 +94,13 @@ fn select_weapon(cx: &mut Cx, a: Aid, mut weapon: i32, x: f32, y: f32) {
     }
 }
 
-/// Control01::OnCreate (0x413550).
+/// PlayerControl::OnCreate (0x413550).
 pub fn on_create(cx: &mut Cx, a: Aid) -> bool {
     {
         let x = cx.actors.get_mut(a);
         x.hit_points = 1;
         x.team = 0x60;
-        x.debris = 16;
+        x.debris = ids::PLAYER_EXPLOSION;
     }
     cx.actors.set_layer(a, 2);
     let sprite = cx.pats.get(sheet::SYS, 1);
@@ -130,10 +130,14 @@ pub fn on_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control01::OnEvent (0x4130f0): event 1 makes the player invincible for
-/// `value` frames (for good when negative).
+/// PlayerControl::Events: invincible for `value` frames (for good when
+/// negative, no longer when 0).
+pub const EVENT_INVINCIBLE: i32 = 1;
+
+/// PlayerControl::OnEvent (0x4130f0): EVENT_INVINCIBLE makes the player
+/// invincible for `value` frames (for good when negative).
 pub fn on_event(cx: &mut Cx, a: Aid, event: i32, value: i32) {
-    if event != 1 {
+    if event != EVENT_INVINCIBLE {
         return;
     }
     cx.actors.w::<PlayerWork>(a).invincible = value as i16;
@@ -148,7 +152,7 @@ pub fn on_event(cx: &mut Cx, a: Aid, event: i32, value: i32) {
     cx.actors.get_mut(a).color = 0xffff_ffff;
 }
 
-/// Control01::Fire (0x413130).
+/// PlayerControl::Fire (0x413130).
 fn fire(cx: &mut Cx, a: Aid) {
     let w = *cx.actors.w::<PlayerWork>(a);
     let mut angle: i16 = 0;
@@ -200,13 +204,13 @@ fn fire(cx: &mut Cx, a: Aid) {
     cx.ctl.muzzle.angle_min = (angle as i32 + 0x138) as i16;
     cx.ctl.muzzle.angle_max = (angle as i32 + 0x2c8) as i16;
     let e: EffectDesc = cx.ctl.muzzle;
-    create(cx, 8, None, px, py, 3, 0, Param::Effect(e));
+    create(cx, ids::EFFECT.into(), None, px, py, 3, 0, Param::Effect(e));
     if w.shots % 3 == 0 {
         cx.play_sound(sounds::FIRE_ME);
     }
 }
 
-/// Control01::OnMove (0x4136f0).
+/// PlayerControl::OnMove (0x4136f0).
 pub fn on_move(cx: &mut Cx, a: Aid) -> bool {
     let pressed = cx.fn_game.pressed;
     let keys = cx.fn_game.keys;
@@ -293,7 +297,7 @@ pub fn on_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// The player's state in a replay (PlayerRecord, Control01::Save 0x413070).
+/// The player's state in a replay (PlayerRecord, PlayerControl::Save 0x413070).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct PlayerRecord {
@@ -306,17 +310,17 @@ pub struct PlayerRecord {
     pub spread: i16,
 }
 
-// Control01::Save writes 24 bytes between the boss parts and the input.
+// PlayerControl::Save writes 24 bytes between the boss parts and the input.
 const _: () = assert!(std::mem::size_of::<PlayerRecord>() == 24);
 
-/// Control01::Save.
+/// PlayerControl::Save.
 pub fn save(cx: &Cx, a: Aid) -> PlayerRecord {
     let l = &cx.ctl.laser;
     let x = cx.actors.get(a);
     PlayerRecord { x: x.x(), y: x.y(), weapon: cx.ctl.weapon, tip_x: l.tip_x, tip_y: l.tip_y, angle: l.angle, spread: l.spread }
 }
 
-/// Control01::Load (0x413440, matched).
+/// PlayerControl::Load (0x413440, matched).
 pub fn load(cx: &mut Cx, a: Aid, r: &PlayerRecord) {
     cx.actors.get_mut(a).set_position(r.x, r.y);
     select_weapon(cx, a, r.weapon, r.x, r.y);
@@ -329,7 +333,7 @@ pub fn load(cx: &mut Cx, a: Aid, r: &PlayerRecord) {
     l.spread = r.spread;
 }
 
-/// Control01::ResetWeapon (0x412f90).
+/// PlayerControl::ResetWeapon (0x412f90).
 pub fn reset_weapon(cx: &mut Cx) {
     cx.ctl.weapon = 0;
 }

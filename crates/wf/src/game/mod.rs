@@ -191,7 +191,7 @@ impl Cx {
     /// image follow it, and the frames are drawn in it.
     pub fn set_arena(&mut self, arena: arena::Arena) {
         self.arena = arena;
-        // Only the sides: bounds_.top moves in the game (Control32::Dash),
+        // Only the sides: bounds_.top moves in the game (BossBodyControl::Dash),
         // and the original keeps it from game to game.
         let [left, _, right, _] = arena.boss_bounds();
         self.ctl.boss_bounds.left = left;

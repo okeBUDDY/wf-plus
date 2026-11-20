@@ -6,8 +6,9 @@
 #[derive(Default, Clone, Debug)]
 pub struct FnGameState {
     pub flags: u32,
-    /// 0 while recording, else playing back.
+    /// MODE_RECORD, MODE_REPLAY or MODE_DEMO.
     pub mode: i32,
+    /// BGM_LOOP, BGM_FADE or BGM_REWIND (the options' BGM MODE).
     pub bgm_mode: i32,
     pub exit_frames: i16,
     pub exit_time: i16,
@@ -21,6 +22,20 @@ pub struct FnGameState {
 }
 
 impl FnGameState {
+    /// FnGame::Mode: a game, recorded to rec/temp.rec.
+    pub const MODE_RECORD: i32 = 0;
+    /// The replays in turn (the title's REPLAY item).
+    pub const MODE_REPLAY: i32 = 1;
+    /// One replay without music (the title's demo).
+    pub const MODE_DEMO: i32 = 2;
+
+    /// FnGame::BgmMode: plays on.
+    pub const BGM_LOOP: i32 = 0;
+    /// Fades out after each boss and in at the next stage.
+    pub const BGM_FADE: i32 = 1;
+    /// Restarts at each stage.
+    pub const BGM_REWIND: i32 = 2;
+
     pub const PLAYBACK: u32 = 0x1;
     pub const REPLAY_LIST: u32 = 0x2;
     pub const MUSIC: u32 = 0x4;
@@ -45,6 +60,7 @@ use super::assets::CHANNEL_BGM;
 use super::background::BackgroundGrid;
 use super::enm::battle;
 use super::game_state::{self, FLAG_PAUSE, GAME_OVER, RUNNING};
+use super::sounds;
 use super::hud::{self, GameHud};
 use super::input;
 use super::records;
@@ -61,8 +77,8 @@ pub fn clear_stage(cx: &mut Cx) {
 pub fn reset_sound(cx: &mut Cx) {
     cx.sound.stop_group(None);
     cx.sound.mute_group(false, None);
-    cx.sound.set_group_volume(cx.global.effect_volume, Some(0));
-    cx.sound.set_group_volume(cx.global.music_volume, Some(1));
+    cx.sound.set_group_volume(cx.global.effect_volume, Some(sounds::SOUND_EFFECTS));
+    cx.sound.set_group_volume(cx.global.music_volume, Some(sounds::SOUND_MUSIC));
 }
 
 /// cGlobal::ResetGame (0x401240).
@@ -72,7 +88,7 @@ pub fn reset_game(cx: &mut Cx) {
     cx.global.stage = 0;
     cx.global.entry.score = 0;
     cx.global.entry.deaths = 0;
-    if cx.fn_game.mode == 0 {
+    if cx.fn_game.mode == FnGameState::MODE_RECORD {
         cx.scores.clear_rank();
     }
     let Cx { enm, rng, .. } = cx;
@@ -85,16 +101,16 @@ pub fn clear_seq_flags(cx: &mut Cx) {
 }
 
 impl FnGameState {
-    /// SetMode (0x41be30): record (0) or play back `path` (1: the replay
-    /// list, 2: the title's demo).
+    /// SetMode (0x41be30): record (MODE_RECORD) or play back `path`
+    /// (MODE_REPLAY, MODE_DEMO).
     pub fn set_mode(cx: &mut Cx, mode: i32, path: Option<&str>) {
         cx.fn_game.mode = mode;
         match mode {
-            0 => {
+            FnGameState::MODE_RECORD => {
                 let p = cx.home_path(records::TEMP);
                 cx.replay.open(Mode::Record, p);
             }
-            1 | 2 => {
+            FnGameState::MODE_REPLAY | FnGameState::MODE_DEMO => {
                 let p = cx.home_path(path.unwrap_or(""));
                 cx.replay.open(Mode::Play, p);
             }
@@ -142,9 +158,9 @@ impl Stage for FnGame {
     /// Initialize (0x41bf50).
     fn initialize(&mut self, cx: &mut Cx) -> bool {
         // A new game gets the chosen arena; a replay's header sets its own.
-        let arena = if cx.fn_game.mode == 0 { cx.chosen_arena() } else { super::arena::Arena::CLASSIC };
+        let arena = if cx.fn_game.mode == FnGameState::MODE_RECORD { cx.chosen_arena() } else { super::arena::Arena::CLASSIC };
         cx.set_arena(arena);
-        if cx.fn_game.mode == 0 {
+        if cx.fn_game.mode == FnGameState::MODE_RECORD {
             cx.select_scores(arena.mode);
         }
         clear_stage(cx);
@@ -162,14 +178,14 @@ impl Stage for FnGame {
         cx.fn_game.set_state(FnGameState::START);
         let pause = cx.global.flags & FLAG_PAUSE != 0;
         match cx.fn_game.mode {
-            0 => {
+            FnGameState::MODE_RECORD => {
                 if cx.assets.bgm.is_some() {
                     cx.fn_game.flags |= FnGameState::MUSIC;
                 }
             }
-            1 => cx.fn_game.flags |= FnGameState::PLAYBACK | FnGameState::REPLAY_LIST,
-            2 => {
-                cx.sound.mute_group(true, Some(1));
+            FnGameState::MODE_REPLAY => cx.fn_game.flags |= FnGameState::PLAYBACK | FnGameState::REPLAY_LIST,
+            FnGameState::MODE_DEMO => {
+                cx.sound.mute_group(true, Some(sounds::SOUND_MUSIC));
                 cx.fn_game.flags |= FnGameState::PLAYBACK;
                 return true;
             }
@@ -232,16 +248,16 @@ impl Stage for FnGame {
                     if cx.fn_game.flags & FnGameState::MUSIC != 0 {
                         records::rate_game(cx);
                         match cx.fn_game.bgm_mode {
-                            1 => {
+                            FnGameState::BGM_FADE => {
                                 if cx.global.stage > 1 {
                                     cx.sound.fade(CHANNEL_BGM, 0.0, 1.0, 3.0, false);
                                 }
                             }
-                            2 => cx.play_bgm(),
+                            FnGameState::BGM_REWIND => cx.play_bgm(),
                             _ => {}
                         }
                     }
-                    cx.hud.request_mode(hud::MODE_GAME_OVER);
+                    cx.hud.request_mode(hud::MODE_WARNING);
                     let player = cx.game.player;
                     replay::start(cx, player);
                     cx.fn_game.state += 1;
@@ -263,8 +279,8 @@ impl Stage for FnGame {
                     cx.replay.close();
                     if cx.fn_game.flags & FnGameState::MUSIC != 0 {
                         match cx.fn_game.bgm_mode {
-                            1 => cx.sound.fade(CHANNEL_BGM, 1.0, 0.0, 5.0, false),
-                            2 => cx.sound.fade(CHANNEL_BGM, 1.0, 0.0, 5.0, true),
+                            FnGameState::BGM_FADE => cx.sound.fade(CHANNEL_BGM, 1.0, 0.0, 5.0, false),
+                            FnGameState::BGM_REWIND => cx.sound.fade(CHANNEL_BGM, 1.0, 0.0, 5.0, true),
                             _ => {}
                         }
                     }
@@ -339,7 +355,7 @@ impl Stage for FnGame {
                     }
                     if cx.fn_game.flags & FnGameState::MUSIC != 0 {
                         Self::set_seq_flags(cx);
-                        if cx.fn_game.bgm_mode != 2 {
+                        if cx.fn_game.bgm_mode != FnGameState::BGM_REWIND {
                             cx.play_bgm();
                         }
                     }
@@ -365,7 +381,7 @@ impl Stage for FnGame {
             if cx.fn_game.exit_time >= cx.fn_game.exit_frames {
                 let next = if cx.fn_game.flags & FnGameState::REPLAY_LIST != 0 { records::next_replay(cx) } else { None };
                 if let Some(path) = next {
-                    cx.fn_game.mode = 1;
+                    cx.fn_game.mode = FnGameState::MODE_REPLAY;
                     let p = cx.home_path(&path);
                     cx.replay.open(Mode::Play, p);
                     cx.app.finish(Some(Box::new(FnGame::new())));
@@ -374,8 +390,8 @@ impl Stage for FnGame {
                 }
             }
             let volume = 1.0 - cx.fn_game.exit_time as f32 / cx.fn_game.exit_frames as f32;
-            cx.sound.set_group_volume(cx.global.effect_volume * volume, Some(0));
-            cx.sound.set_group_volume(cx.global.music_volume * volume, Some(1));
+            cx.sound.set_group_volume(cx.global.effect_volume * volume, Some(sounds::SOUND_EFFECTS));
+            cx.sound.set_group_volume(cx.global.music_volume * volume, Some(sounds::SOUND_MUSIC));
         }
         let pad = cx.input.pad(0);
         let (held, pressed) = (pad.buttons, pad.pressed);
@@ -403,7 +419,7 @@ impl Stage for FnGame {
                 Some(Guide::Paused)
             } else {
                 match cx.hud.mode {
-                    super::hud::MODE_RESULT | super::hud::MODE_GAME_OVER => Some(Guide::Skip),
+                    super::hud::MODE_RESULT | super::hud::MODE_WARNING => Some(Guide::Skip),
                     super::hud::MODE_NAME_ENTRY => Some(Guide::NameEntry),
                     _ => None,
                 }

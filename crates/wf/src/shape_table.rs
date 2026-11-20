@@ -6,7 +6,7 @@
 
 use wf_art::shape::{Primitive, ShapeDef};
 
-/// g_hexagon (0x45d0a0): the options' and the game over chart's hexagon.
+/// g_hexagon (0x45d0a0): the options' and the warning screen chart's hexagon.
 pub const HEXAGON: [[f32; 2]; 7] =
     [[0.0, -2.0], [1.732_051, -1.0], [1.732_051, 1.0], [0.0, 2.0], [-1.732_051, 1.0], [-1.732_051, -1.0], [0.0, -2.0]];
 
@@ -17,7 +17,7 @@ pub const MENU_CURSOR: [[f32; 2]; 8] =
 /// kTitleLine (0x45dd88): the line under the boss's title.
 pub const TITLE_LINE: [[f32; 2]; 3] = [[-20.0, 20.0], [0.0, 0.0], [360.0, 0.0]];
 
-/// kWeaponBar (0x45de50): a weapon's level bar on the game over screen.
+/// kWeaponBar (0x45de50): a weapon's level bar on the warning screen.
 pub const WEAPON_BAR: [[f32; 2]; 4] = [[0.0, 2.0], [64.0, 2.0], [0.0, 12.0], [64.0, 12.0]];
 
 /// kBackdrop (0x45dc8c): the name entry window.

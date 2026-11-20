@@ -1,7 +1,8 @@
 //! The parts of the boss (actor_control.cpp): ScoredControl, PartControl,
-//! LinkedPartControl (controls 32..34) and CorePartControl (40..49).
+//! LinkedPartControl (BossBodyControl, BossArmControl, JointPartControl) and
+//! CorePartControl (BulletCoreControl .. StreamCoreControl).
 
-use super::controls::{self, CORE_CONTROLS, DEBRIS_CONTROLS};
+use super::controls::{self, CORE_CONTROLS, DEBRIS_CONTROLS, ids};
 use super::{ActorDesc, Aid, Param, create, flags, sheet, spawn};
 use crate::game::Cx;
 use crate::game::enm::{self, add_clamped, part_flags, side_of};
@@ -14,6 +15,7 @@ use bytemuck::{Pod, Zeroable};
 pub struct PartWork {
     /// The plan slot (index, 0: none).
     pub slot: u32,
+    /// PartWork::Flags (below; bits 0..15 are the control's own).
     pub flags: u32,
     /// What turns: the part itself or its parent.
     pub turret: u32,
@@ -22,22 +24,63 @@ pub struct PartWork {
     pub low: i16,
     pub high: i16,
     pub angle: i16,
+    /// The last event of OnDamage (`events`).
     pub state: i32,
-    pub state_time: i16,
-    pub unknown_1e: i16,
+    /// Within the state; in events::WAIT, the event to take when `timer`
+    /// runs out.
+    pub step: i16,
+    /// Frames, counting down (or up) in the state.
+    pub timer: i16,
+    /// Of a core: its power in percent.
     pub rank: i16,
-    pub unknown_22: i16,
+    /// Of a core: frames a volley lasts.
+    pub volley_time: i16,
 }
 
 /// PartWork::Flags.
-pub const ALIVE: u32 = 0x100_0000;
+/// Takes events::AIM / AIM_FIRE (armed parts).
+pub const AIMS: u32 = 0x1_0000;
+/// Takes events::TRANSFORM (plan flag 0x20).
+pub const TRANSFORMS: u32 = 0x2_0000;
+/// Takes events::GLOW (EnmSlot flag 8).
+pub const ARMORED: u32 = 0x4_0000;
+/// In events::IDLE (or aiming): takes events.
+pub const READY: u32 = 0x100_0000;
+/// Set up at rank 100 for this volley.
+pub const BOOSTED: u32 = 0x200_0000;
+/// Has played trans1.
 pub const TRANS: u32 = 0x400_0000;
+/// Turned to the far angle by events::TRANSFORM.
+pub const TRANSFORMED: u32 = 0x800_0000;
+
+/// PartControl::Events: the OnDamage / OnEvent event numbers, which are
+/// also PartWork::state.
+pub mod events {
+    /// Stays at its angle.
+    pub const IDLE: i32 = 0;
+    /// Waits PartWork::timer frames, then takes `step`.
+    pub const WAIT: i32 = 1;
+    /// Turns back to its start angle, then idles.
+    pub const RETURN: i32 = 3;
+    /// Turns to the far end of its range (and back).
+    pub const TRANSFORM: i32 = 4;
+    /// A core fires a volley.
+    pub const FIRE: i32 = 5;
+    /// Turns to follow the player.
+    pub const AIM: i32 = 6;
+    /// The same, firing once it is on target.
+    pub const AIM_FIRE: i32 = 7;
+    /// An armored part glows (CEnmParam::GlowArmor).
+    pub const GLOW: i32 = 8;
+    /// Flares (EnmParam::dash_angle).
+    pub const FLARE: i32 = 9;
+}
 
 impl PartWork {
     pub fn enter(&mut self, state: i32) {
         self.state = state;
-        self.unknown_1e = 0;
-        self.state_time = 0;
+        self.timer = 0;
+        self.step = 0;
     }
 }
 
@@ -52,12 +95,12 @@ fn slot_of(cx: &mut Cx, a: Aid) -> u16 {
 /// The (constant) level of a core control (GetLevel).
 pub fn core_level(id: i16) -> i32 {
     match id {
-        40 => 0,
-        41 => 1,
-        42 => 2,
-        44 => 3,
-        46 => 4,
-        47 => 5,
+        ids::BULLET_CORE => 0,
+        ids::SHELL_CORE => 1,
+        ids::LASER_CORE => 2,
+        ids::HOMING_CORE => 3,
+        ids::SPARK_CORE => 4,
+        ids::MISSILE_CORE => 5,
         _ => 6,
     }
 }
@@ -65,14 +108,14 @@ pub fn core_level(id: i16) -> i32 {
 /// ScoredControl::GetScore.
 pub fn get_score(cx: &mut Cx, id: i16, a: Aid) -> i32 {
     match id {
-        32 => (cx.global.stage * 10 + cx.enm.state.unknown_24 as i32 - 10) * 1000,
-        33 | 34 => {
+        ids::BOSS_BODY => (cx.global.stage * 10 + cx.enm.state.body_hit_points as i32 - 10) * 1000,
+        ids::BOSS_ARM | ids::JOINT_PART => {
             let s = slot_of(cx, a);
             cx.enm.part(s).score
         }
-        40 => 1000,
-        41 | 42 => 1200,
-        44 | 47 => 2000,
+        ids::BULLET_CORE => 1000,
+        ids::SHELL_CORE | ids::LASER_CORE => 1200,
+        ids::HOMING_CORE | ids::MISSILE_CORE => 2000,
         _ => 2500,
     }
 }
@@ -80,16 +123,16 @@ pub fn get_score(cx: &mut Cx, id: i16, a: Aid) -> i32 {
 /// ScoredControl::GetHitPoints.
 pub fn get_hit_points(cx: &mut Cx, id: i16, a: Aid) -> i32 {
     match id {
-        32 => 1,
-        33 | 34 => {
+        ids::BOSS_BODY => 1,
+        ids::BOSS_ARM | ids::JOINT_PART => {
             let s = slot_of(cx, a);
             cx.enm.part(s).hit_points as i32
         }
-        40 => 20,
-        41 | 42 => 30,
-        44..=47 if id != 45 => 40,
-        45 => 2,
-        48 => 5,
+        ids::BULLET_CORE => 20,
+        ids::SHELL_CORE | ids::LASER_CORE => 30,
+        ids::HOMING_CORE..=ids::MISSILE_CORE if id != ids::HOMING_MISSILE => 40,
+        ids::HOMING_MISSILE => 2,
+        ids::MISSILE => 5,
         _ => 40,
     }
 }
@@ -100,7 +143,7 @@ pub fn prepare(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     w.slot = slot as u32;
     w.flags = 0;
     let hp = get_hit_points(cx, id, a);
-    let hp = hp + hp * cx.enm.state.unknown_26 as i32 / 1024;
+    let hp = hp + hp * cx.enm.state.toughness as i32 / 1024;
     cx.actors.get_mut(a).hit_points = hp;
 }
 
@@ -112,10 +155,10 @@ pub fn is_off_screen(cx: &Cx, a: Aid) -> bool {
 
 /// PartControl::Schedule (0x418c90): waits `delay`, then OnDamage(`next`).
 pub fn schedule(cx: &mut Cx, a: Aid, delay: i32, next: i32) {
-    on_damage(cx, a, 1);
+    on_damage(cx, a, events::WAIT);
     let w = pw(cx, a);
-    w.unknown_1e = delay as i16;
-    w.state_time = next as i16;
+    w.timer = delay as i16;
+    w.step = next as i16;
 }
 
 /// PartControl::ScaleHitPoints (0x418d70).
@@ -153,11 +196,11 @@ pub fn init_part(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     let w = pw(cx, a);
     w.angle = if part.item.flags & part_flags::AIM_HIGH != 0 { w.high } else { w.low };
     if s.flags & 3 == 1 {
-        w.flags |= 0x10000;
+        w.flags |= AIMS;
     } else if part.item.flags & 0x20 != 0 {
-        w.flags |= 0x20000;
+        w.flags |= TRANSFORMS;
     } else if part.item.flags & 0x10 != 0 {
-        w.flags |= 0x10000;
+        w.flags |= AIMS;
     }
     let (turret, angle) = (w.turret as Aid, w.angle as u16);
     let t = cx.actors.get_mut(turret);
@@ -166,17 +209,17 @@ pub fn init_part(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     let hp = cx.actors.get(a).hit_points;
     let w = pw(cx, a);
     w.max_hit_points = hp;
-    w.flags |= ALIVE;
+    w.flags |= READY;
     w.state = 0;
     let wflags = w.flags;
     let side = side_of(s.code);
     cx.enm.parts_alive[side] += 1;
-    if wflags & 0x20000 != 0 {
-        cx.enm.unknown_104[side] += 1;
+    if wflags & TRANSFORMS != 0 {
+        cx.enm.transform_parts[side] += 1;
     }
     if s.flags & 8 != 0 {
         cx.enm.armored_parts[side] += 1;
-        pw(cx, a).flags |= 0x40000;
+        pw(cx, a).flags |= ARMORED;
     }
 }
 
@@ -186,7 +229,7 @@ pub fn init_core(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     let power = cx.enm.slots[slot as usize].power as i32;
     let w = pw(cx, a);
     w.rank = (power * 100 / 1024) as i16;
-    w.unknown_22 = 0;
+    w.volley_time = 0;
     let rank = w.rank as i32;
     super::cores::setup(cx, id, a, rank);
     let side = side_of(cx.enm.slots[slot as usize].code);
@@ -214,56 +257,56 @@ pub fn init_linked(cx: &mut Cx, id: i16, a: Aid, slot: u16) {
     }
     let sprite = cx.pats.get(sheet::ENM + part.item.pat_file as u8, part.item.pat as i32);
     cx.actors.set_sprite(a, sprite);
-    on_damage(cx, a, if part.item.flags & 0x10 != 0 { 6 } else { 0 });
+    on_damage(cx, a, if part.item.flags & 0x10 != 0 { events::AIM } else { events::IDLE });
 }
 
 /// The part's events from the body and the tactics
 /// (LinkedPartControl::OnEvent 0x419370).
-pub fn linked_event(cx: &mut Cx, a: Aid, x: i32, y: i32) {
-    let mut count = y & 0xff;
-    let alive = pw(cx, a).flags & ALIVE != 0;
-    if y & 0x1000 != 0 && (y & 0x2000 != 0 || alive) && (y & 0x100 != 0 || count == 0) {
-        on_damage(cx, a, x);
+pub fn linked_event(cx: &mut Cx, a: Aid, event: i32, targets: i32) {
+    let mut count = targets & 0xff;
+    let ready = pw(cx, a).flags & READY != 0;
+    if targets & 0x1000 != 0 && (targets & 0x2000 != 0 || ready) && (targets & 0x100 != 0 || count == 0) {
+        on_damage(cx, a, event);
     }
     count -= 1;
     if count >= 0 {
-        let y = (y & !0xff) | count;
+        let targets = (targets & !0xff) | count;
         let mut child = cx.actors.get(a).first_child;
         while child != super::NIL {
-            controls::send_event(cx, child, x, y);
+            controls::send_event(cx, child, event, targets);
             child = cx.actors.get(child).prev_sibling;
         }
     }
 }
 
 /// CorePartControl::OnEvent (0x418cc0).
-pub fn core_event(cx: &mut Cx, id: i16, a: Aid, x: i32, y: i32) {
+pub fn core_event(cx: &mut Cx, id: i16, a: Aid, event: i32, targets: i32) {
     let w = *pw(cx, a);
-    if y & 0x2000 == 0 && w.flags & ALIVE == 0 {
+    if targets & 0x2000 == 0 && w.flags & READY == 0 {
         return;
     }
-    if y & (0x10000 << core_level(id)) == 0 {
+    if targets & (0x10000 << core_level(id)) == 0 {
         return;
     }
-    if y & 0x100 == 0 && y & 0xff != 0 {
+    if targets & 0x100 == 0 && targets & 0xff != 0 {
         return;
     }
-    if x == 5 {
-        if y & 0x800 != 0 {
-            if w.flags & 0x200_0000 == 0 {
+    if event == events::FIRE {
+        if targets & 0x800 != 0 {
+            if w.flags & BOOSTED == 0 {
                 super::cores::setup(cx, id, a, 100);
-                pw(cx, a).flags |= 0x200_0000;
+                pw(cx, a).flags |= BOOSTED;
             }
-        } else if w.flags & 0x200_0000 != 0 {
+        } else if w.flags & BOOSTED != 0 {
             super::cores::setup(cx, id, a, w.rank as i32);
-            pw(cx, a).flags &= !0x200_0000;
+            pw(cx, a).flags &= !BOOSTED;
         }
-        let u22 = pw(cx, a).unknown_22 as i32;
-        if u22 > cx.ctl.max_unknown_22 {
-            cx.ctl.max_unknown_22 = u22;
+        let volley = pw(cx, a).volley_time as i32;
+        if volley > cx.ctl.max_volley_time {
+            cx.ctl.max_volley_time = volley;
         }
     }
-    on_damage(cx, a, x);
+    on_damage(cx, a, event);
 }
 
 /// LinkedPartControl::OnChildDestroyed (0x419400).
@@ -285,10 +328,10 @@ pub fn linked_child_destroyed(cx: &mut Cx, parent: Aid, child: Aid) {
             p.hit_points = 1;
         }
         if new_level == 1 {
-            create(cx, 35, Some(parent), 0.0, 0.0, 4, 0, Param::Slot(slot as u16));
+            create(cx, ids::TURRET.into(), Some(parent), 0.0, 0.0, 4, 0, Param::Slot(slot as u16));
         }
     }
-    if cx.actors.get(parent).id != 32 {
+    if cx.actors.get(parent).id != ids::BOSS_BODY {
         let pp = cx.actors.get(parent).parent;
         let pid = cx.actors.get(pp).id;
         controls::on_child_destroyed(cx, pid, pp, child);
@@ -302,9 +345,9 @@ pub fn spawn_children(cx: &mut Cx, a: Aid, base: u32, mut index: u32, mut count:
         let slot = cx.enm.slots[s as usize];
         let part = *cx.enm.part(s);
         let child = match slot.flags & 3 {
-            0 => create(cx, CORE_CONTROLS[(slot.weapon as usize) % 7], Some(a), part.item.x as f32, part.item.y as f32, 6, 0, Param::Slot(s)),
-            1 => create(cx, CORE_CONTROLS[(slot.weapon as usize) % 7], Some(a), part.x1 as f32, part.y1 as f32, 6, 0, Param::Slot(s)),
-            _ => create(cx, 34, Some(a), part.item.x as f32, part.item.y as f32, 4, 0, Param::Slot(s)),
+            0 => create(cx, CORE_CONTROLS[(slot.weapon as usize) % 7].into(), Some(a), part.item.x as f32, part.item.y as f32, 6, 0, Param::Slot(s)),
+            1 => create(cx, CORE_CONTROLS[(slot.weapon as usize) % 7].into(), Some(a), part.x1 as f32, part.y1 as f32, 6, 0, Param::Slot(s)),
+            _ => create(cx, ids::JOINT_PART.into(), Some(a), part.item.x as f32, part.item.y as f32, 4, 0, Param::Slot(s)),
         };
         if let Some(c) = child {
             let l = pw(cx, c).level;
@@ -328,7 +371,7 @@ pub struct PartPiece {
 
 /// PartControl::SpawnPieces (0x418f50).
 pub fn spawn_pieces(cx: &mut Cx, a: Aid, pieces: &[PartPiece]) {
-    let mut desc = ActorDesc { work: cx.actors.get(a).work[0], color: 0xffff_ffff, ..Default::default() };
+    let mut desc = ActorDesc { slot: cx.actors.get(a).work[0], color: 0xffff_ffff, ..Default::default() };
     for p in pieces {
         desc.debris = DEBRIS_CONTROLS[p.debris as usize];
         desc.flags = 0;
@@ -347,7 +390,7 @@ pub fn spawn_pieces(cx: &mut Cx, a: Aid, pieces: &[PartPiece]) {
 pub fn spawn_items(cx: &mut Cx, a: Aid) {
     let s = slot_of(cx, a);
     let part = *cx.enm.part(s);
-    let mut desc = ActorDesc { color: 0xffff_ffff, work: s as u32, ..Default::default() };
+    let mut desc = ActorDesc { color: 0xffff_ffff, slot: s as u32, ..Default::default() };
     for i in 0..part.item_count.max(0) as usize {
         let Some(item) = cx.enm.plan.items.get(part.items as usize + i).copied() else { break };
         desc.debris = DEBRIS_CONTROLS[(item.debris as usize) & 3];
@@ -435,10 +478,10 @@ pub fn part_destroy(cx: &mut Cx, a: Aid) {
     }
     let side = side_of(cx.enm.slots[s as usize].code);
     cx.enm.parts_alive[side] -= 1;
-    if w.flags & 0x20000 != 0 {
-        cx.enm.unknown_104[side] -= 1;
+    if w.flags & TRANSFORMS != 0 {
+        cx.enm.transform_parts[side] -= 1;
     }
-    if w.flags & 0x40000 != 0 {
+    if w.flags & ARMORED != 0 {
         cx.enm.armored_parts[side] -= 1;
     }
     let score = get_score(cx, id, a);
@@ -474,7 +517,7 @@ fn spawn_flare(cx: &mut Cx, a: Aid) {
     let Some(boss) = cx.ctl.boss else { return };
     let (sx, sy) = (cx.actors.get(a).sx(), cx.actors.get(a).sy());
     let mut angle = cx.actors.angle_to(boss, sx, sy) as u16;
-    let offset = ((cx.enm.unknown_158 as u16).wrapping_sub(angle) & 0x3ff) as i16;
+    let offset = ((cx.enm.dash_angle as u16).wrapping_sub(angle) & 0x3ff) as i16;
     if offset > 0x100 && offset < 0x300 {
         let x = cx.actors.get(a);
         if x.relative_tf {
@@ -487,8 +530,8 @@ fn spawn_flare(cx: &mut Cx, a: Aid) {
                 angle = 0x200u16.wrapping_sub(angle);
             }
         }
-        create(cx, 23, Some(a), 0.0, 0.0, 1, angle, Param::None);
-        cx.enm.unknown_164 += 1;
+        create(cx, ids::FLARE.into(), Some(a), 0.0, 0.0, 1, angle, Param::None);
+        cx.enm.flare_count += 1;
     }
 }
 
@@ -496,52 +539,52 @@ fn spawn_flare(cx: &mut Cx, a: Aid) {
 pub fn on_damage(cx: &mut Cx, a: Aid, mut how: i32) {
     stop_trans(cx, a, true);
     let w = pw(cx, a);
-    if w.state == 1 {
-        w.state = 0;
-        w.flags |= ALIVE;
+    if w.state == events::WAIT {
+        w.state = events::IDLE;
+        w.flags |= READY;
     }
     let wf = w.flags;
     match how {
-        6 | 0 => {
-            if how == 6 && wf & 0x10000 == 0 {
+        events::AIM | events::IDLE => {
+            if how == events::AIM && wf & AIMS == 0 {
                 return;
             }
             let w = pw(cx, a);
-            w.flags |= ALIVE;
+            w.flags |= READY;
             w.enter(how);
             return;
         }
-        5 => {
+        events::FIRE => {
             if is_off_screen(cx, a) {
                 return;
             }
             let s = slot_of(cx, a);
             add_clamped(&mut cx.enm.slots[s as usize].power, 3);
         }
-        7 => {
-            if wf & 0x10000 == 0 {
+        events::AIM_FIRE => {
+            if wf & AIMS == 0 {
                 return;
             }
         }
-        4 => {
-            if wf & 0x20000 == 0 {
+        events::TRANSFORM => {
+            if wf & TRANSFORMS == 0 {
                 return;
             }
             let w = pw(cx, a);
-            if w.flags & 0x800_0000 != 0 {
-                w.flags &= !0x800_0000;
-                how = 3;
+            if w.flags & TRANSFORMED != 0 {
+                w.flags &= !TRANSFORMED;
+                how = events::RETURN;
             } else {
-                w.flags |= 0x800_0000;
+                w.flags |= TRANSFORMED;
             }
             play_trans(cx, a);
         }
-        8 => {
-            if wf & 0x40000 == 0 {
+        events::GLOW => {
+            if wf & ARMORED == 0 {
                 return;
             }
         }
-        9 => {
+        events::FLARE => {
             let s = slot_of(cx, a);
             if cx.enm.part(s).item.flags & 0x200 != 0 {
                 spawn_flare(cx, a);
@@ -551,7 +594,7 @@ pub fn on_damage(cx: &mut Cx, a: Aid, mut how: i32) {
         _ => {}
     }
     let w = pw(cx, a);
-    w.flags &= !ALIVE;
+    w.flags &= !READY;
     w.enter(how);
 }
 
@@ -578,17 +621,17 @@ pub fn move_part(cx: &mut Cx, a: Aid) -> bool {
     let w = *pw(cx, a);
     let turret = w.turret as Aid;
     match w.state {
-        1 => {
+        events::WAIT => {
             let w = pw(cx, a);
-            if w.unknown_1e > 0 {
-                w.unknown_1e -= 1;
-                if w.unknown_1e == 0 {
-                    let next = w.state_time as i32;
+            if w.timer > 0 {
+                w.timer -= 1;
+                if w.timer == 0 {
+                    let next = w.step as i32;
                     on_damage(cx, a, next);
                 }
             }
         }
-        6 | 7 => {
+        events::AIM | events::AIM_FIRE => {
             let old = cx.actors.get(turret).angle;
             let player = cx.game.player;
             let speed = cx.enm.turn_speed as i16;
@@ -596,42 +639,42 @@ pub fn move_part(cx: &mut Cx, a: Aid) -> bool {
             let t = cx.actors.get_mut(turret);
             t.angle = super::clamp_angle(t.angle as u16, w.low, w.high) as i16;
             if old == t.angle {
-                cx.enm.state.flags |= 1;
-                if w.state == 7 {
-                    on_damage(cx, a, 5);
+                cx.enm.state.flags |= enm::state_flags::AIMED;
+                if w.state == events::AIM_FIRE {
+                    on_damage(cx, a, events::FIRE);
                 }
             }
         }
-        3 => match w.state_time {
+        events::RETURN => match w.step {
             0 => {
                 if turn_toward(cx, turret, w.angle) {
                     stop_trans(cx, a, true);
-                    pw(cx, a).state_time += 1;
+                    pw(cx, a).step += 1;
                 }
                 let w = pw(cx, a);
-                if w.unknown_1e > 0 {
-                    w.unknown_1e -= 1;
+                if w.timer > 0 {
+                    w.timer -= 1;
                 }
             }
             1 => {
                 let w = pw(cx, a);
-                w.unknown_1e -= 1;
-                if w.unknown_1e <= 0 {
-                    on_damage(cx, a, 0);
+                w.timer -= 1;
+                if w.timer <= 0 {
+                    on_damage(cx, a, events::IDLE);
                 }
             }
             _ => {}
         },
-        4 => {
-            if w.state_time == 0 {
-                pw(cx, a).state_time += 1;
+        events::TRANSFORM => {
+            if w.step == 0 {
+                pw(cx, a).step += 1;
             }
-            if pw(cx, a).state_time == 1 {
+            if pw(cx, a).step == 1 {
                 let s = w.slot as u16;
                 let goal = if cx.enm.part(s).item.flags & part_flags::AIM_HIGH != 0 { w.low } else { w.high };
                 if turn_toward(cx, turret, goal) {
                     stop_trans(cx, a, true);
-                    on_damage(cx, a, 0);
+                    on_damage(cx, a, events::IDLE);
                 }
             }
         }
@@ -640,18 +683,18 @@ pub fn move_part(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// LinkedPartControl::OnMove (0x419cc0): state 8 makes the part glow.
+/// LinkedPartControl::OnMove (0x419cc0): events::GLOW makes the part glow.
 pub fn linked_move(cx: &mut Cx, a: Aid) -> bool {
-    if pw(cx, a).state != 8 {
+    if pw(cx, a).state != events::GLOW {
         return move_part(cx, a);
     }
     let color = cx.enm.state.color;
-    if pw(cx, a).state_time == 0 {
+    if pw(cx, a).step == 0 {
         if cx.enm.glow_time < 120 {
             cx.enm.glow_time = 120;
         }
         let gt = cx.enm.glow_time;
-        create(cx, 22, Some(a), 0.0, 0.0, 5, 0, Param::Int(gt));
+        create(cx, ids::GLOW.into(), Some(a), 0.0, 0.0, 5, 0, Param::Int(gt));
         let mut child = cx.actors.get(a).first_child;
         while child != super::NIL {
             let empty = match cx.actors.get(child).sprite {
@@ -659,20 +702,20 @@ pub fn linked_move(cx: &mut Cx, a: Aid) -> bool {
                 _ => false,
             };
             if empty {
-                create(cx, 22, Some(child), 0.0, 0.0, 5, 0, Param::Int(gt));
+                create(cx, ids::GLOW.into(), Some(child), 0.0, 0.0, 5, 0, Param::Int(gt));
             }
             child = cx.actors.get(child).prev_sibling;
         }
         cx.play_sound(sounds::BARRIER);
         let w = pw(cx, a);
-        w.state_time += 1;
-        w.unknown_1e = 0;
+        w.step += 1;
+        w.timer = 0;
     }
-    match pw(cx, a).state_time {
+    match pw(cx, a).step {
         1 => {
             let w = pw(cx, a);
-            w.unknown_1e += 1;
-            let t = w.unknown_1e as i32;
+            w.timer += 1;
+            let t = w.timer as i32;
             cx.actors.get_mut(a).lerp_color(color, 0xffff_ff00, t, 60);
             if t >= 60 {
                 let x = cx.actors.get_mut(a);
@@ -681,28 +724,28 @@ pub fn linked_move(cx: &mut Cx, a: Aid) -> bool {
                 }
                 let gt = cx.enm.glow_time;
                 let w = pw(cx, a);
-                w.unknown_1e = (gt - 120) as i16;
-                w.state_time += 1;
+                w.timer = (gt - 120) as i16;
+                w.step += 1;
             }
         }
         2 => {
             let w = pw(cx, a);
-            w.unknown_1e -= 1;
-            if w.unknown_1e <= 0 {
-                w.state_time += 1;
+            w.timer -= 1;
+            if w.timer <= 0 {
+                w.step += 1;
             }
         }
         3 => {
             let w = pw(cx, a);
-            w.unknown_1e += 1;
-            let t = w.unknown_1e as i32;
+            w.timer += 1;
+            let t = w.timer as i32;
             cx.actors.get_mut(a).lerp_color(0xffff_ff00, color, t, 60);
             if t >= 60 {
                 let x = cx.actors.get_mut(a);
                 if x.team == 0xe1 {
                     x.team = 0x61;
                 }
-                on_damage(cx, a, 0);
+                on_damage(cx, a, events::IDLE);
             }
         }
         _ => {}

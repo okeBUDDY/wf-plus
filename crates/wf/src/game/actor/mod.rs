@@ -11,7 +11,7 @@ pub mod controls;
 mod cores;
 mod boss;
 mod fx;
-mod parts;
+pub mod parts;
 pub mod player;
 
 use super::Cx;
@@ -161,11 +161,13 @@ impl Pats {
     }
 }
 
-/// An animation script (AnmData): (pattern, frames) pairs of `set`;
+/// An animation script (AnmData): (pattern, frames) pairs of `pat_file`;
 /// -2 jumps (target, count), -1 ends.
 #[derive(Debug)]
 pub struct AnmData {
-    pub set: u8,
+    /// The pattern file (sheet) whose patterns the script numbers
+    /// (AnmData::pat_file).
+    pub pat_file: u8,
     pub script: &'static [i16],
 }
 
@@ -224,8 +226,8 @@ impl Anm {
         if command == -1 {
             return;
         }
-        let set = self.data.map_or(0, |d| d.set);
-        self.object = Some(PatId { sheet: set, id: command as u16 });
+        let pat_file = self.data.map_or(0, |d| d.pat_file);
+        self.object = Some(PatId { sheet: pat_file, id: command as u16 });
         self.wait = self.script(c + 1);
     }
 }
@@ -317,7 +319,9 @@ pub struct ActorDesc {
     pub color: u32,
     pub speed: f32,
     pub acceleration: f32,
-    pub work: u32,
+    /// The EnmSlot of the firing part (an index); Actor::Restore stores it
+    /// in work[0], where on_actor_destroyed reads the shooter's slot.
+    pub slot: u32,
     pub x: f32,
     pub y: f32,
     pub layer: u16,
@@ -329,7 +333,7 @@ pub struct ActorDesc {
     pub age: u16,
 }
 
-/// How a control moves and fades an effect sprite (EffectDesc, control 8).
+/// How a control moves and fades an effect sprite (EffectDesc, EffectControl).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EffectDesc {
     pub sprite: Obj,
@@ -374,7 +378,7 @@ pub struct Actor {
     pub start_angle: u16,
     pub speed: f32,
     pub acceleration: f32,
-    /// Kept inside the boss's bounds (Control32::bounds_), else it dies
+    /// Kept inside the boss's bounds (BossBodyControl::bounds_), else it dies
     /// outside the margin of the screen.
     pub bounded: bool,
     pub sprite: Obj,
@@ -604,8 +608,8 @@ impl ActorSystem {
             if anim.cursor.is_none() {
                 anim.data = Some(data);
                 anim.cursor = Some(0);
-                anim.object = Some(PatId { sheet: data.set, id: data.script[0] as u16 });
-                anim.texture = data.set + 1;
+                anim.object = Some(PatId { sheet: data.pat_file, id: data.script[0] as u16 });
+                anim.texture = data.pat_file + 1;
                 anim.wait = data.script[1];
                 anim.loop_ = 0;
                 return Obj::Anm(i as u16);
@@ -927,7 +931,7 @@ pub fn spawn(cx: &mut Cx, desc: &ActorDesc) -> Option<Aid> {
     act.acceleration = desc.acceleration;
     act.debris = desc.debris;
     act.age = desc.age;
-    act.work[0] = desc.work;
+    act.work[0] = desc.slot;
     Some(a)
 }
 

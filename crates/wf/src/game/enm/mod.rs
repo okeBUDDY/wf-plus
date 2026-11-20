@@ -40,7 +40,8 @@ pub struct EnmPlanItem {
     pub kind: u32,
     pub x: i16,
     pub y: i16,
-    pub unknown_10: i16,
+    /// 8 in every entry of plan.dat, never read.
+    pub unused_10: i16,
     pub low: i16,
     pub high: i16,
     pub debris: i16,
@@ -53,12 +54,14 @@ pub struct EnmPlanItem {
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct EnmPlanPart {
     pub item: EnmPlanItem,
-    pub unknown_1c: [i16; 6],
+    /// An editor label ("ATK-ROOT", "WIDE-ROOT", "NEW"); never read.
+    pub name: [u8; 12],
     pub score: i32,
     pub hit_points: i16,
     pub x1: i16,
     pub y1: i16,
-    pub unknown_32: i16,
+    /// 9 in every part of plan.dat, never read.
+    pub unused_32: i16,
     pub lerp_from: i16,
     pub lerp_to: i16,
     pub child_count: i16,
@@ -66,7 +69,8 @@ pub struct EnmPlanPart {
     pub option4_count: i16,
     pub extra_child_count: i16,
     pub item_count: i16,
-    pub unknown_42: i16,
+    /// Alignment padding before the item index (0 in plan.dat).
+    pub pad_42: i16,
     /// An index into the items.
     pub items: u32,
 }
@@ -165,16 +169,57 @@ impl EnmPlan {
     }
 }
 
-/// A movement program of the boss (EnmList).
+/// An operation the boss runs each frame (EnmProgram): the move, turn and
+/// fire programs, and the tactic program (op: the tactic id).
 #[derive(Clone, Copy, Debug, Default)]
-pub struct EnmList {
+pub struct EnmProgram {
+    /// Of the operation.
     pub arg: i32,
+    /// Frames since the operation started (or a wait counting down).
     pub time: i32,
+    /// The operation (`ops`), 0: none.
     pub op: i32,
+    /// Within the operation.
     pub step: i32,
 }
 
-impl EnmList {
+/// EnmProgram::Ops: the operations of the move, turn and fire programs.
+pub mod ops {
+    /// Comes down onto the screen.
+    pub const MOVE_ENTER: i32 = 0x10001;
+    /// Dashes to a random place.
+    pub const MOVE_RANDOM: i32 = 0x10002;
+    /// Dashes straight ahead.
+    pub const MOVE_CHARGE: i32 = 0x10003;
+    /// Dashes to the top center.
+    pub const MOVE_CENTER: i32 = 0x10004;
+    /// Dashes at the player.
+    pub const MOVE_RAM: i32 = 0x10005;
+    /// Knocked back to angle `arg`.
+    pub const MOVE_RECOIL: i32 = 0x10006;
+    /// Half a turn either way.
+    pub const TURN_FLIP: i32 = 0x20001;
+    /// Turns to angle `arg`.
+    pub const TURN_TO: i32 = 0x20002;
+    /// Spins for about `arg` frames.
+    pub const TURN_SPIN: i32 = 0x20003;
+    /// Faces the player (offset by `arg`).
+    pub const TURN_FACE: i32 = 0x20004;
+    /// Fires random weapons, `arg` percent of the rate.
+    pub const FIRE_ANY: i32 = 0x30001;
+    /// Fires weapon `arg` once.
+    pub const FIRE_WEAPON: i32 = 0x30002;
+    /// ... and waits for the volley.
+    pub const FIRE_WEAPON_WAIT: i32 = 0x30003;
+    /// Fires weapon `arg` at full rank once.
+    pub const FIRE_BOOSTED: i32 = 0x30004;
+    pub const FIRE_BOOSTED_WAIT: i32 = 0x30005;
+    /// Fires every weapon once.
+    pub const FIRE_ALL: i32 = 0x30006;
+    pub const FIRE_ALL_WAIT: i32 = 0x30007;
+}
+
+impl EnmProgram {
     pub fn start(&mut self, op: i32, arg: i32) {
         self.op = op;
         self.arg = arg;
@@ -244,15 +289,19 @@ pub fn add_clamped(value: &mut i16, delta: i32) {
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct EnmSideStats {
     pub mode: i16,
-    pub unknown_02: i16,
-    pub unknown_04: i16,
+    /// Parts of kind 0x10000 (the ATK-ROOT family); kind_counts[0] gives mode 1.
+    pub attack_kills: i16,
+    /// Parts of kind 0x20000 (the WIDE-ROOT family); kind_counts[1] gives mode 2.
+    pub wide_kills: i16,
     pub progress: i16,
-    pub unknown_08: i16,
+    /// Parts of kind 0x40000, and rapid destructions while the mode is 0;
+    /// kind_counts[2] gives mode 4.
+    pub rapid_kills: i16,
 }
 
 impl EnmSideStats {
     pub fn score(&self) -> i32 {
-        (if self.mode == 0 { self.unknown_04 as i32 } else { self.unknown_08 as i32 + self.unknown_04 as i32 }) + self.unknown_02 as i32
+        (if self.mode == 0 { self.wide_kills as i32 } else { self.rapid_kills as i32 + self.wide_kills as i32 }) + self.attack_kills as i32
     }
 }
 
@@ -273,22 +322,46 @@ pub struct EnmState {
     pub flags: u32,
     pub sides: [EnmSideStats; 2],
     pub color: u32,
-    pub unknown_24: i16,
-    pub unknown_26: i16,
-    pub unknown_28: i16,
-    pub unknown_2a: i16,
+    /// Of the boss body (BossBodyControl), 200 up to 1200.
+    pub body_hit_points: i16,
+    /// 0..0x400: adds hit_points * toughness / 1024 to every part.
+    pub toughness: i16,
+    /// 0..0x400: gives EnmParam::fire_rate.
+    pub fire_speed: i16,
+    /// 0..0x400: gives EnmParam::turn_speed.
+    pub aim_speed: i16,
     pub max_depth: i16,
-    pub unknown_2e: i16,
+    /// Never used.
+    pub unused_2e: i16,
     pub weapon_mask: u32,
     pub weapon_count: i16,
     pub weapons: [i8; 8],
     pub weapon_levels: [i16; 7],
-    pub step_mask: u32,
-    pub step_count: i16,
-    pub step_total: i16,
-    pub steps: [[i8; 2]; 19],
+    /// Bit i: tactic i is available.
+    pub tactic_mask: u32,
+    pub tactic_count: i16,
+    /// The sum of the weights.
+    pub tactic_weight: i16,
+    /// The tactic ids and their running weight sums, for the pick in
+    /// RunBattle.
+    pub tactics: [[i8; 2]; 19],
     pub title: EnmTitle,
-    pub unknown_82: i16,
+    /// Never used.
+    pub unused_82: i16,
+}
+
+/// EnmState::Flags.
+pub mod state_flags {
+    /// A turret is on target (cleared every frame).
+    pub const AIMED: u32 = 0x1;
+    /// The turn program is done or slowing down (cleared every frame).
+    pub const TURNED: u32 = 0x2;
+    /// The body has come down; the tactics run.
+    pub const BATTLE: u32 = 0x100;
+    /// A part with plan flag 0x100 (armored) is planned.
+    pub const ARMOR: u32 = 0x10000;
+    /// A part with plan flag 0x20 (transforms) is planned.
+    pub const TRANSFORM: u32 = 0x20000;
 }
 
 const _: () = assert!(std::mem::size_of::<EnmState>() == 0x7c);
@@ -297,8 +370,9 @@ const _: () = assert!(std::mem::size_of::<EnmState>() == 0x7c);
 /// parts (0x45d964).
 const WEAPON_ORDER: [[i32; 7]; 3] = [[0, 2, 1, 4, 3, 6, 5], [0, 1, 3, 2, 4, 6, 5], [0, 3, 1, 6, 2, 4, 5]];
 
-/// The length of each step; from 9 on that of step 9 (0x45d990).
-const STEP_COSTS: [i8; 12] = [1, 1, 1, 1, 1, 1, 3, 1, 3, 5, 0, 0];
+/// g_tactic_weights (0x45d990): the weight of each tactic in the random
+/// pick; from 9 on that of tactic 9.
+const TACTIC_WEIGHTS: [i8; 12] = [1, 1, 1, 1, 1, 1, 3, 1, 3, 5, 0, 0];
 
 /// CEnmParam (g_enm_param).
 pub struct EnmParam {
@@ -307,50 +381,67 @@ pub struct EnmParam {
     pub fire_rate: i32,
     pub fire_wait: [i32; 2],
     pub turret_count: i32,
-    pub unknown_98: i32,
-    pub list_9c: EnmList,
-    pub list_b0: EnmList,
-    pub lists_c4: [EnmList; 2],
+    /// The bursts of a turret: (this - depth) * 4.
+    pub turret_weight: i32,
+    /// The dash operations (`ops::MOVE_*`).
+    pub move_program: EnmProgram,
+    /// The turn operations (`ops::TURN_*`).
+    pub turn_program: EnmProgram,
+    /// Per side, the fire operations (`ops::FIRE_*`).
+    pub fire_programs: [EnmProgram; 2],
     pub parts_alive: [i32; 2],
-    pub unknown_f4: [i32; 2],
+    /// parts_alive when the battle started.
+    pub start_parts: [i32; 2],
     pub armored_parts: [i32; 2],
-    pub unknown_104: [i32; 2],
+    /// Parts with parts::TRANSFORMS.
+    pub transform_parts: [i32; 2],
     /// The union at 0x10c: weapon_parts_[7], power_total_, part_total_
     /// while planning; core_power_[2][7] in battle.
-    pub u10c: [i32; 14],
+    pub tally: [i32; 14],
     pub core_count: i32,
     pub core_total: i32,
     pub player_dir: i32,
     pub glow_time: i32,
     pub trans_count: i32,
-    pub unknown_158: i32,
+    /// The start angle of the last boosted dash.
+    pub dash_angle: i32,
     pub flare_time: i32,
     pub flare_size: f32,
-    pub unknown_164: i32,
+    /// Flares since the boosted dash.
+    pub flare_count: i32,
     pub score_base: i32,
     pub score_rapid: i32,
     pub score_chain: i32,
     pub chain_count: i32,
     pub rapid_count: i32,
-    pub unknown_17c: i32,
+    /// Cleared by StartBattle, never read.
+    pub unused_17c: i32,
     pub slots: Vec<EnmSlot>,
     pub slot_count: i32,
     pub records: Vec<DestroyRecord>,
     pub record_count: usize,
     pub plan: EnmPlan,
-    pub list_218: EnmList,
+    pub tactic_program: EnmProgram,
     pub titles: [EnmTitle; 32],
     pub title_count: i32,
     pub deaths: i32,
     pub battle_time: i32,
-    pub unknown_338: [i32; 3],
-    pub unknown_344: i32,
+    /// Frames of the battle by player_dir; pick the order of new weapons.
+    pub dir_frames: [i32; 3],
+    /// Frames with state_flags::AIMED; raise aim_speed.
+    pub aimed_frames: i32,
     pub player_travel: f32,
     pub player_pos: [f32; 2],
     pub player_samples: i32,
     pub new_weapon: i32,
-    pub unknown_35c: i32,
+    /// Never used.
+    pub unused_35c: i32,
 }
+
+/// While planning, `tally` holds weapon_parts_[7] (parts per weapon), then
+/// these totals.
+const POWER_TOTAL: usize = 7;
+const PART_TOTAL: usize = 8;
 
 pub const SLOT_CAPACITY: usize = 0x80;
 pub const RECORD_CAPACITY: usize = 0x101;
@@ -364,55 +455,55 @@ impl EnmParam {
             fire_rate: 0,
             fire_wait: [0; 2],
             turret_count: 0,
-            unknown_98: 0,
-            list_9c: EnmList::default(),
-            list_b0: EnmList::default(),
-            lists_c4: [EnmList::default(); 2],
+            turret_weight: 0,
+            move_program: EnmProgram::default(),
+            turn_program: EnmProgram::default(),
+            fire_programs: [EnmProgram::default(); 2],
             parts_alive: [0; 2],
-            unknown_f4: [0; 2],
+            start_parts: [0; 2],
             armored_parts: [0; 2],
-            unknown_104: [0; 2],
-            u10c: [0; 14],
+            transform_parts: [0; 2],
+            tally: [0; 14],
             core_count: 0,
             core_total: 0,
             player_dir: 0,
             glow_time: 0,
             trans_count: 0,
-            unknown_158: 0,
+            dash_angle: 0,
             flare_time: 0,
             flare_size: 0.0,
-            unknown_164: 0,
+            flare_count: 0,
             score_base: 0,
             score_rapid: 0,
             score_chain: 0,
             chain_count: 0,
             rapid_count: 0,
-            unknown_17c: 0,
+            unused_17c: 0,
             slots: vec![EnmSlot::default(); SLOT_CAPACITY],
             slot_count: 0,
             records: vec![DestroyRecord::default(); RECORD_CAPACITY],
             record_count: 0,
             plan,
-            list_218: EnmList::default(),
+            tactic_program: EnmProgram::default(),
             titles: [EnmTitle::default(); 32],
             title_count: 0,
             deaths: 0,
             battle_time: 0,
-            unknown_338: [0; 3],
-            unknown_344: 0,
+            dir_frames: [0; 3],
+            aimed_frames: 0,
             player_travel: 0.0,
             player_pos: [0.0; 2],
             player_samples: 0,
             new_weapon: 0,
-            unknown_35c: 0,
+            unused_35c: 0,
         }
     }
 
     pub fn core_power(&self, side: usize, weapon: usize) -> i32 {
-        self.u10c[side * 7 + weapon]
+        self.tally[side * 7 + weapon]
     }
     pub fn core_power_mut(&mut self, side: usize, weapon: usize) -> &mut i32 {
-        &mut self.u10c[side * 7 + weapon]
+        &mut self.tally[side * 7 + weapon]
     }
 
     /// The template of slot `s`.
@@ -428,8 +519,8 @@ impl EnmParam {
         (1..SLOT_CAPACITY).rev().find(|&i| self.slots[i].code == code).map(|i| i as u16)
     }
 
-    /// CEnmParam::Count (0x41a190).
-    fn count(&mut self, s: u16, side: usize) {
+    /// CEnmParam::CountKill (0x41a190).
+    fn count_kill(&mut self, s: u16, side: usize) {
         let part = *self.part(s);
         let slot = &mut self.slots[s as usize];
         slot.flags |= 2;
@@ -447,16 +538,16 @@ impl EnmParam {
             slot.high = part.item.high;
         }
         if part.item.flags & 0x100 != 0 {
-            self.state.flags |= 0x10000;
+            self.state.flags |= state_flags::ARMOR;
             slot.flags |= 8;
         }
         if part.item.flags & 0x20 != 0 {
-            self.state.flags |= 0x20000;
+            self.state.flags |= state_flags::TRANSFORM;
         }
         match slot.kind & 0xff_0000 {
-            0x1_0000 => self.state.sides[side].unknown_02 += 1,
-            0x2_0000 => self.state.sides[side].unknown_04 += 1,
-            0x4_0000 => self.state.sides[side].unknown_08 += 1,
+            0x1_0000 => self.state.sides[side].attack_kills += 1,
+            0x2_0000 => self.state.sides[side].wide_kills += 1,
+            0x4_0000 => self.state.sides[side].rapid_kills += 1,
             _ => {}
         }
         self.slots[s as usize].hits = 0;
@@ -541,13 +632,13 @@ impl EnmParam {
             if rapid > 1 {
                 let side = &mut self.state.sides[side_of(self.slots[s as usize].code)];
                 if side.mode == 0 {
-                    side.unknown_08 += 1;
+                    side.rapid_kills += 1;
                 }
-                add_clamped(&mut self.state.unknown_26, rapid * 7);
-                add_clamped(&mut self.state.unknown_2a, rapid * -5);
+                add_clamped(&mut self.state.toughness, rapid * 7);
+                add_clamped(&mut self.state.aim_speed, rapid * -5);
             }
             if chain == 1 {
-                add_clamped(&mut self.state.unknown_26, rapid);
+                add_clamped(&mut self.state.toughness, rapid);
             }
         }
     }
@@ -609,7 +700,7 @@ impl EnmParam {
             }
             Some(s) => {
                 let slot = self.slots[s as usize];
-                if self.state.flags & 0x10000 != 0 && slot.flags & 8 == 0 {
+                if self.state.flags & state_flags::ARMOR != 0 && slot.flags & 8 == 0 {
                     let limit = if slot.kind & 0x4_0000 != 0 {
                         3
                     } else if slot.kind & 0x200_0000 != 0 {
@@ -656,9 +747,9 @@ impl EnmParam {
             }
         };
         let slot = self.slots[s as usize];
-        self.u10c[slot.weapon as usize] += 1;
-        self.u10c[8] += 1;
-        self.u10c[7] += slot.power as i32;
+        self.tally[slot.weapon as usize] += 1;
+        self.tally[PART_TOTAL] += 1;
+        self.tally[POWER_TOTAL] += slot.power as i32;
     }
 
     /// CEnmParam::CountDestroyed (0x41a730).
@@ -674,7 +765,7 @@ impl EnmParam {
                 };
                 if unique {
                     if kinds[side] == 0 {
-                        self.count(rec.slot, side);
+                        self.count_kill(rec.slot, side);
                         kinds[side] = self.slots[rec.slot as usize].kind;
                         count -= 1;
                         if kinds[0] != 0 && kinds[1] != 0 {
@@ -682,7 +773,7 @@ impl EnmParam {
                         }
                     }
                 } else {
-                    self.count(rec.slot, side);
+                    self.count_kill(rec.slot, side);
                     if kinds[side] == 0 {
                         kinds[side] = self.slots[rec.slot as usize].kind;
                     }
@@ -696,16 +787,16 @@ impl EnmParam {
         count
     }
 
-    /// AddStep: adds step `id` unless the game has it already.
-    fn add_step(&mut self, id: i32) {
-        let count = self.state.step_count as usize;
-        if self.state.step_mask & (1 << id) == 0 {
-            self.state.steps[count][0] = id as i8;
-            let cost = STEP_COSTS[if id < 9 { id as usize } else { 9 }];
-            self.state.steps[count][1] = if count == 0 { cost } else { self.state.steps[count - 1][1].wrapping_add(cost) };
-            self.state.step_count += 1;
-            self.state.step_total += cost as i16;
-            self.state.step_mask |= 1 << id;
+    /// CEnmParam::AddTactic: makes tactic `id` available unless it is already.
+    fn add_tactic(&mut self, id: i32) {
+        let count = self.state.tactic_count as usize;
+        if self.state.tactic_mask & (1 << id) == 0 {
+            self.state.tactics[count][0] = id as i8;
+            let cost = TACTIC_WEIGHTS[if id < 9 { id as usize } else { 9 }];
+            self.state.tactics[count][1] = if count == 0 { cost } else { self.state.tactics[count - 1][1].wrapping_add(cost) };
+            self.state.tactic_count += 1;
+            self.state.tactic_weight += cost as i16;
+            self.state.tactic_mask |= 1 << id;
         }
     }
 
@@ -720,15 +811,15 @@ impl EnmParam {
         }
         let count = (score / 300_000) as i32 + 2;
         let mut add = super::math::ftol(self.player_travel / self.player_samples as f32);
-        let rate = self.unknown_344 as f32 / self.battle_time as f32;
+        let rate = self.aimed_frames as f32 / self.battle_time as f32;
         if add >= 50 {
             add = 50;
         }
-        add_clamped(&mut self.state.unknown_28, add);
-        add_clamped(&mut self.state.unknown_2a, super::math::ftol(rate * 100.0));
-        self.state.unknown_24 = self.state.unknown_24.wrapping_add((self.state.unknown_26 as i32 * 70 / 1024 + 10) as i16);
-        if self.state.unknown_24 > 1200 {
-            self.state.unknown_24 = 1200;
+        add_clamped(&mut self.state.fire_speed, add);
+        add_clamped(&mut self.state.aim_speed, super::math::ftol(rate * 100.0));
+        self.state.body_hit_points = self.state.body_hit_points.wrapping_add((self.state.toughness as i32 * 70 / 1024 + 10) as i16);
+        if self.state.body_hit_points > 1200 {
+            self.state.body_hit_points = 1200;
         }
 
         let mut kinds = [0u32; 2];
@@ -736,7 +827,7 @@ impl EnmParam {
         self.new_weapon = -1;
         let wc = self.state.weapon_count as i32;
         if wc < 6 && (stage <= 1 || (left > 0 && stage >= wc * 2 - 2)) {
-            let u = self.unknown_338;
+            let u = self.dir_frames;
             let order = if u[0] > u[1] && u[0] > u[2] {
                 0
             } else if u[1] > u[0] && u[1] > u[2] {
@@ -774,27 +865,27 @@ impl EnmParam {
         for i in 0..2 {
             let side = &mut self.state.sides[i];
             if side.mode == 0 {
-                if side.unknown_08 as i32 >= kc[2] {
+                if side.rapid_kills as i32 >= kc[2] {
                     side.mode = 4;
-                    side.unknown_08 = 0;
+                    side.rapid_kills = 0;
                 } else {
                     match kinds[i] & 0xff_0000 {
                         0x1_0000 => {
-                            if side.unknown_02 as i32 >= kc[0] {
+                            if side.attack_kills as i32 >= kc[0] {
                                 side.mode = 1;
-                                side.unknown_08 = 0;
-                            } else if side.unknown_04 as i32 >= kc[1] {
+                                side.rapid_kills = 0;
+                            } else if side.wide_kills as i32 >= kc[1] {
                                 side.mode = 2;
-                                side.unknown_08 = 0;
+                                side.rapid_kills = 0;
                             }
                         }
                         0x2_0000 => {
-                            if side.unknown_04 as i32 >= kc[1] {
+                            if side.wide_kills as i32 >= kc[1] {
                                 side.mode = 2;
-                                side.unknown_08 = 0;
-                            } else if side.unknown_02 as i32 >= kc[0] {
+                                side.rapid_kills = 0;
+                            } else if side.attack_kills as i32 >= kc[0] {
                                 side.mode = 1;
-                                side.unknown_08 = 0;
+                                side.rapid_kills = 0;
                             }
                         }
                         _ => {}
@@ -811,81 +902,81 @@ impl EnmParam {
         }
         for side in &mut self.state.sides {
             let (n, d) = match side.mode {
-                1 => (side.unknown_02 as i32, kc[0] + kc[3]),
-                2 => (side.unknown_04 as i32, kc[1] + kc[4]),
-                3 => (side.unknown_08 as i32 + side.unknown_04 as i32 + side.unknown_02 as i32, kc[5] + kc[1] + kc[0]),
-                4 => (side.unknown_02 as i32 + side.unknown_04 as i32, kc[0] + kc[1] + kc[3] + kc[4]),
+                1 => (side.attack_kills as i32, kc[0] + kc[3]),
+                2 => (side.wide_kills as i32, kc[1] + kc[4]),
+                3 => (side.rapid_kills as i32 + side.wide_kills as i32 + side.attack_kills as i32, kc[5] + kc[1] + kc[0]),
+                4 => (side.attack_kills as i32 + side.wide_kills as i32, kc[0] + kc[1] + kc[3] + kc[4]),
                 _ => (0, 1),
             };
             side.progress = if d != 0 { (n * 100 / d) as i16 } else { 0 };
         }
 
         if stage >= 1 {
-            self.add_step(1);
+            self.add_tactic(1);
         }
-        if self.state.flags & 0x10000 != 0 {
-            self.add_step(6);
+        if self.state.flags & state_flags::ARMOR != 0 {
+            self.add_tactic(6);
         }
-        let mut mode0 = self.state.sides[0].mode;
-        let mut mode1 = self.state.sides[1].mode;
+        let mut side0_mode = self.state.sides[0].mode;
+        let mut side1_mode = self.state.sides[1].mode;
         if self.state.sides[0].progress < 65 {
-            mode0 = 0;
+            side0_mode = 0;
         }
         if self.state.sides[1].progress < 65 {
-            mode1 = 0;
+            side1_mode = 0;
         }
-        if self.state.flags & 0x20000 != 0 && (mode0 != 0 || mode1 != 0) {
-            self.add_step(8);
+        if self.state.flags & state_flags::TRANSFORM != 0 && (side0_mode != 0 || side1_mode != 0) {
+            self.add_tactic(8);
         }
-        if mode0 & 1 != 0 {
-            self.add_step(2);
-            if mode1 & 1 != 0 {
-                self.add_step(9);
+        if side0_mode & 1 != 0 {
+            self.add_tactic(2);
+            if side1_mode & 1 != 0 {
+                self.add_tactic(9);
             }
-            if mode1 & 2 != 0 {
-                self.add_step(10);
+            if side1_mode & 2 != 0 {
+                self.add_tactic(10);
             }
-            if mode1 & 4 != 0 {
-                self.add_step(11);
-            }
-        }
-        if mode0 & 2 != 0 {
-            self.add_step(4);
-            self.add_step(5);
-            if mode1 & 1 != 0 {
-                self.add_step(12);
-            }
-            if mode1 & 2 != 0 {
-                self.add_step(13);
-            }
-            if mode1 & 4 != 0 {
-                self.add_step(14);
+            if side1_mode & 4 != 0 {
+                self.add_tactic(11);
             }
         }
-        if mode0 & 4 != 0 {
-            if mode1 & 1 != 0 {
-                self.add_step(15);
+        if side0_mode & 2 != 0 {
+            self.add_tactic(4);
+            self.add_tactic(5);
+            if side1_mode & 1 != 0 {
+                self.add_tactic(12);
             }
-            if mode1 & 2 != 0 {
-                self.add_step(16);
+            if side1_mode & 2 != 0 {
+                self.add_tactic(13);
             }
-            if mode1 & 4 != 0 {
-                self.add_step(17);
+            if side1_mode & 4 != 0 {
+                self.add_tactic(14);
             }
         }
-        if mode1 & 1 != 0 {
-            self.add_step(3);
+        if side0_mode & 4 != 0 {
+            if side1_mode & 1 != 0 {
+                self.add_tactic(15);
+            }
+            if side1_mode & 2 != 0 {
+                self.add_tactic(16);
+            }
+            if side1_mode & 4 != 0 {
+                self.add_tactic(17);
+            }
         }
-        if mode1 & 4 != 0 {
-            self.add_step(7);
+        if side1_mode & 1 != 0 {
+            self.add_tactic(3);
         }
-        if mode1 & 2 != 0 {
-            self.add_step(4);
-            self.add_step(5);
+        if side1_mode & 4 != 0 {
+            self.add_tactic(7);
+        }
+        if side1_mode & 2 != 0 {
+            self.add_tactic(4);
+            self.add_tactic(5);
         }
 
         for i in 0..9 {
-            self.u10c[i] = 0;
+            self.tally[i] = 0;
         }
         let root = self.find_slot(0x4000_0000);
         self.grow(root, 0x4000_0001, 0, rng);
@@ -900,20 +991,20 @@ impl EnmParam {
     pub fn reset(&mut self, rng: &mut Rand) {
         self.state = EnmState::default();
         self.state.color = 0xff00_ff00;
-        self.state.unknown_24 = 200;
+        self.state.body_hit_points = 200;
         self.state.max_depth = 0;
         self.slot_count = 0;
         for s in &mut self.slots {
             s.code = 0;
         }
-        self.state.step_mask = 0x40000;
-        let count = self.state.step_count as usize;
-        self.state.steps[count][0] = 0;
-        let step = STEP_COSTS[0];
-        self.state.steps[count][1] = if count == 0 { step } else { self.state.steps[count - 1][1] + step };
-        self.state.step_total += step as i16;
-        self.state.step_count += 1;
-        self.state.step_mask |= 1;
+        self.state.tactic_mask = 0x40000;
+        let count = self.state.tactic_count as usize;
+        self.state.tactics[count][0] = 0;
+        let step = TACTIC_WEIGHTS[0];
+        self.state.tactics[count][1] = if count == 0 { step } else { self.state.tactics[count - 1][1] + step };
+        self.state.tactic_weight += step as i16;
+        self.state.tactic_count += 1;
+        self.state.tactic_mask |= 1;
         self.alloc_slot(0xc000_0000, 0);
         self.alloc_slot(0x4000_0000, 0);
         self.alloc_slot(0x8000_0000, 0);
@@ -928,11 +1019,11 @@ impl EnmParam {
         let total = kc[5] + kc[1] + kc[0];
         let side0 = self.state.sides[0].score() * 800 / total.max(1);
         out[0] = (self.state.sides[1].score() * 800 / total.max(1)) as i16;
-        out[1] = self.state.unknown_2a;
-        out[2] = super::math::ftos((self.state.unknown_24 as i32 - 200) as f32 * 1.5);
+        out[1] = self.state.aim_speed;
+        out[2] = super::math::ftos((self.state.body_hit_points as i32 - 200) as f32 * 1.5);
         out[3] = side0 as i16;
-        out[4] = self.state.unknown_28;
-        out[5] = self.state.unknown_26;
+        out[4] = self.state.fire_speed;
+        out[5] = self.state.toughness;
         for i in 6..count.min(16) {
             out[i] = self.state.weapon_levels[self.state.weapons[i - 6] as usize];
         }
@@ -980,7 +1071,7 @@ pub fn on_actor_destroyed(cx: &mut Cx, source: Aid, actor: Aid) {
             *level = power;
         }
     }
-    add_clamped(&mut enm.state.unknown_26, -50);
+    add_clamped(&mut enm.state.toughness, -50);
     cx.global.entry.deaths += 1;
     enm.deaths += 1;
 }

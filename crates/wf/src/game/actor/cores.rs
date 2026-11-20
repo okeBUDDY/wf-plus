@@ -1,8 +1,10 @@
-//! The weapons of the cores (controls 40..49) and what they fire: the
-//! laser (43), the homing missile (45) with its smoke (21) and the slow
-//! missile (48). core_controls.cpp.
+//! The weapons of the cores (BulletCoreControl .. StreamCoreControl) and
+//! what they fire: the laser (LaserControl), the homing missile
+//! (HomingMissileControl) with its smoke (SmokeControl) and the slow missile
+//! (MissileControl). core_controls.cpp.
 
-use super::parts::{self, PartWork, init_core, move_part, on_damage, prepare, pw, schedule};
+use super::parts::{self, PartWork, events, init_core, move_part, on_damage, prepare, pw, schedule};
+use super::controls::ids;
 use super::{AnmData, Aid, Param, create, flags, sheet, spawn};
 use crate::game::Cx;
 use crate::game::math::{cos, ftos, sin, sin_table};
@@ -32,18 +34,18 @@ fn tf32(cx: &mut Cx, a: Aid, at: usize) -> &mut f32 {
 }
 
 // Offsets into the tail (from 0x54).
-// Control40Work: interval 0x54, fire_angle 0x56, delay 0x58, speed 0x5c.
-// Control41Work: interval 0x54, count 0x56, spread 0x58, speed 0x5c.
-// Control42Work: laser 0x54, mode 0x58, duration 0x5a, delay 0x5c.
-// Control44Work: interval 0x54, delay 0x56.
-// Control46Work: count 0x54, base 0x56, range 0x58, delay 0x5a.
-// Control47Work: speed 0x54, delay 0x58.
-// Control49Work: start 0x54, sweep 0x58, delay 0x5a, amplitude 0x5c.
+// BulletCoreWork: interval 0x54, fire_angle 0x56, delay 0x58, speed 0x5c.
+// ShellCoreWork: interval 0x54, count 0x56, spread 0x58, speed 0x5c.
+// LaserCoreWork: laser 0x54, mode 0x58, duration 0x5a, delay 0x5c.
+// HomingCoreWork: interval 0x54, delay 0x56.
+// SparkCoreWork: count 0x54, base 0x56, range 0x58, delay 0x5a.
+// MissileCoreWork: speed 0x54, delay 0x58.
+// StreamCoreWork: start 0x54, sweep 0x58, delay 0x5a, amplitude 0x5c.
 
 /// CorePartControl::Setup: the weapon's parameters from `rank`.
 pub fn setup(cx: &mut Cx, id: i16, a: Aid, rank: i32) {
     match id {
-        40 => {
+        ids::BULLET_CORE => {
             let interval = (rank / 10 * 4 + 4) as i16;
             *t16(cx, a, 0) = interval;
             *tf32(cx, a, 8) = 4.0;
@@ -51,9 +53,9 @@ pub fn setup(cx: &mut Cx, id: i16, a: Aid, rank: i32) {
                 *tf32(cx, a, 8) = (rank - 50) as f32 * 0.0625 + 4.0;
             }
             *t16(cx, a, 4) = (50 - rank * 30 / 100) as i16;
-            pw(cx, a).unknown_22 = interval;
+            pw(cx, a).volley_time = interval;
         }
-        41 => {
+        ids::SHELL_CORE => {
             let count = ((rank >> 3) + 1) as i16;
             *t16(cx, a, 2) = count;
             *t16(cx, a, 4) = 0x40;
@@ -63,27 +65,27 @@ pub fn setup(cx: &mut Cx, id: i16, a: Aid, rank: i32) {
             *tf32(cx, a, 8) = rank as f32 * 0.025 + 3.0;
             *t16(cx, a, 0) = (40 - rank * 20 / 100) as i16;
         }
-        42 => {
+        ids::LASER_CORE => {
             *t16(cx, a, 4) = if rank < 33 { 0 } else { (rank >= 66) as i16 + 1 };
             let duration = ((rank / 10 + 3) * 20) as i16;
             *t16(cx, a, 6) = duration;
             *t32(cx, a, 0) = 0;
             *t16(cx, a, 8) = (180 - rank * 90 / 100) as i16;
-            pw(cx, a).unknown_22 = duration + 10;
+            pw(cx, a).volley_time = duration + 10;
         }
-        44 => {
+        ids::HOMING_CORE => {
             let interval = (rank / 35 * 8 + 8) as i16;
             *t16(cx, a, 0) = interval;
             *t16(cx, a, 2) = (120 - rank * 60 / 100) as i16;
-            pw(cx, a).unknown_22 = interval;
+            pw(cx, a).volley_time = interval;
         }
-        46 => {
+        ids::SPARK_CORE => {
             *t16(cx, a, 0) = (rank * 25 / 100 + 5) as i16;
             *t16(cx, a, 4) = ((rank >> 2) + 30) as i16;
             *t16(cx, a, 2) = 25;
             *t16(cx, a, 6) = (120 - rank * 60 / 100) as i16;
         }
-        47 => {
+        ids::MISSILE_CORE => {
             *tf32(cx, a, 0) = rank as f32 * 0.05 + 5.0;
             *t16(cx, a, 4) = (240 - rank * 150 / 100) as i16;
         }
@@ -91,7 +93,7 @@ pub fn setup(cx: &mut Cx, id: i16, a: Aid, rank: i32) {
             let sweep = (rank * 240 / 100 + 120) as i16;
             *t16(cx, a, 4) = sweep;
             *t16(cx, a, 6) = (180 - rank * 120 / 100) as i16;
-            pw(cx, a).unknown_22 = sweep;
+            pw(cx, a).volley_time = sweep;
         }
     }
 }
@@ -102,29 +104,29 @@ pub fn core_create(cx: &mut Cx, id: i16, a: Aid, param: Param) -> bool {
     let Param::Slot(slot) = param else { return true };
     init_core(cx, id, a, slot);
     let pat = match id {
-        40 => 48,
-        41 => 49,
-        42 => 50,
-        44 => 51,
-        46 => 52,
-        47 => 53,
+        ids::BULLET_CORE => 48,
+        ids::SHELL_CORE => 49,
+        ids::LASER_CORE => 50,
+        ids::HOMING_CORE => 51,
+        ids::SPARK_CORE => 52,
+        ids::MISSILE_CORE => 53,
         _ => 54,
     };
     match id {
-        44 => {
-            pw(cx, a).flags &= !0x10000;
+        ids::HOMING_CORE => {
+            pw(cx, a).flags &= !parts::AIMS;
         }
-        49 => {}
+        ids::STREAM_CORE => {}
         _ => {}
     }
     let sprite = cx.pats.get(sheet::SYS, pat);
     cx.actors.set_sprite(a, sprite);
-    cx.actors.get_mut(a).debris = 17;
+    cx.actors.get_mut(a).debris = ids::SMALL_EXPLOSION;
     match id {
-        44 => on_damage(cx, a, 0),
-        49 => {
+        ids::HOMING_CORE => on_damage(cx, a, events::IDLE),
+        ids::STREAM_CORE => {
             let w = pw(cx, a);
-            w.flags &= !0x10000;
+            w.flags &= !parts::AIMS;
             let amplitude = (w.high as i32 - w.low as i32) / 2;
             w.angle = (w.low as i32 + amplitude) as i16;
             let (turret, angle) = (w.turret as Aid, w.angle as u16);
@@ -132,9 +134,9 @@ pub fn core_create(cx: &mut Cx, id: i16, a: Aid, param: Param) -> bool {
             let t = cx.actors.get_mut(turret);
             t.start_angle = angle;
             t.angle = angle as i16;
-            on_damage(cx, a, 0);
+            on_damage(cx, a, events::IDLE);
         }
-        _ => on_damage(cx, a, 6),
+        _ => on_damage(cx, a, events::AIM),
     }
     true
 }
@@ -147,190 +149,190 @@ pub fn core_move(cx: &mut Cx, id: i16, a: Aid) -> bool {
     let (sx, sy) = (cx.actors.get(a).sx(), cx.actors.get(a).sy());
     let slot = pw(cx, a).slot;
     match id {
-        // Control40::OnMove (0x413b00): rounds of bullets.
-        40 => {
-            if pw(cx, a).state_time == 0 {
+        // BulletCoreControl::OnMove (0x413b00): rounds of bullets.
+        ids::BULLET_CORE => {
+            if pw(cx, a).step == 0 {
                 let angle = cx.actors.screen_angle(a);
                 *t16(cx, a, 2) = angle as i16;
                 let interval = *t16(cx, a, 0);
                 let w = pw(cx, a);
-                w.unknown_1e = interval;
-                w.state_time = 1;
+                w.timer = interval;
+                w.step = 1;
             }
-            if pw(cx, a).state_time == 1 {
-                if pw(cx, a).unknown_1e & 3 == 0 {
+            if pw(cx, a).step == 1 {
+                if pw(cx, a).timer & 3 == 0 {
                     let fire_angle = *t16(cx, a, 2) as u16;
                     let speed = *tf32(cx, a, 8);
-                    let d = &mut cx.ctl.desc40;
+                    let d = &mut cx.ctl.bullet_core_desc;
                     d.x = sx;
                     d.y = sy;
                     d.start_angle = fire_angle;
                     d.speed = speed;
-                    d.work = slot;
+                    d.slot = slot;
                     let d = *d;
                     spawn(cx, &d);
                     cx.play_sound(sounds::FIRE_BL);
                 }
                 let w = pw(cx, a);
-                w.unknown_1e -= 1;
-                if w.unknown_1e <= 0 {
+                w.timer -= 1;
+                if w.timer <= 0 {
                     let delay = *t16(cx, a, 4) as i32;
-                    schedule(cx, a, delay, 6);
+                    schedule(cx, a, delay, events::AIM);
                 }
             }
         }
-        // Control41::OnMove (0x413f00): a fan of shells.
-        41 => {
+        // ShellCoreControl::OnMove (0x413f00): a fan of shells.
+        ids::SHELL_CORE => {
             let speed = *tf32(cx, a, 8);
             let count = *t16(cx, a, 2) as i32;
             let spread = *t16(cx, a, 4) as i32;
             let interval = *t16(cx, a, 0) as i32;
-            let d = &mut cx.ctl.desc41;
+            let d = &mut cx.ctl.shell_core_desc;
             d.x = sx;
             d.y = sy;
             d.speed = speed;
-            d.work = slot;
+            d.slot = slot;
             let mut angle = cx.actors.screen_angle(a) as i16 as i32 - (((count - 1) * spread) >> 1);
             for _ in 0..count {
-                cx.ctl.desc41.start_angle = angle as u16;
-                let d = cx.ctl.desc41;
+                cx.ctl.shell_core_desc.start_angle = angle as u16;
+                let d = cx.ctl.shell_core_desc;
                 spawn(cx, &d);
                 angle += spread;
             }
             cx.play_sound(sounds::FIRE_CN);
-            schedule(cx, a, interval, 6);
+            schedule(cx, a, interval, events::AIM);
         }
-        // Control42::OnMove (0x414130): the laser.
-        42 => {
-            if pw(cx, a).state_time == 0 {
-                let laser = create(cx, 43, Some(a), 0.0, -16.0, 6, 0, Param::Actor(a));
+        // LaserCoreControl::OnMove (0x414130): the laser.
+        ids::LASER_CORE => {
+            if pw(cx, a).step == 0 {
+                let laser = create(cx, ids::LASER.into(), Some(a), 0.0, -16.0, 6, 0, Param::Actor(a));
                 *t32(cx, a, 0) = laser.map_or(0, |l| l as i32);
                 let Some(_) = laser else {
-                    on_damage(cx, a, 6);
+                    on_damage(cx, a, events::AIM);
                     return true;
                 };
                 let duration = *t16(cx, a, 6);
                 let w = pw(cx, a);
-                w.state_time += 1;
-                w.unknown_1e = duration;
+                w.step += 1;
+                w.timer = duration;
             }
-            match pw(cx, a).state_time {
+            match pw(cx, a).step {
                 1 => {
                     let w = pw(cx, a);
-                    w.unknown_1e -= 1;
-                    if w.unknown_1e <= 0 {
+                    w.timer -= 1;
+                    if w.timer <= 0 {
                         let laser = *t32(cx, a, 0) as Aid;
                         if cx.actors.get(laser).control {
                             let lid = cx.actors.get(laser).id;
                             super::controls::on_event(cx, lid, laser, 2, 0);
                         }
                         let w = pw(cx, a);
-                        w.state_time += 1;
-                        w.unknown_1e = 10;
+                        w.step += 1;
+                        w.timer = 10;
                         *t32(cx, a, 0) = 0;
                     }
                 }
                 2 => {
                     let w = pw(cx, a);
-                    w.unknown_1e -= 1;
-                    if w.unknown_1e <= 0 {
+                    w.timer -= 1;
+                    if w.timer <= 0 {
                         let delay = *t16(cx, a, 8) as i32;
-                        schedule(cx, a, delay, 6);
+                        schedule(cx, a, delay, events::AIM);
                     }
                 }
                 _ => {}
             }
         }
-        // Control44::OnMove (0x414760): homing missiles.
-        44 => {
-            if pw(cx, a).state_time == 0 {
+        // HomingCoreControl::OnMove (0x414760): homing missiles.
+        ids::HOMING_CORE => {
+            if pw(cx, a).step == 0 {
                 let interval = *t16(cx, a, 0);
                 let w = pw(cx, a);
-                w.unknown_1e = interval;
-                w.state_time += 1;
+                w.timer = interval;
+                w.step += 1;
             }
-            if pw(cx, a).state_time == 1 {
-                if pw(cx, a).unknown_1e & 7 == 0 && cx.actors.count < 700 {
+            if pw(cx, a).step == 1 {
+                if pw(cx, a).timer & 7 == 0 && cx.actors.count < 700 {
                     let angle = cx.actors.screen_angle(a);
-                    create(cx, 45, None, sx, sy, 11, angle, Param::Actor(a));
+                    create(cx, ids::HOMING_MISSILE.into(), None, sx, sy, 11, angle, Param::Actor(a));
                     cx.play_sound(sounds::FIRE_MS);
                 }
                 let w = pw(cx, a);
-                w.unknown_1e -= 1;
-                if w.unknown_1e <= 0 {
+                w.timer -= 1;
+                if w.timer <= 0 {
                     let delay = *t16(cx, a, 2) as i32;
-                    schedule(cx, a, delay, 0);
+                    schedule(cx, a, delay, events::IDLE);
                 }
             }
         }
-        // Control46::OnMove (0x414c70): a spray of sparks.
-        46 => {
+        // SparkCoreControl::OnMove (0x414c70): a spray of sparks.
+        ids::SPARK_CORE => {
             if cx.actors.count < 700 {
                 let count = *t16(cx, a, 0) as i32;
                 let base = *t16(cx, a, 2) as i32;
                 let range = *t16(cx, a, 4) as i32;
                 for _ in 0..count {
-                    cx.ctl.desc46.work = slot;
+                    cx.ctl.spark_core_desc.slot = slot;
                     let x = cx.actors.get(a).sx();
                     let rx = cx.rng.rand() & 7;
-                    cx.ctl.desc46.x = x + rx as f32 - 4.0;
+                    cx.ctl.spark_core_desc.x = x + rx as f32 - 4.0;
                     let y = cx.actors.get(a).sy();
                     let ry = cx.rng.rand() & 7;
-                    cx.ctl.desc46.y = y + ry as f32 - 4.0;
+                    cx.ctl.spark_core_desc.y = y + ry as f32 - 4.0;
                     let sa = cx.actors.screen_angle(a) as i32;
-                    cx.ctl.desc46.start_angle = (sa + (cx.rng.rand() & 0x1f) - 16) as u16;
-                    cx.ctl.desc46.angle = (cx.rng.rand() & 0x3ff) as u16;
-                    cx.ctl.desc46.speed = ((cx.rng.rand() % range + base) as f32) * 0.1;
-                    let d = cx.ctl.desc46;
+                    cx.ctl.spark_core_desc.start_angle = (sa + (cx.rng.rand() & 0x1f) - 16) as u16;
+                    cx.ctl.spark_core_desc.angle = (cx.rng.rand() & 0x3ff) as u16;
+                    cx.ctl.spark_core_desc.speed = ((cx.rng.rand() % range + base) as f32) * 0.1;
+                    let d = cx.ctl.spark_core_desc;
                     spawn(cx, &d);
                 }
                 cx.play_sound(sounds::FIRE_MS);
             }
             let delay = *t16(cx, a, 6) as i32;
-            schedule(cx, a, delay, 6);
+            schedule(cx, a, delay, events::AIM);
         }
-        // Control47::OnMove (0x413cc0): slow missiles.
-        47 => {
+        // MissileCoreControl::OnMove (0x413cc0): slow missiles.
+        ids::MISSILE_CORE => {
             let angle = cx.actors.screen_angle(a);
-            create(cx, 48, None, sx, sy, 11, angle, Param::Actor(a));
+            create(cx, ids::MISSILE.into(), None, sx, sy, 11, angle, Param::Actor(a));
             cx.play_sound(sounds::FIRE_MS);
             let delay = *t16(cx, a, 4) as i32;
-            schedule(cx, a, delay, 6);
+            schedule(cx, a, delay, events::AIM);
         }
-        // Control49::OnMove (0x414f20): a sweeping stream.
+        // StreamCoreControl::OnMove (0x414f20): a sweeping stream.
         _ => {
-            if pw(cx, a).state_time == 0 {
+            if pw(cx, a).step == 0 {
                 let age = cx.actors.get(a).age as i32;
                 *t32(cx, a, 0) = age;
                 let sweep = *t16(cx, a, 4);
                 let w = pw(cx, a);
-                w.unknown_1e = sweep;
-                w.state_time += 1;
+                w.timer = sweep;
+                w.step += 1;
             }
-            if pw(cx, a).state_time == 1 {
+            if pw(cx, a).step == 1 {
                 let start = *t32(cx, a, 0);
                 let amplitude = *t16(cx, a, 8) as f32;
                 let age = cx.actors.get(a).age as i32;
                 let w = *pw(cx, a);
                 let v = ftos(amplitude * sin_table()[(((age - start) * 2) & 0x3ff) as usize]);
                 cx.actors.get_mut(w.turret as Aid).angle = (v as i32 + w.angle as i32) as i16;
-                if w.unknown_1e & 7 == 0 && cx.actors.count < 700 {
+                if w.timer & 7 == 0 && cx.actors.count < 700 {
                     let angle = cx.actors.screen_angle(a);
-                    let d = &mut cx.ctl.desc49;
+                    let d = &mut cx.ctl.stream_core_desc;
                     d.x = sx;
                     d.y = sy;
                     d.start_angle = angle;
-                    d.work = slot;
+                    d.slot = slot;
                     let d = *d;
                     spawn(cx, &d);
                     cx.play_sound(sounds::FIRE_BL);
                 }
                 let w = pw(cx, a);
-                w.unknown_1e -= 1;
-                if w.unknown_1e <= 0 {
-                    on_damage(cx, a, 3);
+                w.timer -= 1;
+                if w.timer <= 0 {
+                    on_damage(cx, a, events::RETURN);
                     let delay = *t16(cx, a, 6);
-                    pw(cx, a).unknown_1e = delay;
+                    pw(cx, a).timer = delay;
                 }
             }
         }
@@ -338,7 +340,7 @@ pub fn core_move(cx: &mut Cx, id: i16, a: Aid) -> bool {
     true
 }
 
-/// Actor::work of control 43.
+/// Actor::work of LaserControl (LaserWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct LaserWork {
@@ -350,16 +352,16 @@ struct LaserWork {
     sound: i16,
 }
 
-/// The animations of the beam by Control42Work::mode (0x45d8xx).
+/// The animations of the beam by LaserCoreWork::mode (0x45d8xx).
 static BEAM_ANIMS: [AnmData; 3] = [
-    AnmData { set: sheet::ADD, script: &[17, 40, 18, -1] },
-    AnmData { set: sheet::ADD, script: &[17, 40, 19, -1] },
-    AnmData { set: sheet::ADD, script: &[17, 40, 20, -1] },
+    AnmData { pat_file: sheet::ADD, script: &[17, 40, 18, -1] },
+    AnmData { pat_file: sheet::ADD, script: &[17, 40, 19, -1] },
+    AnmData { pat_file: sheet::ADD, script: &[17, 40, 20, -1] },
 ];
 /// The width of the beam by mode (g_beam_scales).
 const BEAM_SCALES: [f32; 3] = [1.0, 1.5, 2.0];
 
-/// Control43::OnCreate (0x414210): the beam of control 42.
+/// LaserControl::OnCreate (0x414210): the beam of a LaserCoreControl.
 pub fn laser_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let Param::Actor(owner) = param else { return false };
     {
@@ -372,7 +374,7 @@ pub fn laser_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     act.team = 0;
     let owner_slot = pw(cx, owner).slot;
     let mode = (*t16(cx, owner, 4)).clamp(0, 2) as usize;
-    cx.ctl.beam_desc.work = owner_slot;
+    cx.ctl.beam_desc.slot = owner_slot;
     cx.ctl.beam_desc.y = -24.0;
     cx.ctl.beam_desc.parent = Some(a);
     cx.ctl.beam_desc.sprite = cx.actors.play(&BEAM_ANIMS[mode]);
@@ -418,7 +420,7 @@ pub fn laser_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     true
 }
 
-/// Control43::OnDestroy (0x414430).
+/// LaserControl::OnDestroy (0x414430).
 pub fn laser_destroy(cx: &mut Cx, a: Aid) {
     let sound = cx.actors.w::<LaserWork>(a).sound;
     release_sound(cx, sound);
@@ -434,7 +436,7 @@ fn release_sound(cx: &mut Cx, sound: i16) {
     }
 }
 
-/// Control43::OnMove (0x414480).
+/// LaserControl::OnMove (0x414480).
 pub fn laser_move(cx: &mut Cx, a: Aid) -> bool {
     let w = *cx.actors.w::<LaserWork>(a);
     let offset = -6 - (cx.rng.rand() & 0x1f);
@@ -462,10 +464,10 @@ pub fn laser_move(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control43::OnEvent (0x414550): event 2 ends the beam.
-pub fn laser_event(cx: &mut Cx, a: Aid, x: i32) {
+/// LaserControl::OnEvent (0x414550): event 2 ends the beam.
+pub fn laser_event(cx: &mut Cx, a: Aid, event: i32) {
     let w = *cx.actors.w::<LaserWork>(a);
-    if x != 2 || w.sound == 2 {
+    if event != 2 || w.sound == 2 {
         return;
     }
     let fade = cx.pats.get(sheet::ADD, 17);
@@ -484,10 +486,10 @@ pub fn laser_event(cx: &mut Cx, a: Aid, x: i32) {
     w.sound = 2;
 }
 
-/// Actor::work of control 45.
+/// Actor::work of HomingMissileControl (HomingMissileWork).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct MissileWork {
+struct HomingMissileWork {
     slot: u32,
     flags: u32,
     launcher: u32,
@@ -495,48 +497,48 @@ struct MissileWork {
     _pad: i16,
 }
 
-/// Control45::OnCreate (0x414830): a homing missile of control 44.
-pub fn missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
+/// HomingMissileControl::OnCreate (0x414830): a homing missile of a HomingCoreControl.
+pub fn homing_missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let Param::Actor(launcher) = param else { return false };
     let lw = *pw(cx, launcher);
     // Prepare() takes the launcher's work as the slot: its first field.
-    prepare(cx, 45, a, lw.slot as u16);
+    prepare(cx, ids::HOMING_MISSILE, a, lw.slot as u16);
     let sprite = cx.pats.get(sheet::SYS, 72);
     cx.actors.set_sprite(a, sprite);
     let act = cx.actors.get_mut(a);
     act.team = 0x61;
-    act.debris = 17;
+    act.debris = ids::SMALL_EXPLOSION;
     act.speed = lw.rank as f32 * 0.014_285_714 + 4.0;
     act.angle = act.start_angle as i16;
-    let w = cx.actors.w::<MissileWork>(a);
+    let w = cx.actors.w::<HomingMissileWork>(a);
     w.launcher = launcher as u32;
     w.slot = lw.slot;
     w.homing = (lw.rank as i32 * 180 / 100 + 40) as i16;
     true
 }
 
-/// Control45::OnMove (0x414ac0).
-pub fn missile_move(cx: &mut Cx, a: Aid) -> bool {
+/// HomingMissileControl::OnMove (0x414ac0).
+pub fn homing_missile_move(cx: &mut Cx, a: Aid) -> bool {
     let age = cx.actors.get(a).age;
-    if age > 30 && cx.actors.w::<MissileWork>(a).homing > 0 {
+    if age > 30 && cx.actors.w::<HomingMissileWork>(a).homing > 0 {
         let player = cx.game.player;
         cx.actors.turn_to(a, player, 8);
         let act = cx.actors.get_mut(a);
         act.start_angle = act.angle as u16;
-        cx.actors.w::<MissileWork>(a).homing -= 1;
+        cx.actors.w::<HomingMissileWork>(a).homing -= 1;
     }
     if parts::is_off_screen(cx, a) {
-        cx.actors.w::<MissileWork>(a).homing = 0;
+        cx.actors.w::<HomingMissileWork>(a).homing = 0;
     }
     if age & 1 != 0 {
         let (x, y) = (cx.actors.get(a).sx(), cx.actors.get(a).sy());
-        create(cx, 21, None, x, y, 12, 0, Param::None);
+        create(cx, ids::SMOKE.into(), None, x, y, 12, 0, Param::None);
     }
     true
 }
 
-/// Control48::OnCreate (0x413d50): a slow missile of control 47.
-pub fn slow_missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
+/// MissileControl::OnCreate (0x413d50): a slow missile of a MissileCoreControl.
+pub fn missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     let Param::Actor(launcher) = param else { return false };
     let speed = *tf32(cx, launcher, 0);
     cx.actors.w::<[u32; 3]>(a)[2] = launcher as u32;
@@ -544,14 +546,14 @@ pub fn slow_missile_create(cx: &mut Cx, a: Aid, param: Param) -> bool {
     cx.actors.set_sprite(a, sprite);
     let act = cx.actors.get_mut(a);
     act.team = 0x61;
-    act.debris = 19;
+    act.debris = ids::LARGE_EXPLOSION;
     act.angle = act.start_angle as i16;
     act.acceleration = -0.05;
     act.speed = speed;
     true
 }
 
-/// Actor::work of control 21, the smoke of a missile.
+/// Actor::work of SmokeControl (SmokeWork), the smoke of a missile.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SmokeWork {
@@ -565,7 +567,7 @@ const SMOKE_COLORS: [u32; 21] = [
     0xffff_ffff, 0, 0xfffe_fbb2, 0, 0xfffe_f97f, 0, 0, 0, 0xfffe_c15d, 0, 0, 0, 0xffff_8337, 0, 0, 0, 0xffc0_3d19, 0, 0, 0, 0,
 ];
 
-/// Control21::OnCreate (0x4148d0).
+/// SmokeControl::OnCreate (0x4148d0).
 pub fn smoke_create(cx: &mut Cx, a: Aid) -> bool {
     let sprite = cx.pats.get(sheet::ADD, 24);
     cx.actors.set_sprite(a, sprite);
@@ -581,7 +583,7 @@ pub fn smoke_create(cx: &mut Cx, a: Aid) -> bool {
     true
 }
 
-/// Control21::OnMove (0x414940).
+/// SmokeControl::OnMove (0x414940).
 pub fn smoke_move(cx: &mut Cx, a: Aid) -> bool {
     let age = cx.actors.get(a).age;
     if age < 21 {

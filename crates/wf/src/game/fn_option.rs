@@ -269,11 +269,11 @@ const REMAPS: [Item; 8] = [
 /// cGlobal::SetEffectVolume (0x41c6a0), SetMusicVolume (0x41c6c0).
 pub fn set_effect_volume(cx: &mut Cx, volume: f32) {
     cx.global.effect_volume = volume;
-    cx.sound.set_group_volume(volume, Some(0));
+    cx.sound.set_group_volume(volume, Some(sounds::SOUND_EFFECTS));
 }
 pub fn set_music_volume(cx: &mut Cx, volume: f32) {
     cx.global.music_volume = volume;
-    cx.sound.set_group_volume(volume, Some(1));
+    cx.sound.set_group_volume(volume, Some(sounds::SOUND_MUSIC));
 }
 
 /// Apply (0x41c730): the options to the game.
@@ -923,7 +923,7 @@ impl Stage for FnOption {
                 Self::play(cx, sounds::SWITCH);
             }
             Kind::Action => {
-                if pressed & (input::TRIGGER * 0xb) != 0 && c == Item::Exit as usize {
+                if pressed & (input::SHOT | input::SLOW | input::WEAPON_SELECT) != 0 && c == Item::Exit as usize {
                     self.exit(cx);
                 }
             }

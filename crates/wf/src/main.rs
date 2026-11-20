@@ -54,6 +54,8 @@ struct Options {
     guide: Option<platform::Device>,
     /// Measure the uncapped frame rate for this many seconds (headless).
     bench: Option<f64>,
+    /// Per-frame costs over --frames ticks, written as CSV (the perf bench).
+    perf: Option<PathBuf>,
     /// Headless input: keys held on given frames.
     /// Keys held over frame ranges (FRAME or FIRST-LAST, inclusive).
     script: Vec<(u32, u32, Key)>,
@@ -88,7 +90,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|touch]\n          [--headless [--bench SECONDS] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|touch]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -109,6 +111,7 @@ fn options() -> Options {
         bench: None,
         arena: None,
         guide: None,
+        perf: None,
         script: Vec::new(),
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
         viewer: false,
@@ -153,6 +156,7 @@ fn options() -> Options {
                     _ => usage(),
                 })
             }
+            "--perf" => o.perf = Some(PathBuf::from(value())),
             "--bench" => o.bench = Some(value().parse().unwrap_or_else(|_| usage())),
             "--script" => {
                 for item in value().split(',') {
@@ -328,6 +332,9 @@ fn run_headless(o: &Options) -> Result<(), String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
     let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &game.cx.art.pack);
+    if let Some(path) = &o.perf {
+        return perf(o, &mut game, &mut renderer, &mut input, size, path);
+    }
     let mut snaps = wf_engine::app::run_ticks(&mut game, &mut input, o.frames, |f| script_input(o, f));
     if let Some(seconds) = o.bench {
         let (fps, ticks) = wf_engine::app::bench(&mut game, &mut renderer, size, seconds, &mut input);
@@ -343,6 +350,113 @@ fn run_headless(o: &Options) -> Result<(), String> {
         let rgba = renderer.render_to_rgba_with(size.0, size.1, |r, view| scaler.render(r, frame, view, size, scale));
         save_png(path, size.0, size.1, &rgba)?;
         println!("saved {}", path.display());
+    }
+    Ok(())
+}
+
+/// The perf bench: runs --frames ticks on the script (or a replay),
+/// rendering and waiting for every one at `size`, and writes each frame's
+/// costs to `path` as CSV; prints the means, the worst frames and the
+/// busiest frame's counts.
+fn perf(
+    o: &Options,
+    game: &mut WfGame,
+    renderer: &mut gfx::gpu::Renderer,
+    input: &mut wf_engine::input::InputSystem,
+    size: (u32, u32),
+    path: &std::path::Path,
+) -> Result<(), String> {
+    use std::fmt::Write as _;
+    use wf_engine::app::Game;
+    renderer.collect = true;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
+    let mut counter = gfx::gpu::Renderer::new_counting(device, queue, &game.cx.art.pack);
+    let mut csv = String::from(
+        "visits_m,frame,update_us,draw_us,build_us,dynamic_us,upload_us,submit_us,gpu_us,draws,instances,draw_calls,pipelines,upload_bytes,dynamic_rebuilt,quad_mpx,layer_mpx,curve_mpx,noise_mpx\n",
+    );
+    let mut rows: Vec<[f64; 17]> = Vec::new();
+    // Render every `every`-th frame from `from` on (the GPU of a headless
+    // run may be a slow software one).
+    let every: u32 = std::env::var("WF_PERF_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    let from: u32 = std::env::var("WF_PERF_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut busiest: (f64, Vec<(u32, (u32, f64))>) = (0.0, Vec::new());
+    let (mut visits_sum, mut visits_max) = (0.0f64, 0.0f64);
+    for f in 0..o.frames {
+        game.sync_bindings(&mut input.bindings);
+        let layout = gfx::Layout::new(game.cx.draw.arena, size);
+        let actions = input.update(&script_input(o, f), &layout);
+        if !game.tick(&actions) || f < from || !(f - from).is_multiple_of(every) {
+            if !game.running() {
+                break;
+            }
+            continue;
+        }
+        renderer.time = game.cx.app.frame_count as f32 / 58.8;
+        let t = std::time::Instant::now();
+        renderer.render_offscreen(&game.cx.draw, size);
+        let total = t.elapsed().as_secs_f64() * 1e6;
+        let s = renderer.stats;
+        counter.time = renderer.time;
+        let visits = counter.count_visits(&game.cx.draw, size) / 1e6;
+        visits_sum += visits;
+        visits_max = visits_max.max(visits);
+        let _ = write!(csv, "{visits:.2},");
+        if s.curve_px > busiest.0 {
+            let mut v: Vec<(u32, (u32, f64))> = renderer.by_sprite.iter().map(|(&k, &v)| (k, v)).collect();
+            v.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+            busiest = (s.curve_px, v);
+        }
+        let gpu = total - s.build_us - s.upload_us - s.submit_us;
+        let r = [
+            f as f64,
+            game.cx.app.update_us,
+            game.cx.app.draw_us,
+            s.build_us,
+            s.dynamic_us,
+            s.upload_us,
+            s.submit_us,
+            gpu,
+            s.draws as f64,
+            s.instances as f64,
+            s.draw_calls as f64,
+            s.pipeline_changes as f64,
+            s.upload_bytes as f64,
+            s.dynamic_rebuilt as f64,
+            s.quad_px / 1e6,
+            s.layer_px / 1e6,
+            s.curve_px / 1e6,
+        ];
+        let _ = writeln!(csv, "{},{:.4}", r.map(|v| format!("{v:.1}")).join(","), s.noise_px / 1e6);
+        rows.push(r);
+        if !game.running() {
+            break;
+        }
+    }
+    std::fs::write(path, csv).map_err(|e| e.to_string())?;
+    let n = rows.len().max(1) as f64;
+    let names = ["update", "draw", "build", "dynamic", "upload", "submit", "gpu"];
+    let mut line = format!("perf {}x{}, {} frames: mean us", size.0, size.1, rows.len());
+    for (i, name) in names.iter().enumerate() {
+        let _ = write!(line, " {name} {:.0}", rows.iter().map(|r| r[i + 1]).sum::<f64>() / n);
+    }
+    println!("{line}");
+    println!("curve visits (measured): mean {:.1} M, max {:.1} M per frame", visits_sum / n, visits_max);
+    let cpu = |r: &[f64; 17]| r[1] + r[2] + r[3] + r[5] + r[6];
+    let mut worst: Vec<&[f64; 17]> = rows.iter().collect();
+    worst.sort_by(|a, b| (cpu(b) + b[7]).total_cmp(&(cpu(a) + a[7])));
+    for r in worst.iter().take(3) {
+        println!(
+            "worst frame {}: cpu {:.0} us (update {:.0} draw {:.0} build {:.0} dynamic {:.0} upload {:.0} submit {:.0}) gpu {:.0} us; draws {} instances {} calls {} pipelines {} upload {} B rebuilt {}; quad {:.2} Mpx layer {:.2} Mpx curve {:.1} Mpx",
+            r[0], cpu(r), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]
+        );
+    }
+    println!("busiest frame by sprite (curve Mpx, draws):");
+    for (id, (count, px)) in busiest.1.iter().take(12) {
+        let name = if *id == u32::MAX { "(dynamic shapes)" } else { game.cx.art.name(gfx::SpriteId(*id)) };
+        let layers = if *id == u32::MAX { Vec::new() } else { renderer.layer_costs(*id) };
+        let desc: Vec<String> = layers.iter().map(|(c, n, b)| format!("{c:.0}{}@{:.0}x{:.0}", if *n { "n" } else { "" }, b[2] - b[0], b[3] - b[1])).collect();
+        println!("  {name:32} {:8.1} {count:4}  layers {}", px / 1e6, desc.join(" "));
     }
     Ok(())
 }

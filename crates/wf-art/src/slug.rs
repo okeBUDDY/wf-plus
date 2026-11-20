@@ -72,6 +72,7 @@ type Item = ([f32; 4], [f32; 4], Curve, [f32; 4]);
 
 /// Appends a layer's curves and bands to `t`.
 pub fn add_layer(t: &mut Target, edges: Edges) -> LayerGeometry {
+    let fill = matches!(edges, Edges::Fill(_));
     let items: Vec<Item> = match edges {
         Edges::Fill(curves) => curves
             .iter()
@@ -155,15 +156,28 @@ pub fn add_layer(t: &mut Target, edges: Edges) -> LayerGeometry {
     for list in &mut vlists {
         list.sort_by(|&a, &b| items[b].3[3].total_cmp(&items[a].3[3]));
     }
+    // A fill's band also lists its curves by ascending minimum x (y), right
+    // after: a pixel nearer the low side casts its ray that way, past fewer
+    // curves.
+    let reverse = |list: &Vec<usize>, axis: usize| {
+        let mut r = list.clone();
+        r.sort_by(|&a, &b| items[a].3[axis].total_cmp(&items[b].3[axis]));
+        r
+    };
+    let lists: Vec<(Vec<usize>, Option<Vec<usize>>)> = hlists
+        .iter()
+        .map(|l| (l.clone(), fill.then(|| reverse(l, 0))))
+        .chain(vlists.iter().map(|l| (l.clone(), fill.then(|| reverse(l, 1)))))
+        .collect();
 
     let band_base = t.band_base + t.bands.len() as u32;
     let mut next = band_base + (hbands + vbands) as u32;
-    for list in hlists.iter().chain(vlists.iter()) {
+    for (list, low) in &lists {
         t.bands.push([list.len() as u32, next]);
-        next += list.len() as u32;
+        next += (list.len() * if low.is_some() { 2 } else { 1 }) as u32;
     }
-    for list in hlists.iter().chain(vlists.iter()) {
-        for &i in list {
+    for (list, low) in &lists {
+        for &i in list.iter().chain(low.iter().flatten()) {
             t.bands.push([curve_index[i], 0]);
         }
     }

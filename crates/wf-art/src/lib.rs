@@ -14,7 +14,9 @@
 //!     (`(curve count, first ref texel)`), then the curve references
 //!     (`(curve texel index, 0)`). Horizontal bands are sorted by descending
 //!     maximum x and vertical bands by descending maximum y, as the Slug
-//!     algorithm expects for its early exit;
+//!     algorithm expects for its early exit; a fill layer's band then lists
+//!     the same curves again by ascending minimum x (y), for the rays cast
+//!     the other way;
 //!   * the layer texture (`Rgba32Uint`, [`LAYER_TEX_WIDTH`] texels a row):
 //!     [`LAYER_TEXELS`] texels per layer, see [`GpuLayer`];
 //!   * the ramp texture (`Rgba8Unorm`, [`RAMP_WIDTH`] texels a row): one row per
@@ -36,7 +38,7 @@ pub mod shape;
 pub mod slug;
 
 pub const MAGIC: [u8; 4] = *b"WFA1";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 pub const CURVE_TEX_WIDTH: u32 = 4096;
 pub const BAND_TEX_WIDTH: u32 = 4096;

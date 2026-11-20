@@ -48,11 +48,24 @@ pub struct AppState {
     pub stage_frames: u32,
     stage_done: bool,
     stage_next: Option<Box<dyn Stage>>,
+    /// The last frame's CPU microseconds moving and drawing (the perf
+    /// bench; never game state).
+    pub update_us: f64,
+    pub draw_us: f64,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        AppState { flags: 0, frame_count: 0, time_moves: true, stage_frames: 0, stage_done: false, stage_next: None }
+        AppState {
+            flags: 0,
+            frame_count: 0,
+            time_moves: true,
+            stage_frames: 0,
+            stage_done: false,
+            stage_next: None,
+            update_us: 0.0,
+            draw_us: 0.0,
+        }
     }
 }
 
@@ -151,6 +164,7 @@ impl App {
             }
         }
 
+        let t0 = std::time::Instant::now();
         if cx.app.flags & AppFlags::TIME_STOPPED != 0 {
             task::remove_up_to(cx, ListId::Tasks, 0);
             task::remove_up_to(cx, ListId::Overlays, 0);
@@ -159,10 +173,13 @@ impl App {
             stage.update(cx);
             task::remove_up_to(cx, ListId::Overlays, 2);
         }
+        let t1 = std::time::Instant::now();
         begin_frame(cx, stage.is_menu());
         task::run_all(cx, ListId::Tasks);
         stage.draw(cx);
         task::run_all(cx, ListId::Overlays);
+        cx.app.update_us = (t1 - t0).as_secs_f64() * 1e6;
+        cx.app.draw_us = t1.elapsed().as_secs_f64() * 1e6;
 
         if cx.app.flags & AppFlags::RESET != 0 {
             cx.app.flags |= AppFlags::START_TIME;

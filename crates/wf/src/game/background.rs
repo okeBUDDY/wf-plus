@@ -1,13 +1,14 @@
 //! BackgroundGrid (background.cpp, vtable 0x452878): the scrolling grid
 //! behind a game. One tile of 10 x 10 squares, drawn four times around the
 //! scroll position so that it wraps. Untextured lines (DrawPoints with
-//! D3DPT_LINELIST after ClearTexture): the cooked `shape/grid_tile`.
+//! D3DPT_LINELIST after ClearTexture): the tile's twenty lines
+//! (`GRID_SQUARES` each way), each drawn as the cooked `shape/grid_line`.
 
 use super::Cx;
 use super::input;
 use super::math::sin;
 use super::task::Task;
-use crate::shape_table::GRID_HALF_TILE as HALF_TILE;
+use crate::shape_table::{GRID_HALF_TILE as HALF_TILE, GRID_SIZE, GRID_SQUARES};
 use crate::gfx::{Argb, Blend, Pass, Transform};
 
 /// The interpolation keys of the grid's tiles (above any actor's).
@@ -42,7 +43,7 @@ impl BackgroundGrid {
 impl Task for BackgroundGrid {
     /// Initialize (0x415b90).
     fn initialize(&mut self, cx: &mut Cx) -> bool {
-        // The tile's lines are the cooked shape (shape_table::GRID_TILE).
+        // The tile: twenty lines, drawn in Run.
         self.tiles = [[-HALF_TILE, -HALF_TILE], [HALF_TILE, -HALF_TILE], [-HALF_TILE, HALF_TILE], [HALF_TILE, HALF_TILE]];
         self.x = 0.0;
         self.y = 0.0;
@@ -96,7 +97,20 @@ impl Task for BackgroundGrid {
             let mut t = Self::rotate_by(&t, -(self.angle as i32));
             t.m[2][0] += cx.arena.center_x();
             t.m[2][1] += 240.0;
-            cx.draw.sprite(cx.art.shapes.grid_tile, &t, self.color, Blend::Normal);
+            // The rows, then the columns (the line turned a quarter).
+            for i in 0..2 * GRID_SQUARES {
+                let v = ((i % GRID_SQUARES) * GRID_SIZE) as f32 - HALF_TILE;
+                let line = if i < GRID_SQUARES {
+                    Transform::translation(0.0, v)
+                } else {
+                    let mut l = Transform::IDENTITY;
+                    l.m[0] = [0.0, 1.0, 0.0];
+                    l.m[1] = [-1.0, 0.0, 0.0];
+                    l.m[2][0] = v;
+                    l
+                };
+                cx.draw.sprite(cx.art.shapes.grid_line, &Transform::multiply(&t, &line), self.color, Blend::Normal);
+            }
         }
         cx.draw.set_key(0);
         cx.draw.set_pass(Pass::Arena);

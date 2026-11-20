@@ -33,25 +33,14 @@ pub const CHAR_CURSOR: [[f32; 2]; 4] = [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0
 pub const SHOCKWAVE: [[f32; 2]; 3] = [[-18.0, -960.0], [18.0, -960.0], [-2.0, 0.0]];
 
 /// The background grid's tile (BackgroundGrid::Initialize, 0x415b90): 10 x
-/// 10 squares of 96, centred, as a line list: the rows, then the columns.
+/// 10 squares of 96, centred: ten rows and ten columns of lines.
 pub const GRID_SQUARES: i32 = 10;
 pub const GRID_SIZE: i32 = 96;
 pub const GRID_HALF_TILE: f32 = (GRID_SQUARES * GRID_SIZE / 2) as f32;
-pub const GRID_TILE: [[f32; 2]; 40] = grid_tile();
-
-const fn grid_tile() -> [[f32; 2]; 40] {
-    let mut p = [[0.0f32; 2]; 40];
-    let mut i = 0;
-    while i < GRID_SQUARES as usize {
-        let v = (i as i32 * GRID_SIZE) as f32 - GRID_HALF_TILE;
-        p[2 * i] = [-GRID_HALF_TILE, v];
-        p[2 * i + 1] = [GRID_HALF_TILE, v];
-        p[20 + 2 * i] = [v, -GRID_HALF_TILE];
-        p[20 + 2 * i + 1] = [v, GRID_HALF_TILE];
-        i += 1;
-    }
-    p
-}
+/// One line of the grid tile, across it (drawn ten times each way per
+/// tile): one sprite per line keeps each pixel's rays to the few curves of
+/// its own line, where the whole tile's bands held every crossing line.
+pub const GRID_LINE: [[f32; 2]; 2] = [[-GRID_HALF_TILE, 0.0], [GRID_HALF_TILE, 0.0]];
 
 /// The screen fade's rectangle (Sprite, sprite.cpp): the whole 640x480 screen.
 pub const SCREEN: [[f32; 2]; 4] = [[0.0, 0.0], [640.0, 0.0], [0.0, 480.0], [640.0, 480.0]];
@@ -72,6 +61,6 @@ pub const SHAPES: &[ShapeDef] = &[
     def("name_cursor", Primitive::LineList, &NAME_CURSOR, 1.0),
     def("char_cursor", Primitive::TriangleStrip, &CHAR_CURSOR, 1.0),
     def("shockwave", Primitive::TriangleStrip, &SHOCKWAVE, 1.0),
-    def("grid_tile", Primitive::LineList, &GRID_TILE, 1.0),
+    def("grid_line", Primitive::LineList, &GRID_LINE, 1.0),
     def("screen", Primitive::TriangleStrip, &SCREEN, 1.0),
 ];

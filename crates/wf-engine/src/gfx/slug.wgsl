@@ -154,6 +154,11 @@ fn load_curve(ci: u32, rc: vec2<f32>, stroke: bool, m0: vec4<f32>, half_px: f32)
     return q;
 }
 
+// The perf bench's counting renderer: the fragment outputs the curves its
+// rays visited (in 64ths) instead of a colour.
+override count_visits: bool = false;
+var<private> visits: f32;
+
 fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f32) -> f32 {
     let t0 = layer_texel(layer, 0u);
     let bbox = bitcast<vec4<f32>>(t0);
@@ -170,16 +175,28 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f
     // no early exit for them.
     let stroke = (t1.w & FLAG_STROKE) != 0u;
 
+    // A fill's ray goes to the nearer side of the layer's box: past the
+    // curves sorted from that side (the band's second list), and stops at
+    // the first curve wholly beyond the pixel's filter. The far side's
+    // crossings sum to the near side's (a closed outline crosses the line
+    // up as often as down), so the coverage is the same either way.
     var xcov = 0.0;
     var xwgt = 0.0;
     let hb = u32(clamp(i32(floor((rc.y - bbox.y) * band_scale.y)), 0, i32(hbands) - 1));
     let hh = band(band_base + hb);
+    let hlow = !stroke && rc.x < (bbox.x + bbox.z) * 0.5;
+    let hfirst = select(hh.y, hh.y + hh.x, hlow);
     for (var k = 0u; k < hh.x; k++) {
-        let q = load_curve(band(hh.y + k).x, rc, stroke, m0, half_px);
+        visits += 1.0;
+        let q = load_curve(band(hfirst + k).x, rc, stroke, m0, half_px);
         let p1 = q.p1;
         let p2 = q.p2;
         let p3 = q.p3;
-        if (max(max(p1.x, p2.x), p3.x) * ppe.x < -0.5) {
+        if (hlow) {
+            if (min(min(p1.x, p2.x), p3.x) * ppe.x > 0.5) {
+                break;
+            }
+        } else if (max(max(p1.x, p2.x), p3.x) * ppe.x < -0.5) {
             if (stroke) {
                 continue;
             }
@@ -189,11 +206,11 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f
         if (code != 0u) {
             let r = solve(p1, p2, p3) * ppe.x;
             if ((code & 1u) != 0u) {
-                xcov += clamp(r.x + 0.5, 0.0, 1.0);
+                xcov += select(clamp(r.x + 0.5, 0.0, 1.0), -clamp(0.5 - r.x, 0.0, 1.0), hlow);
                 xwgt = max(xwgt, clamp(1.0 - abs(r.x) * 2.0, 0.0, 1.0));
             }
             if (code > 1u) {
-                xcov -= clamp(r.y + 0.5, 0.0, 1.0);
+                xcov -= select(clamp(r.y + 0.5, 0.0, 1.0), -clamp(0.5 - r.y, 0.0, 1.0), hlow);
                 xwgt = max(xwgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0));
             }
         }
@@ -203,13 +220,20 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f
     var ywgt = 0.0;
     let vb = u32(clamp(i32(floor((rc.x - bbox.x) * band_scale.x)), 0, i32(vbands) - 1));
     let vh = band(band_base + hbands + vb);
+    let vlow = !stroke && rc.y < (bbox.y + bbox.w) * 0.5;
+    let vfirst = select(vh.y, vh.y + vh.x, vlow);
     for (var k = 0u; k < vh.x; k++) {
-        let q = load_curve(band(vh.y + k).x, rc, stroke, m0, half_px);
+        visits += 1.0;
+        let q = load_curve(band(vfirst + k).x, rc, stroke, m0, half_px);
         // Swap the axes: the vertical ray is the horizontal case on (y, x).
         let p1 = q.p1.yx;
         let p2 = q.p2.yx;
         let p3 = q.p3.yx;
-        if (max(max(p1.x, p2.x), p3.x) * ppe.y < -0.5) {
+        if (vlow) {
+            if (min(min(p1.x, p2.x), p3.x) * ppe.y > 0.5) {
+                break;
+            }
+        } else if (max(max(p1.x, p2.x), p3.x) * ppe.y < -0.5) {
             if (stroke) {
                 continue;
             }
@@ -220,11 +244,11 @@ fn coverage(rc: vec2<f32>, ppe: vec2<f32>, layer: u32, m0: vec4<f32>, half_px: f
             let r = solve(p1, p2, p3) * ppe.y;
             // The swap mirrors the plane, so the winding sign flips.
             if ((code & 1u) != 0u) {
-                ycov -= clamp(r.x + 0.5, 0.0, 1.0);
+                ycov -= select(clamp(r.x + 0.5, 0.0, 1.0), -clamp(0.5 - r.x, 0.0, 1.0), vlow);
                 ywgt = max(ywgt, clamp(1.0 - abs(r.x) * 2.0, 0.0, 1.0));
             }
             if (code > 1u) {
-                ycov += clamp(r.y + 0.5, 0.0, 1.0);
+                ycov += select(clamp(r.y + 0.5, 0.0, 1.0), -clamp(0.5 - r.y, 0.0, 1.0), vlow);
                 ywgt = max(ywgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0));
             }
         }
@@ -339,7 +363,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let first = in.layers.x;
     let count = in.layers.y;
     let compose_max = in.layers.z == 1u;
-    for (var i = 0u; i < count; i++) {
+    // "Over" composes front to back, top layer first, and stops once the
+    // pixel is opaque (to well under an 8-bit step): the layers below can
+    // no longer show, so their coverage is never computed.
+    for (var j = 0u; j < count; j++) {
+        let i = select(j, count - 1u - j, !compose_max);
         let layer = first + i;
         let cov = coverage(rc, ppe, layer, in.m0, bitcast<f32>(in.layers.w) * 0.5);
         if (cov <= 0.0) {
@@ -350,8 +378,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (compose_max) {
             out = max(out, p);
         } else {
-            out = p + out * (1.0 - p.a);
+            out += p * (1.0 - out.a);
+            if (out.a >= 1.0 - 1.0 / 2048.0) {
+                break;
+            }
         }
+    }
+    if (count_visits) {
+        return vec4<f32>(visits / 64.0, 0.0, 0.0, 0.0);
     }
     // Tint (the D3D diffuse colour modulates the texel, straight alpha).
     return vec4<f32>(out.rgb * in.tint.rgb * in.tint.a, out.a * in.tint.a);
@@ -391,5 +425,8 @@ fn fs_bitmap(in: BitmapOut) -> @location(0) vec4<f32> {
     let px_per_texel = 1.0 / max(fwidth(t), vec2<f32>(1.0 / 65536.0));
     let uv = (floor(t) + 0.5 + clamp((fract(t) - 0.5) * px_per_texel, vec2<f32>(-0.5), vec2<f32>(0.5))) / size;
     let c = textureSampleLevel(bitmap_tex, bitmap_sampler, uv, 0.0);
+    if (count_visits) {
+        return vec4<f32>(0.0);
+    }
     return vec4<f32>(c.rgb * in.tint.rgb * in.tint.a, c.a * in.tint.a);
 }

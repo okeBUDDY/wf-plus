@@ -26,7 +26,7 @@ pub struct Shapes {
     pub name_cursor: SpriteId,
     pub char_cursor: SpriteId,
     pub shockwave: SpriteId,
-    pub grid_tile: SpriteId,
+    pub grid_line: SpriteId,
     pub screen: SpriteId,
 }
 
@@ -45,7 +45,7 @@ impl Art {
             name_cursor: s("name_cursor"),
             char_cursor: s("char_cursor"),
             shockwave: s("shockwave"),
-            grid_tile: s("grid_tile"),
+            grid_line: s("grid_line"),
             screen: s("screen"),
         };
         Art { pack, shapes }

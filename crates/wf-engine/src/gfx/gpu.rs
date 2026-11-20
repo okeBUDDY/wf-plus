@@ -46,6 +46,49 @@ struct Batch {
     end: u32,
 }
 
+/// What the last frame cost, for the perf bench (`Renderer::stats`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderStats {
+    /// CPU microseconds: instances and batches (with `dynamic_us`), the
+    /// uploads, the encoding and submission.
+    pub build_us: f64,
+    pub dynamic_us: f64,
+    pub upload_us: f64,
+    pub submit_us: f64,
+    pub draws: u32,
+    pub instances: u32,
+    pub draw_calls: u32,
+    pub pipeline_changes: u32,
+    pub upload_bytes: u64,
+    /// Dynamic shapes rebuilt (cooked on the CPU) this frame.
+    pub dynamic_rebuilt: u32,
+    /// Estimated fragment work (only while `collect` is set): pixels inside
+    /// the quads, pixels inside the layers' boxes, those times the curves a
+    /// pixel's two rays visit, and pixels running the turbulence noise.
+    pub quad_px: f64,
+    pub layer_px: f64,
+    pub curve_px: f64,
+    pub noise_px: f64,
+}
+
+/// Per layer, for the fragment estimate: its box (local units), the
+/// curves a pixel's rays visit on average, and whether it has noise.
+#[derive(Clone, Copy, Default)]
+struct LayerCost {
+    bbox: [f32; 4],
+    curves: f32,
+    noise: bool,
+}
+
+fn layer_cost(l: &GpuLayer, band: impl Fn(u32) -> u32) -> LayerCost {
+    let mean = |first: u32, n: u32| if n == 0 { 0.0 } else { (first..first + n).map(&band).sum::<u32>() as f32 / n as f32 };
+    LayerCost {
+        bbox: l.bbox.map(f32::from_bits),
+        curves: mean(l.band_base, l.hbands) + mean(l.band_base + l.hbands, l.vbands),
+        noise: l.paint & paint::FLAG_NOISE != 0,
+    }
+}
+
 /// Sprite data the CPU needs per draw.
 struct SpriteInfo {
     bounds: [f32; 4],
@@ -78,6 +121,15 @@ pub struct Renderer {
     offscreen: Option<(wgpu::TextureView, (u32, u32))>,
     fade: super::fade::FadePass,
     pub time: f32,
+    /// The last frame's costs; the fragment estimate only with `collect`.
+    pub stats: RenderStats,
+    pub collect: bool,
+    /// Draws curve visits instead of colours (`new_counting`).
+    counting: bool,
+    /// With `collect`: estimated curve-pixels per sprite id this frame
+    /// (dynamic shapes under u32::MAX).
+    pub by_sprite: HashMap<u32, (u32, f64)>,
+    costs: Vec<LayerCost>,
 }
 
 /// Frames of instance data in flight.
@@ -203,6 +255,17 @@ fn blend_index(blend: Blend) -> usize {
 impl Renderer {
     /// Uploads the art's GPU half and builds the pipelines for `format`.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat, art: &Pack) -> Self {
+        Self::build(device, queue, format, art, false)
+    }
+
+    /// A renderer for the perf bench that draws, instead of colours, the
+    /// curves each pixel's rays visit (red, in 64ths, summed over the draws)
+    /// into an `Rgba16Float` target: see [`Renderer::count_visits`].
+    pub fn new_counting(device: wgpu::Device, queue: wgpu::Queue, art: &Pack) -> Self {
+        Self::build(device, queue, wgpu::TextureFormat::Rgba16Float, art, true)
+    }
+
+    fn build(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat, art: &Pack, counting: bool) -> Self {
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         let (curve_tex, curve_row) =
             upload(&device, &queue, "slug curves", &art.curves, wgpu::TextureFormat::Rgba32Float, DYN_CURVE_ROWS);
@@ -296,6 +359,8 @@ impl Renderer {
         });
         let instance_attrs =
             wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2, 3 => Float32x4, 4 => Uint32x4];
+        let constants: &[(&str, f64)] = if counting { &[("count_visits", 1.0)] } else { &[] };
+        let options = wgpu::PipelineCompilationOptions { constants, ..Default::default() };
         let make = |blend: Blend, kind: BatchKind| {
             let (vs, fs, topology, buffers) = {
                 (
@@ -327,10 +392,10 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
-                    compilation_options: Default::default(),
+                    compilation_options: options.clone(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(blend_state(blend)),
+                        blend: Some(blend_state(if counting { Blend::Additive } else { blend })),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -352,6 +417,11 @@ impl Renderer {
                     .then(|| [s.bitmap[0] & 0xffff, s.bitmap[0] >> 16, s.bitmap[1] & 0xffff, s.bitmap[1] >> 16]),
             })
             .collect();
+        let band_count = |i: u32| {
+            let o = i as usize * 8;
+            art.bands.data.get(o..o + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        let costs = art.layers.iter().map(|l| layer_cost(l, band_count)).collect();
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);
@@ -373,6 +443,11 @@ impl Renderer {
             offscreen: None,
             time: 0.0,
             fade,
+            stats: RenderStats::default(),
+            collect: false,
+            counting,
+            by_sprite: HashMap::new(),
+            costs,
         }
     }
 
@@ -427,6 +502,9 @@ impl Renderer {
         if wanted.iter().all(|w| self.dynamic.built.contains_key(&w.0)) {
             return;
         }
+        let rebuilt = wanted.iter().filter(|w| !self.dynamic.built.contains_key(&w.0)).count() as u32;
+        self.stats.dynamic_rebuilt += rebuilt;
+        let mut new_costs = Vec::new();
         let dy = &mut self.dynamic;
         dy.built.clear();
         let (mut curves, mut bands, mut layers) = (Vec::new(), Vec::new(), Vec::<GpuLayer>::new());
@@ -457,12 +535,77 @@ impl Renderer {
             let mut layer = gpu_layer(&g);
             layer.paint = paint::SOLID | flags;
             layer.color = [1.0f32; 4].map(f32::to_bits);
+            let base = dy.band_row * BAND_TEX_WIDTH;
+            new_costs.push((dy.layer_row * layers_per_row + layers.len() as u32, layer_cost(&layer, |i| {
+                bands.get((i - base) as usize).map_or(0, |b: &[u32; 2]| b[0])
+            })));
             dy.built.insert(key, (dy.layer_row * layers_per_row + layers.len() as u32, g.bbox));
             layers.push(layer);
         }
+        let row_bytes = |n: usize, row: u32| (n as u32).div_ceil(row) as u64 * row as u64;
+        self.stats.upload_bytes += row_bytes(curves.len() * 16, CURVE_TEX_WIDTH * 16)
+            + row_bytes(bands.len() * 8, BAND_TEX_WIDTH * 8)
+            + row_bytes(layers.len() * 128, LAYER_TEX_WIDTH * 16);
         write_rows(&self.queue, &dy.curves, dy.curve_row, CURVE_TEX_WIDTH * 16, bytemuck::cast_slice(&curves));
         write_rows(&self.queue, &dy.bands, dy.band_row, BAND_TEX_WIDTH * 8, bytemuck::cast_slice(&bands));
         write_rows(&self.queue, &dy.layers, dy.layer_row, LAYER_TEX_WIDTH * 16, bytemuck::cast_slice(&layers));
+        for (i, c) in new_costs {
+            if self.costs.len() <= i as usize {
+                self.costs.resize(i as usize + 1, LayerCost::default());
+            }
+            self.costs[i as usize] = c;
+        }
+    }
+
+}
+
+/// Adds an instance's estimated fragment work to `stats`: each area in
+/// pixels, scaled by the part of its screen box inside the window.
+#[allow(clippy::too_many_arguments)]
+fn estimate(stats: &mut RenderStats, costs: &[LayerCost], m: &[[f32; 3]; 3], layout: &super::Layout, size: (u32, u32), bounds: [f32; 4], first: u32, count: u32) {
+    let k = layout.scale;
+    let det = ((m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs() * k * k) as f64;
+    let area = |b: [f32; 4]| -> f64 {
+        let full = ((b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0)) as f64 * det;
+        if full <= 0.0 {
+            return 0.0;
+        }
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])] {
+            let p = [
+                (x * m[0][0] + y * m[1][0] + m[2][0] - layout.visible[0]) * k,
+                (x * m[0][1] + y * m[1][1] + m[2][1] - layout.visible[1]) * k,
+            ];
+            for a in 0..2 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let boxed = ((hi[0] - lo[0]) * (hi[1] - lo[1])) as f64;
+        let clipped = ((hi[0].min(size.0 as f32) - lo[0].max(0.0)).max(0.0) * (hi[1].min(size.1 as f32) - lo[1].max(0.0)).max(0.0)) as f64;
+        if boxed <= 0.0 { 0.0 } else { full * clipped / boxed }
+    };
+    stats.quad_px += area(bounds);
+    for l in first..first + count {
+        let Some(c) = costs.get(l as usize) else { continue };
+        let px = area(c.bbox);
+        stats.layer_px += px;
+        stats.curve_px += px * c.curves as f64;
+        if c.noise {
+            stats.noise_px += px;
+        }
+    }
+}
+
+impl Renderer {
+    /// The layers of sprite `id` for the perf bench: (curves a pixel's rays
+    /// visit, noise, box).
+    pub fn layer_costs(&self, id: u32) -> Vec<(f32, bool, [f32; 4])> {
+        let Some(s) = self.sprites.get(id as usize) else { return Vec::new() };
+        (s.first_layer..s.first_layer + s.layer_count)
+            .filter_map(|l| self.costs.get(l as usize))
+            .map(|c| (c.curves, c.noise, c.bbox))
+            .collect()
     }
 
     /// Renders `list` into `target` (of `size` pixels): the arena fitted
@@ -479,9 +622,13 @@ impl Renderer {
         let layout = super::Layout::new(list.arena, window).resized(window, size);
         let k = layout.scale;
 
+        let t0 = std::time::Instant::now();
+        self.stats = RenderStats { draws: list.draws.len() as u32, ..Default::default() };
+        self.by_sprite.clear();
         self.instances.clear();
         self.batches.clear();
         self.build_dynamic(list);
+        self.stats.dynamic_us = t0.elapsed().as_secs_f64() * 1e6;
         for draw in &list.draws {
             match draw {
                 Draw::Sprite { sprite, transform, color, blend, clip, pass, .. } => {
@@ -523,6 +670,13 @@ impl Renderer {
                             continue;
                         }
                     }
+                    if self.collect {
+                        let before = self.stats.curve_px;
+                        estimate(&mut self.stats, &self.costs, m, &layout, size, bounds, info.first_layer, info.layer_count);
+                        let e = self.by_sprite.entry(sprite.0).or_default();
+                        e.0 += 1;
+                        e.1 += self.stats.curve_px - before;
+                    }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {
                         bounds,
@@ -545,6 +699,13 @@ impl Renderer {
                     let sx = (m[0][0] * m[0][0] + m[0][1] * m[0][1]).sqrt();
                     let sy = (m[1][0] * m[1][0] + m[1][1] * m[1][1]).sqrt();
                     let d = 1.0 / (sx.min(sy) * k).max(1e-6);
+                    if self.collect {
+                        let before = self.stats.curve_px;
+                        estimate(&mut self.stats, &self.costs, m, &layout, size, [b[0] - d, b[1] - d, b[2] + d, b[3] + d], layer, 1);
+                        let e = self.by_sprite.entry(u32::MAX).or_default();
+                        e.0 += 1;
+                        e.1 += self.stats.curve_px - before;
+                    }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {
                         bounds: [b[0] - d, b[1] - d, b[2] + d, b[3] + d],
@@ -558,6 +719,8 @@ impl Renderer {
             }
         }
 
+        self.stats.build_us = t0.elapsed().as_secs_f64() * 1e6;
+        let t1 = std::time::Instant::now();
         if self.instances.len() > self.instance_capacity {
             self.instance_capacity = self.instances.len().next_power_of_two();
             self.instance_buffer =
@@ -577,10 +740,14 @@ impl Renderer {
             pad: [0.0; 3],
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
-        let fading = list.fade.0 >> 24 != 0;
+        let fading = list.fade.0 >> 24 != 0 && !self.counting;
         if fading {
             self.fade.prepare(&self.queue, list.fade.to_f32());
         }
+        self.stats.instances = self.instances.len() as u32;
+        self.stats.upload_bytes += (self.instances.len() * std::mem::size_of::<Instance>() + std::mem::size_of::<ViewUniform>()) as u64;
+        self.stats.upload_us = t1.elapsed().as_secs_f64() * 1e6;
+        let t2 = std::time::Instant::now();
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         {
@@ -610,7 +777,13 @@ impl Renderer {
             let [ax, ay, aw, ah] = if list.menu { [0, 0, size.0, size.1] } else { layout.arena_px };
             let instances = self.instance_buffer.slice(ring_offset..);
             let mut scissor = None;
+            let mut pipeline = None;
             for batch in &self.batches {
+                self.stats.draw_calls += 1;
+                if pipeline != Some((batch.kind, batch.blend)) {
+                    self.stats.pipeline_changes += 1;
+                    pipeline = Some((batch.kind, batch.blend));
+                }
                 if scissor != Some(batch.pass) {
                     match batch.pass {
                         Pass::Background | Pass::Overlay => pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1)),
@@ -636,6 +809,7 @@ impl Renderer {
             }
         }
         self.queue.submit([encoder.finish()]);
+        self.stats.submit_us = t2.elapsed().as_secs_f64() * 1e6;
     }
 
     /// Renders `list` into an offscreen target of `size` kept between calls,
@@ -658,6 +832,54 @@ impl Renderer {
         let view = self.offscreen.as_ref().map(|(v, _)| v.clone()).expect("offscreen target");
         self.render(list, &view, size);
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// A counting renderer's frame: the curves visited by all pixels'
+    /// rays, summed (the measured fragment work).
+    pub fn count_visits(&mut self, list: &DrawList, size: (u32, u32)) -> f64 {
+        let (width, height) = size;
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("visits"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut black = list.clone();
+        black.clear = super::Argb(0xff00_0000);
+        self.render(&black, &view, size);
+        let row = (width * 8).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("visits readback"),
+            size: (row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("visits") });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map visits"));
+        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let data = buffer.slice(..).get_mapped_range().expect("mapped visits");
+        let mut sum = 0.0;
+        for y in 0..height {
+            for x in 0..width {
+                let o = (y * row + x * 8) as usize;
+                sum += f16_to_f32(u16::from_le_bytes([data[o], data[o + 1]])) as f64 * 64.0;
+            }
+        }
+        sum
     }
 
     /// Renders `list` into a new `width` x `height` image and reads it back
@@ -720,6 +942,16 @@ impl Renderer {
         }
         out
     }
+}
+
+fn f16_to_f32(h: u16) -> f32 {
+    let (sign, exp, frac) = ((h >> 15) as u32, ((h >> 10) & 0x1f) as i32, (h & 0x3ff) as f32);
+    let v = match exp {
+        0 => frac * 2f32.powi(-24),
+        31 => f32::INFINITY,
+        _ => (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+    };
+    if sign == 1 { -v } else { v }
 }
 
 /// Creates a device for `surface` (or a headless one when `None`).

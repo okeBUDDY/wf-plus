@@ -155,7 +155,7 @@ impl Settings {
     }
 
     /// The FPS cap as an index of the options' list: the presets, the
-    /// panel's top refresh rate (MAX), then CUSTOM.
+    /// display's refresh rate (MAX), then CUSTOM.
     pub fn fps_index(&self) -> usize {
         if let Some(i) = FpsCap::PRESETS.iter().position(|p| *p == self.display.fps_cap) {
             return i;
@@ -353,7 +353,7 @@ impl UiInput {
     }
 }
 
-/// The options' MAX FPS cap: the panel's top refresh rate (rounded to
+/// The options' MAX FPS cap: the display's refresh rate (rounded to
 /// hundredths, e.g. 165 or 59.94), when the platform knows it.
 pub fn max_refresh_cap() -> Option<FpsCap> {
     wf_engine::platform::max_refresh().map(|hz| FpsCap::Fps((hz as f64 * 100.0).round() / 100.0))

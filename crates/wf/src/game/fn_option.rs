@@ -112,7 +112,7 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(3, "WINDOW MODE     : "),
     formatted(settings::RESOLUTIONS.len() as i16, "RESOLUTION      : "),
     formatted(settings::RENDER_SCALES.len() as i16, "RENDER SCALE    : "),
-    // The presets, MAX (the panel's top refresh rate), CUSTOM.
+    // The presets, MAX (the display's refresh rate), CUSTOM.
     formatted(FpsCap::PRESETS.len() as i16 + 2, "FPS CAP         : "),
     // OFF, ON, ON (GPU MS) (the frame's GPU time too: ui.perf_overlay).
     formatted(3, "SHOW FPS        : "),

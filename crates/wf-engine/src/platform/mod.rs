@@ -8,9 +8,11 @@ pub mod sdl;
 #[cfg(target_os = "android")]
 pub mod android;
 
-/// The panel's highest refresh rate (Hz, f32 bits; 0 = unknown): set by
-/// the Android activity (it picks that display mode) or from SDL's display
-/// modes at start-up. The options offer it as an FPS cap.
+/// The display's refresh rate (Hz, f32 bits; 0 = unknown): on Android the
+/// panel's highest, set by the activity (it picks that display mode); on
+/// the desktop the window's display's desktop mode, at start-up and when
+/// the window moves to another display. The options offer it as an FPS
+/// cap (MAX).
 static MAX_REFRESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub fn set_max_refresh(hz: f32) {

@@ -175,8 +175,10 @@ impl Platform {
         let gamepad_sys = sdl.gamepad().ok();
         let audio_sys = sdl.audio().ok();
         let events = sdl.event_pump().map_err(|e| e.to_string())?;
-        // The panel's top refresh rate, unless the Android activity gave
-        // it (it also picks that display mode).
+        // Android: the panel's top refresh rate, unless the activity gave
+        // it (it also picks that display mode). The desktop's comes from
+        // the display mode in use, below.
+        #[cfg(target_os = "android")]
         if super::max_refresh().is_none()
             && let Ok(display) = window.get_display()
         {
@@ -477,10 +479,16 @@ impl Platform {
 
 /// Records the resolution of the window's display, in pixels (the size a
 /// borderless or fullscreen window takes; the options show it).
+/// Notes the window's display's desktop mode: its size, and on the desktop
+/// its refresh rate, the one the window is shown at (windowed, borderless
+/// and fullscreen all use the desktop mode), not the fastest mode the
+/// panel could be switched to.
 fn note_display_size(window: &sdl3::video::Window) {
     if let Ok(mode) = window.get_display().and_then(|d| d.get_mode()) {
         let px = |v: i32| (v as f32 * mode.pixel_density.max(1.0)).round() as u32;
         super::set_display_size(px(mode.w), px(mode.h));
+        #[cfg(not(target_os = "android"))]
+        super::set_max_refresh(mode.refresh_rate);
     }
 }
 

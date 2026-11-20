@@ -162,6 +162,7 @@ impl Platform {
             let modes = display.get_fullscreen_modes().unwrap_or_default();
             super::set_max_refresh(modes.iter().map(|m| m.refresh_rate).fold(current, f32::max));
         }
+        note_display_size(&window);
         Ok(Platform {
             title: title.to_string(),
             _sdl: sdl,
@@ -206,6 +207,7 @@ impl Platform {
             match event {
                 SdlEvent::Quit { .. } => out.push(Event::Quit),
                 SdlEvent::Window { win_event, .. } => match win_event {
+                    WindowEvent::DisplayChanged(_) => note_display_size(&self.window),
                     WindowEvent::FocusGained => out.push(Event::Focus(true)),
                     WindowEvent::FocusLost => out.push(Event::Focus(false)),
                     WindowEvent::PixelSizeChanged(w, h) | WindowEvent::Resized(w, h) => {
@@ -354,6 +356,15 @@ impl Platform {
                 let _ = self.window.set_fullscreen(true);
             }
         }
+    }
+}
+
+/// Records the resolution of the window's display, in pixels (the size a
+/// borderless or fullscreen window takes; the options show it).
+fn note_display_size(window: &sdl3::video::Window) {
+    if let Ok(mode) = window.get_display().and_then(|d| d.get_mode()) {
+        let px = |v: i32| (v as f32 * mode.pixel_density.max(1.0)).round() as u32;
+        super::set_display_size(px(mode.w), px(mode.h));
     }
 }
 

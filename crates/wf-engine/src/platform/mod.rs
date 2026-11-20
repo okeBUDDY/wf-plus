@@ -23,6 +23,23 @@ pub fn max_refresh() -> Option<f32> {
     (hz > 0.0).then_some(hz)
 }
 
+/// The window's display's resolution in pixels (width << 32 | height; 0 =
+/// unknown): set by the SDL platform at start-up and when the window moves
+/// to another display. Borderless and fullscreen windows take this size.
+static DISPLAY_SIZE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_display_size(width: u32, height: u32) {
+    if width > 0 && height > 0 {
+        DISPLAY_SIZE.store((width as u64) << 32 | height as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The window's display's resolution, when known.
+pub fn display_size() -> Option<(u32, u32)> {
+    let v = DISPLAY_SIZE.load(std::sync::atomic::Ordering::Relaxed);
+    (v != 0).then_some(((v >> 32) as u32, v as u32))
+}
+
 /// What the platform lets the game change about its display. The options
 /// screen offers only these (the rest of its rows are omitted).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

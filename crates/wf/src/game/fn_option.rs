@@ -488,6 +488,10 @@ impl FnOption {
             x if x == Item::Extend as usize => EXTEND_NAMES[v].into(),
             x if x == Item::DefaultArena as usize => ["CLASSIC", "HD"][v].into(),
             x if x == Item::WindowMode as usize => settings::WINDOW_MODES[v].0.into(),
+            x if x == Item::Resolution as usize && Self::resolution_locked(cx) => match wf_engine::platform::display_size() {
+                Some((w, h)) => format!("{w}X{h}"),
+                None => "DISPLAY".into(),
+            },
             x if x == Item::Resolution as usize => {
                 let (w, h) = settings::RESOLUTIONS.get(v).copied().unwrap_or((s.display.width, s.display.height));
                 format!("{w}X{h}")
@@ -521,6 +525,21 @@ impl FnOption {
         };
         self.items[item] = format!("{}{left}{name}{right}", OPTION_ITEMS[item].text).into_bytes();
         cx.options.widths[item] = (name.len() * 8) as i16;
+    }
+
+    /// Borderless and fullscreen windows take the display's resolution
+    /// (fullscreen switches to the desktop's mode), so RESOLUTION, the
+    /// windowed size, is locked to it and shows it.
+    fn resolution_locked(cx: &Cx) -> bool {
+        cx.settings.display.mode != wf_engine::config::WindowMode::Windowed
+    }
+
+    /// RESOLUTION follows the window mode: locked to the display's size
+    /// outside a window.
+    fn sync_resolution(&mut self, cx: &mut Cx) {
+        let item = Item::Resolution as usize;
+        cx.options.enabled[item] = !Self::resolution_locked(cx);
+        self.update_choice_text(cx, item);
     }
 
     /// The port's items' values, from the settings.
@@ -799,6 +818,7 @@ impl Stage for FnOption {
                 _ => self.items[i] = OPTION_ITEMS[i].text.as_bytes().to_vec(),
             }
         }
+        self.sync_resolution(cx);
         self.flags = 0;
         self.blink = 0;
         self.slide = 0;
@@ -909,6 +929,10 @@ impl Stage for FnOption {
                         && value == 0 && cx.options.values[Item::StartTime as usize] == 0 => {
                             cx.options.values[Item::StartTime as usize] = 1;
                         }
+                    x if x == Item::WindowMode as usize => {
+                        Self::store_port_value(cx, x, value);
+                        self.sync_resolution(cx);
+                    }
                     x if x >= Item::DefaultArena as usize => Self::store_port_value(cx, x, value),
                     _ => {}
                 }
@@ -1109,6 +1133,34 @@ mod tests {
         FnOption::set_tabs(&mut cx);
         assert_eq!(FnOption::current(&cx), Item::RenderScale as usize);
         assert_eq!(cx.options.rows[1], 2);
+    }
+
+    #[test]
+    fn borderless_locks_the_resolution_to_the_display() {
+        use wf_engine::config::WindowMode;
+        wf_engine::platform::set_display_size(2560, 1440);
+        let mut cx = super::super::tests::cx();
+        let mut f = FnOption::new();
+        let item = Item::Resolution as usize;
+        let text = |f: &FnOption| String::from_utf8_lossy(&f.items[item]).into_owned();
+        (cx.settings.display.width, cx.settings.display.height) = (1280, 720);
+        cx.settings.display.mode = WindowMode::Windowed;
+        FnOption::load_port_values(&mut cx);
+        f.sync_resolution(&mut cx);
+        assert!(cx.options.enabled[item]);
+        assert!(text(&f).contains("1280X720"), "{}", text(&f));
+        for mode in [WindowMode::Borderless, WindowMode::Fullscreen] {
+            cx.settings.display.mode = mode;
+            f.sync_resolution(&mut cx);
+            assert!(!cx.options.enabled[item]);
+            assert!(text(&f).ends_with(" 2560X1440"), "{}", text(&f));
+            // The windowed size is kept for going back to a window.
+            assert_eq!((cx.settings.display.width, cx.settings.display.height), (1280, 720));
+        }
+        cx.settings.display.mode = WindowMode::Windowed;
+        f.sync_resolution(&mut cx);
+        assert!(cx.options.enabled[item]);
+        assert!(text(&f).contains("1280X720"));
     }
 
     #[test]

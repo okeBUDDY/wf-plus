@@ -52,6 +52,8 @@ struct Options {
     arena: Option<game::arena::Mode>,
     /// Always show the input guide, for this device (screenshots).
     guide: Option<platform::Device>,
+    /// Another platform's display capabilities (the options' rows).
+    caps: Option<platform::Capabilities>,
     /// Measure the uncapped frame rate for this many seconds (headless).
     bench: Option<f64>,
     /// Per-frame costs over --frames ticks, written as CSV (the perf bench).
@@ -90,7 +92,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|mouse|touch]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -111,6 +113,7 @@ fn options() -> Options {
         bench: None,
         arena: None,
         guide: None,
+        caps: None,
         perf: None,
         script: Vec::new(),
         home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
@@ -157,6 +160,7 @@ fn options() -> Options {
                     _ => usage(),
                 })
             }
+            "--caps" => o.caps = Some(platform::Capabilities::parse(&value()).unwrap_or_else(|| usage())),
             "--perf" => o.perf = Some(PathBuf::from(value())),
             "--bench" => o.bench = Some(value().parse().unwrap_or_else(|_| usage())),
             "--script" => {
@@ -186,6 +190,9 @@ fn startup(o: &Options) -> Result<(Cx, App), String> {
     let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
     game::time::set_utc_offset(platform::sdl::local_utc_offset());
     cx.open_home(o.home.clone());
+    if let Some(caps) = o.caps {
+        cx.settings.set_caps(caps);
+    }
     if let Some(device) = o.guide {
         cx.settings.input_guide = game::guide::Policy::Always;
         cx.settings.guide_device = Some(device);
@@ -487,6 +494,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     }
     let cfg = game.cx.port.clone();
     let mut display_cfg = wf_engine::config::DisplayConfig::from_config(&cfg);
+    game.cx.settings.caps.mask(&mut display_cfg);
     if let Some((w, h)) = o.size {
         (display_cfg.width, display_cfg.height) = (w, h);
     }

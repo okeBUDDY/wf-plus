@@ -6,6 +6,76 @@
 
 pub mod sdl;
 
+/// The panel's highest refresh rate (Hz, f32 bits; 0 = unknown): set by
+/// the Android activity (it picks that display mode) or from SDL's display
+/// modes at start-up. The options offer it as an FPS cap.
+static MAX_REFRESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_max_refresh(hz: f32) {
+    if hz.is_finite() && hz > 0.0 {
+        MAX_REFRESH.store(hz.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The panel's highest refresh rate, when known.
+pub fn max_refresh() -> Option<f32> {
+    let hz = f32::from_bits(MAX_REFRESH.load(std::sync::atomic::Ordering::Relaxed));
+    (hz > 0.0).then_some(hz)
+}
+
+/// What the platform lets the game change about its display. The options
+/// screen offers only these (the rest of its rows are omitted).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Windowed, borderless and fullscreen can be switched.
+    pub window_mode: bool,
+    /// The window can be given a size (the options' RESOLUTION).
+    pub window_size: bool,
+    /// The display's own mode (its resolution or rate) can be switched.
+    pub display_modes: bool,
+}
+
+impl Capabilities {
+    /// A desktop: a window in any mode and size.
+    pub const DESKTOP: Self = Capabilities { window_mode: true, window_size: true, display_modes: true };
+    /// A phone or tablet: the game has the whole panel, in the panel's mode.
+    pub const MOBILE: Self = Capabilities { window_mode: false, window_size: false, display_modes: false };
+
+    /// By name: "desktop", or "android" / "mobile".
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "desktop" => Some(Self::DESKTOP),
+            "android" | "mobile" | "ios" => Some(Self::MOBILE),
+            _ => None,
+        }
+    }
+
+    /// Resets what these capabilities do not let change to the defaults,
+    /// so stale wf-plus.ini values (a window mode or size written on another
+    /// platform) are not used.
+    pub fn mask(&self, d: &mut crate::config::DisplayConfig) {
+        let default = crate::config::DisplayConfig::default();
+        if !self.window_mode {
+            d.mode = default.mode;
+        }
+        if !self.window_size {
+            (d.width, d.height) = (default.width, default.height);
+        }
+    }
+}
+
+/// This platform's display capabilities: Android and iOS give the game the
+/// whole panel; desktops allow everything.
+pub const fn capabilities() -> Capabilities {
+    if cfg!(any(target_os = "android", target_os = "ios")) { Capabilities::MOBILE } else { Capabilities::DESKTOP }
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        capabilities()
+    }
+}
+
 /// The keys the game reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]

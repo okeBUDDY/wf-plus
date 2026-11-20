@@ -11,7 +11,7 @@ use super::task::{self, ListId, Place, TaskId};
 use super::texels;
 use super::settings::{self, TabBy};
 use crate::gfx::{Argb, Blend, Primitive, Transform};
-use wf_engine::platform::{Device, PadButton};
+use wf_engine::platform::{Capabilities, Device, PadButton};
 use wf_engine::time::FpsCap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -111,7 +111,8 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(3, "WINDOW MODE     : "),
     formatted(settings::RESOLUTIONS.len() as i16, "RESOLUTION      : "),
     formatted(settings::RENDER_SCALES.len() as i16, "RENDER SCALE    : "),
-    formatted(FpsCap::PRESETS.len() as i16 + 1, "FPS CAP         : "),
+    // The presets, MAX (the panel's top refresh rate), CUSTOM.
+    formatted(FpsCap::PRESETS.len() as i16 + 2, "FPS CAP         : "),
     formatted(2, "SHOW FPS        : "),
     button(Kind::Key, 0, "SHOT      (KEY) : "),
     button(Kind::Key, 1, "SLOW MOVE (KEY) : "),
@@ -153,9 +154,28 @@ const TABS: [(&str, &[Item]); 5] = {
         ("RECORDS", &[StageReplay, ScoreReset, Exit]),
     ]
 };
-/// The tab strip: its top, and each tab's left edge.
+/// The tab strip: its top, its left edge, and the gap between the tabs.
 const TAB_Y: f32 = 104.0;
-const TAB_X: [f32; 5] = [320.0, 368.0, 440.0, 496.0, 576.0];
+const TAB_X0: f32 = 320.0;
+const TAB_GAP: f32 = 16.0;
+
+/// Whether the platform lets `item` be changed (the options omit the rest).
+fn supported(item: Item, caps: &Capabilities) -> bool {
+    match item {
+        Item::WindowMode => caps.window_mode,
+        Item::Resolution => caps.window_size,
+        _ => true,
+    }
+}
+
+/// The tabs with the items the platform supports; a tab left with only
+/// EXIT is dropped.
+fn build_tabs(caps: &Capabilities) -> Vec<(&'static str, Vec<Item>)> {
+    TABS.iter()
+        .map(|(name, items)| (*name, items.iter().copied().filter(|&i| supported(i, caps)).collect::<Vec<_>>()))
+        .filter(|(_, items)| items.len() > 1)
+        .collect()
+}
 /// The gamepad buttons' names, by `PadButton::TRIGGERS` index.
 pub const PAD_NAMES: [&str; 10] = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS"];
 
@@ -181,6 +201,8 @@ pub struct OptionState {
     /// ATTACK, CUSTOM; the last one is edited.
     pub presets: [[i32; RULES]; 5],
     widths: [i16; ITEMS],
+    /// The tabs and their items, as the platform allows.
+    tabs: Vec<(&'static str, Vec<Item>)>,
     /// The tab shown, and the cursor row of each tab (kept while the game
     /// runs).
     tab: usize,
@@ -189,13 +211,19 @@ pub struct OptionState {
 
 impl Default for OptionState {
     fn default() -> Self {
+        let tabs = build_tabs(&wf_engine::platform::capabilities());
+        let mut rows = [0; TABS.len()];
+        for (row, (_, items)) in rows.iter_mut().zip(&tabs) {
+            *row = items.len() - 1;
+        }
         OptionState {
             values: [0; ITEMS],
             enabled: [true; ITEMS],
             presets: [[5, 0, 0, 0], [0, 0, 3, 2], [0, 0, 1, 0], [7, 1, 0, 0], [5, 0, 0, 0]],
             widths: WIDTHS,
+            tabs,
             tab: 0,
-            rows: TABS.map(|(_, items)| items.len() - 1),
+            rows,
         }
     }
 }
@@ -399,8 +427,28 @@ impl FnOption {
         FnOption { flags: 0, blink: 0, items: vec![Vec::new(); ITEMS], background: None, slide: 0, slide_dir: 1.0 }
     }
 
-    fn tab_items(cx: &Cx) -> &'static [Item] {
-        TABS[cx.options.tab].1
+    fn tab_items(cx: &Cx) -> Vec<Item> {
+        cx.options.tabs[cx.options.tab].1.clone()
+    }
+
+    /// The tabs for the platform: the rows stay on the items they were on
+    /// (else on EXIT).
+    fn set_tabs(cx: &mut Cx) {
+        let old = std::mem::replace(&mut cx.options.tabs, build_tabs(&cx.settings.caps));
+        let o = &mut cx.options;
+        let mut rows = [0; TABS.len()];
+        for (t, (name, items)) in o.tabs.iter().enumerate() {
+            let was = old.iter().position(|(n, _)| n == name).and_then(|i| old[i].1.get(o.rows[i]).copied());
+            rows[t] = was.and_then(|w| items.iter().position(|&i| i == w)).unwrap_or(items.len() - 1);
+        }
+        let tab = old.get(o.tab).and_then(|(n, _)| o.tabs.iter().position(|(m, _)| m == n)).unwrap_or(0);
+        o.rows = rows;
+        o.tab = tab;
+    }
+
+    /// Each tab's left edge on the strip.
+    fn tab_x(cx: &Cx, tab: usize) -> f32 {
+        TAB_X0 + cx.options.tabs[..tab].iter().map(|(n, _)| n.len() as f32 * 8.0 + TAB_GAP).sum::<f32>()
     }
 
     /// The item under the cursor.
@@ -444,6 +492,10 @@ impl FnOption {
             x if x == Item::RenderScale as usize => format!("{}%", (settings::RENDER_SCALES[v] * 100.0) as i32),
             x if x == Item::FpsCap as usize => match FpsCap::PRESETS.get(v) {
                 Some(cap) => cap.label(),
+                None if v == FpsCap::PRESETS.len() => match settings::max_refresh_cap() {
+                    Some(cap) => format!("MAX ({})", cap.label()),
+                    None => "MAX (VSYNC)".into(),
+                },
                 None => format!("CUSTOM ({})", s.fps_custom),
             },
             x if x == Item::ShowFps as usize || x == Item::MouseSteering as usize => on_off(value != 0),
@@ -557,11 +609,11 @@ impl FnOption {
     }
 
     /// The tab under `p`, if it is on the strip.
-    fn tab_at(p: [f32; 2]) -> Option<usize> {
+    fn tab_at(cx: &Cx, p: [f32; 2]) -> Option<usize> {
         if !(TAB_Y - 6.0..TAB_Y + 14.0).contains(&p[1]) {
             return None;
         }
-        (0..TABS.len()).rev().find(|&i| p[0] >= TAB_X[i] - 4.0)
+        (0..cx.options.tabs.len()).rev().find(|&i| p[0] >= Self::tab_x(cx, i) - 4.0)
     }
 
     /// The row under `p`, if it is on an item.
@@ -602,7 +654,7 @@ impl FnOption {
         ui.click = ui.click.map(local);
         ui.right_click = ui.right_click.map(local);
         let tab = cx.options.tab;
-        let n = TABS.len();
+        let n = cx.options.tabs.len();
         // A key or button being remapped wins over the tab keys it shares.
         let blocked = match remap {
             Some(Kind::Key) => ui.tab_by == TabBy::Letter,
@@ -616,7 +668,7 @@ impl FnOption {
         }
         if let Some(p) = ui.cursor
             && ui.wheel != 0.0
-            && Self::tab_at([p[0].max(TAB_X[0]), p[1]]).is_some()
+            && Self::tab_at(cx, [p[0].max(TAB_X0), p[1]]).is_some()
         {
             let dir = if ui.wheel < 0.0 { 1 } else { -1 };
             let to = (tab as i32 + dir).rem_euclid(n as i32) as usize;
@@ -659,7 +711,7 @@ impl FnOption {
             return 0;
         }
         let Some(p) = ui.click else { return 0 };
-        if let Some(t) = Self::tab_at(p) {
+        if let Some(t) = Self::tab_at(cx, p) {
             self.switch_tab(cx, t, if t > tab { 1.0 } else { -1.0 });
             return 0;
         }
@@ -723,6 +775,7 @@ impl Stage for FnOption {
         self.background = task::add(cx, ListId::Tasks, Box::new(BackgroundGrid::new(0xff00_4030, 8.0)), 2, Place::Back);
         let preset = cx.options.values[ITEM_GAME_MODE] as usize;
         cx.options.set_preset(preset);
+        Self::set_tabs(cx);
         Self::load_port_values(cx);
         for i in 0..ITEMS {
             match OPTION_ITEMS[i].kind {
@@ -905,8 +958,8 @@ impl Stage for FnOption {
         cx.draw.set_origin(Self::block_origin(cx));
         // The tab strip: the current tab boxed and underlined.
         let tab = cx.options.tab;
-        for (i, (name, _)) in TABS.iter().enumerate() {
-            let x = TAB_X[i];
+        for (i, (name, _)) in cx.options.tabs.clone().iter().enumerate() {
+            let x = Self::tab_x(cx, i);
             let w = name.len() as f32 * 8.0;
             let color = if i == tab { Argb(0xe0ff_ffff) } else { Argb(0x6080_ffc0) };
             if i == tab {
@@ -990,9 +1043,12 @@ mod tests {
     #[test]
     fn pointer_hits_tabs_rows_and_value_arrows() {
         let cx = super::super::tests::cx();
-        assert_eq!(FnOption::tab_at([TAB_X[0] + 8.0, TAB_Y + 4.0]), Some(0));
-        assert_eq!(FnOption::tab_at([TAB_X[4] + 8.0, TAB_Y + 4.0]), Some(4));
-        assert_eq!(FnOption::tab_at([TAB_X[2] + 8.0, TAB_Y + 40.0]), None);
+        // The desktop strip: GAME DISPLAY AUDIO CONTROLS RECORDS.
+        let xs: Vec<f32> = (0..5).map(|i| FnOption::tab_x(&cx, i)).collect();
+        assert_eq!(xs, [320.0, 368.0, 440.0, 496.0, 576.0]);
+        assert_eq!(FnOption::tab_at(&cx, [328.0, TAB_Y + 4.0]), Some(0));
+        assert_eq!(FnOption::tab_at(&cx, [584.0, TAB_Y + 4.0]), Some(4));
+        assert_eq!(FnOption::tab_at(&cx, [448.0, TAB_Y + 40.0]), None);
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + 2.0]), Some(0));
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + ROW_H * 2.0 + 2.0]), Some(2));
         assert_eq!(FnOption::row_at(&cx, [100.0, ROW_Y + 2.0]), None);
@@ -1014,5 +1070,45 @@ mod tests {
         assert!(FnOption::adjustable(&cx, mode));
         assert!(!FnOption::adjustable(&cx, Item::Exit as usize));
         assert!(!FnOption::adjustable(&cx, Item::ShotKey as usize));
+    }
+
+    #[test]
+    fn mobile_omits_the_window_rows() {
+        let display = |caps: &Capabilities| build_tabs(caps).into_iter().find(|(n, _)| *n == "DISPLAY").unwrap().1;
+        assert_eq!(display(&Capabilities::DESKTOP), TABS[1].1);
+        assert_eq!(display(&Capabilities::MOBILE), [Item::RenderScale, Item::FpsCap, Item::ShowFps, Item::BossName, Item::Exit]);
+        // No tab is left empty, so all five stay; the other tabs are as on a desktop.
+        let tabs = build_tabs(&Capabilities::MOBILE);
+        assert_eq!(tabs.len(), 5);
+        assert!(tabs.iter().zip(TABS).all(|((a, items), (b, all))| a == &b && (a == &"DISPLAY" || items == all)));
+
+        // The cursor on RESOLUTION moves to EXIT when the row goes; on
+        // RENDER SCALE it stays there.
+        let mut cx = super::super::tests::cx();
+        cx.options.tab = 1;
+        cx.options.rows[1] = 1;
+        cx.options.rows[2] = 2;
+        cx.settings.set_caps(Capabilities::MOBILE);
+        FnOption::set_tabs(&mut cx);
+        assert_eq!(FnOption::current(&cx), Item::Exit as usize);
+        assert_eq!(cx.options.rows[2], 2);
+        cx.options.rows[1] = 0;
+        cx.settings.set_caps(Capabilities::DESKTOP);
+        FnOption::set_tabs(&mut cx);
+        assert_eq!(FnOption::current(&cx), Item::RenderScale as usize);
+        assert_eq!(cx.options.rows[1], 2);
+    }
+
+    #[test]
+    fn hidden_display_settings_ignore_the_ini() {
+        use wf_engine::config::{DisplayConfig, WindowMode};
+        let mut d = DisplayConfig { width: 2560, height: 1440, mode: WindowMode::Borderless, render_scale: 1.5, ..Default::default() };
+        let kept = d;
+        Capabilities::DESKTOP.mask(&mut d);
+        assert_eq!(d, kept);
+        Capabilities::MOBILE.mask(&mut d);
+        let default = DisplayConfig::default();
+        assert_eq!((d.width, d.height, d.mode), (default.width, default.height, default.mode));
+        assert_eq!(d.render_scale, 1.5);
     }
 }

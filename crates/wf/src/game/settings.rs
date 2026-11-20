@@ -4,7 +4,7 @@
 
 use wf_engine::config::{Config, DisplayConfig, WindowMode};
 use wf_engine::input::{Action, Bindings, Source};
-use wf_engine::platform::Device;
+use wf_engine::platform::{Capabilities, Device};
 use wf_engine::time::FpsCap;
 
 /// What a mouse button does (MOUSE LEFT/MIDDLE/RIGHT).
@@ -46,6 +46,9 @@ pub struct Settings {
     pub input_guide: super::guide::Policy,
     /// The device the guide names, when forced (`--guide`, screenshots).
     pub guide_device: Option<Device>,
+    /// What the platform lets the options change (`--caps` simulates
+    /// another platform's).
+    pub caps: Capabilities,
 }
 
 impl Default for Settings {
@@ -62,6 +65,7 @@ impl Default for Settings {
             fps: 0.0,
             input_guide: Default::default(),
             guide_device: None,
+            caps: wf_engine::platform::capabilities(),
         }
     }
 }
@@ -80,6 +84,7 @@ pub fn nearest(list: &[f32], v: f32) -> usize {
 impl Settings {
     pub fn load(c: &Config) -> Self {
         let mut s = Settings { display: DisplayConfig::from_config(c), ..Default::default() };
+        s.caps.mask(&mut s.display);
         s.fps_custom = c.get_or("display.fps_custom", s.fps_custom).clamp(1.0, 1000.0);
         s.input_guide = c.get("ui.input_guide").and_then(super::guide::Policy::parse).unwrap_or_default();
         let b = Bindings::from_config(c);
@@ -122,14 +127,31 @@ impl Settings {
         b.touch_scale = self.touch_scale;
     }
 
-    /// The FPS cap as an index of the options' list: the presets, then
-    /// CUSTOM.
+    /// The FPS cap as an index of the options' list: the presets, the
+    /// panel's top refresh rate (MAX), then CUSTOM.
     pub fn fps_index(&self) -> usize {
-        FpsCap::PRESETS.iter().position(|p| *p == self.display.fps_cap).unwrap_or(FpsCap::PRESETS.len())
+        if let Some(i) = FpsCap::PRESETS.iter().position(|p| *p == self.display.fps_cap) {
+            return i;
+        }
+        if Some(self.display.fps_cap) == max_refresh_cap() {
+            return FpsCap::PRESETS.len();
+        }
+        FpsCap::PRESETS.len() + 1
     }
 
     pub fn set_fps_index(&mut self, i: usize) {
-        self.display.fps_cap = FpsCap::PRESETS.get(i).copied().unwrap_or(FpsCap::Fps(self.fps_custom));
+        self.display.fps_cap = match FpsCap::PRESETS.get(i) {
+            Some(&cap) => cap,
+            None if i == FpsCap::PRESETS.len() => max_refresh_cap().unwrap_or(FpsCap::VSync),
+            None => FpsCap::Fps(self.fps_custom),
+        };
+    }
+
+    /// Takes another platform's capabilities (`--caps`): the display
+    /// settings they hide go back to the defaults.
+    pub fn set_caps(&mut self, caps: Capabilities) {
+        self.caps = caps;
+        caps.mask(&mut self.display);
     }
 
     pub fn resolution_index(&self) -> usize {
@@ -302,4 +324,10 @@ impl UiInput {
             (None, None) => {}
         }
     }
+}
+
+/// The options' MAX FPS cap: the panel's top refresh rate (rounded to
+/// hundredths, e.g. 165 or 59.94), when the platform knows it.
+pub fn max_refresh_cap() -> Option<FpsCap> {
+    wf_engine::platform::max_refresh().map(|hz| FpsCap::Fps((hz as f64 * 100.0).round() / 100.0))
 }

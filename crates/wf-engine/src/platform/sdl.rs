@@ -153,6 +153,15 @@ impl Platform {
         let gamepad_sys = sdl.gamepad().ok();
         let audio_sys = sdl.audio().ok();
         let events = sdl.event_pump().map_err(|e| e.to_string())?;
+        // The panel's top refresh rate, unless the Android activity gave
+        // it (it also picks that display mode).
+        if super::max_refresh().is_none()
+            && let Ok(display) = window.get_display()
+        {
+            let current = display.get_mode().map(|m| m.refresh_rate).unwrap_or(0.0);
+            let modes = display.get_fullscreen_modes().unwrap_or_default();
+            super::set_max_refresh(modes.iter().map(|m| m.refresh_rate).fold(current, f32::max));
+        }
         Ok(Platform {
             title: title.to_string(),
             _sdl: sdl,

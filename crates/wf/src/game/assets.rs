@@ -55,7 +55,8 @@ pub struct Assets {
 impl Assets {
     /// Loads data.bin at `path`; the music is looked for next to it.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let pack = Pack::open(path).map_err(|e| format!("data.bin がオープンできません ({e})"))?;
+        let bytes = crate::platform::read_file(path).map_err(|e| format!("data.bin がオープンできません (cannot open {}: {e})", path.display()))?;
+        let pack = Pack::from_bytes(bytes).map_err(|e| format!("data.bin がオープンできません ({e})"))?;
         Self::from_pack(pack, path.parent())
     }
 

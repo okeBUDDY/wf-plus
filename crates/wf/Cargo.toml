@@ -7,6 +7,15 @@ edition.workspace = true
 version = "1.0.0"
 build = "build.rs"
 
+# The Android entry point: SDLActivity loads libmain.so and calls SDL_main.
+# Empty on other targets (see src/android.rs).
+[lib]
+name = "main"
+path = "src/android.rs"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
 # `wfplus` (wf+.exe in the Windows zip, see scripts/build-windows.sh).
 [[bin]]
 name = "wfplus"

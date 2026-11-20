@@ -36,6 +36,9 @@ pub fn enabled(level: Level) -> bool {
 
 pub fn log(level: Level, msg: &str) {
     if enabled(level) {
+        #[cfg(target_os = "android")]
+        crate::platform::android::log(level == Level::Error, msg);
+        #[cfg(not(target_os = "android"))]
         eprintln!("[{}] {msg}", format!("{level:?}").to_ascii_lowercase());
     }
 }

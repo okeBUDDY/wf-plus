@@ -145,12 +145,12 @@ impl Platform {
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self, String> {
         let sdl = sdl3::init().map_err(|e| e.to_string())?;
         let video = sdl.video().map_err(|e| e.to_string())?;
-        let window = video
-            .window(title, width, height)
-            .resizable()
-            .high_pixel_density()
-            .build()
-            .map_err(|e| e.to_string())?;
+        let mut builder = video.window(title, width, height);
+        builder.resizable().high_pixel_density();
+        // Android: the whole screen, system bars hidden (immersive).
+        #[cfg(target_os = "android")]
+        builder.fullscreen();
+        let window = builder.build().map_err(|e| e.to_string())?;
         // Gamepads and audio are optional: the game runs without them.
         let gamepad_sys = sdl.gamepad().ok();
         let audio_sys = sdl.audio().ok();

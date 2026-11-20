@@ -23,13 +23,14 @@
 // Much of the game-facing API is ported ahead of the stages that use it.
 #![allow(dead_code)]
 
-mod app_info;
-mod art;
-mod data;
-mod data_import;
-mod game;
-mod setup;
-mod shape_table;
+// pub(crate): android.rs re-exports them at its crate root.
+pub(crate) mod app_info;
+pub(crate) mod art;
+pub(crate) mod data;
+pub(crate) mod data_import;
+pub(crate) mod game;
+pub(crate) mod setup;
+pub(crate) mod shape_table;
 
 pub use wf_engine::{audio as sound, gfx, log, platform};
 
@@ -209,8 +210,14 @@ fn options() -> Options {
             _ => usage(),
         }
     }
+    #[cfg(not(target_os = "android"))]
     if o.data.is_none() {
         o.data = setup::search(&data_dirs(&o.home));
+    }
+    #[cfg(target_os = "android")]
+    {
+        let (data, home) = platform::android::paths();
+        (o.data, o.home) = (Some(setup::Found::File(data)), home);
     }
     o
 }
@@ -883,6 +890,20 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     })?;
     drop(display);
     Ok(())
+}
+
+/// SDL_main on Android (see android.rs): the window only, errors shown in a
+/// message box and logcat.
+#[cfg(target_os = "android")]
+pub(crate) fn android_main() -> i32 {
+    log::init_from_env();
+    match run_windowed(&options()) {
+        Ok(()) => 0,
+        Err(e) => {
+            platform::android::fatal(&format!("ERROR: {e}"));
+            1
+        }
+    }
 }
 
 fn main() {

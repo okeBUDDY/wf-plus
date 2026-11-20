@@ -5,6 +5,17 @@
 //! SDL types.
 
 pub mod sdl;
+#[cfg(target_os = "android")]
+pub mod android;
+
+/// Reads a whole file. On Android a relative path reads from the APK's
+/// assets (through SDL's IO), so the bundled data.bin needs no unpacking.
+pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    #[cfg(target_os = "android")]
+    return android::read_file(path);
+    #[cfg(not(target_os = "android"))]
+    std::fs::read(path)
+}
 
 /// The panel's highest refresh rate (Hz, f32 bits; 0 = unknown): set by
 /// the Android activity (it picks that display mode) or from SDL's display

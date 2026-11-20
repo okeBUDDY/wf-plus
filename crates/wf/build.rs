@@ -59,6 +59,18 @@ fn embed_icon(manifest: &std::path::Path) {
 }
 
 fn main() {
+    // SDL3's Android hidapi is C++: link the NDK's static C++ runtime.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        // rustc-link-arg: the bin needs it too (rustc-link-lib goes to the lib only).
+        println!("cargo:rustc-link-arg=-lc++_static");
+        println!("cargo:rustc-link-arg=-lc++abi");
+        // SDL's JNI_OnLoad registers its natives with SDLActivity; rustc's
+        // version script would hide it in libmain.so, so export it.
+        println!("cargo:rustc-cdylib-link-arg=-Wl,--undefined=JNI_OnLoad");
+        let script = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("jni.ver");
+        std::fs::write(&script, "{ global: JNI_OnLoad; };\n").expect("write the JNI version script");
+        println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={}", script.display());
+    }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     embed_icon(&manifest);
     let game = manifest.join("../../../software/warning-forever/1.08");

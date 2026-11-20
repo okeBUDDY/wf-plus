@@ -895,6 +895,93 @@ mod tests {
         (1917, 1079),
     ];
 
+    /// The WARNING bands land where DrawWarning (0x420500) draws them: for
+    /// every slide offset, the transform sequence of the original (scale,
+    /// slide, pi/6, the first band at +160, +200; the second turned 0x200
+    /// and moved to 160, 200), kBand (-256..768 by -24..24) on kBandTexels
+    /// (0..1024 by 208..256, the strip repeating every 256 texels). In the
+    /// band's own space every tile we draw starts on the original's grid
+    /// (-256 + 256 n), one texel a unit, the strip's art at row 210 of the
+    /// texture (y -22); the middle copy is the original's four tiles
+    /// exactly, and the copies of a wide view continue them end to end, so
+    /// the WARNING text lines up with the original's and no stretch is
+    /// drawn twice.
+    #[test]
+    fn warning_bands_match_the_original_geometry() {
+        for (size, mode) in [((640u32, 480u32), arena::Mode::Classic), ((2000, 1253), arena::Mode::Hd), ((2560, 1080), arena::Mode::Classic)] {
+            let mut cx = super::super::tests::cx();
+            cx.window_size = size;
+            cx.window_arena_width = wf_engine::app::window_arena(size)[0];
+            cx.arena_choice = mode;
+            let a = cx.chosen_arena();
+            app::begin_frame(&mut cx, true);
+            cx.set_arena(a);
+            let band_sprite = cx.art.find(texels::ETC0_BAND.sprite).unwrap();
+            for frame in [0u32, 1, 17, 40, 63, 64, 1000] {
+                for open in [1.0f32, 0.35] {
+                    app::begin_frame(&mut cx, false);
+                    warning_bands(&mut cx, frame, open);
+                    // The original's two band transforms.
+                    let mut t = Transform::IDENTITY;
+                    t.scale(1.0, open);
+                    t.translate(-(((frame & 0x3f) * 4) as f32), -200.0);
+                    #[allow(clippy::approx_constant)]
+                    t.rotate_z(0.523_598_8);
+                    let mut first = t;
+                    first.m[2][0] += 160.0;
+                    first.m[2][1] += 200.0;
+                    let mut second = super::super::background::rotate(&t, 0x200);
+                    second.translate(160.0, 200.0);
+                    // Each draw in the space of the band it belongs to:
+                    // its tile's origin and its clip along the band.
+                    let mut tiles: [Vec<(f32, f32, f32)>; 2] = [Vec::new(), Vec::new()];
+                    for d in &cx.draw.draws {
+                        let Draw::Sprite { sprite, transform: m, clip, color, .. } = d else { continue };
+                        if *sprite != band_sprite {
+                            continue;
+                        }
+                        assert_eq!(color.0, 0xc8ff_4000);
+                        let clip = clip.expect("a band tile is clipped to its texels");
+                        let mut found = false;
+                        for (b, band) in [first, second].iter().enumerate() {
+                            // m = band * tile, tile = translation(x, y) of a
+                            // unit scale: band^-1 * m.
+                            let det = band.m[0][0] * band.m[1][1] - band.m[0][1] * band.m[1][0];
+                            let dx = m.m[2][0] - band.m[2][0];
+                            let dy = m.m[2][1] - band.m[2][1];
+                            let x = (band.m[1][1] * dx - band.m[1][0] * dy) / det;
+                            let y = (band.m[0][0] * dy - band.m[0][1] * dx) / det;
+                            let same_linear = (0..2).all(|i| (0..2).all(|j| (m.m[i][j] - band.m[i][j]).abs() < 1e-5));
+                            // The strip's art starts at texel row 210: -24 + 2.
+                            if same_linear && (y - -22.0).abs() < 1e-3 {
+                                tiles[b].push((x, x + clip[0], x + clip[2]));
+                                found = true;
+                                break;
+                            }
+                        }
+                        assert!(found, "{size:?} frame {frame}: a band tile on neither band: {:?}", m.m);
+                    }
+                    for (b, band_tiles) in tiles.iter_mut().enumerate() {
+                        band_tiles.sort_by(|p, q| p.1.total_cmp(&q.1));
+                        let mid: Vec<_> = band_tiles.iter().filter(|t| t.1 >= -256.0 - 1e-2 && t.2 <= 768.0 + 1e-2).collect();
+                        assert_eq!(mid.len(), 4, "{size:?} frame {frame} band {b}: the original's four tiles {band_tiles:?}");
+                        for (n, t) in band_tiles.iter().enumerate() {
+                            // Its texel u0 is at band x -256 + u0: on the grid.
+                            let cell = (t.0 + 256.0) / 256.0;
+                            assert!((cell - cell.round()).abs() < 1e-3, "{size:?} frame {frame} band {b}: tile off the original's grid {t:?}");
+                            assert!((t.2 - t.1 - 256.0).abs() < 1e-2, "{size:?} frame {frame} band {b}: a tile not 256 long {t:?}");
+                            if n > 0 {
+                                assert!((t.1 - band_tiles[n - 1].2).abs() < 1e-2, "{size:?} frame {frame} band {b}: tiles not end to end {band_tiles:?}");
+                            }
+                        }
+                        let copies = (band_tiles[0].1 + 256.0) / 1024.0;
+                        assert!((copies - copies.round()).abs() < 1e-5, "{size:?} frame {frame} band {b}: copies off the band length {band_tiles:?}");
+                    }
+                }
+            }
+        }
+    }
+
     /// A game's HUD with everything it shows at once (score, lives, a
     /// three-digit timer, a replay's name, date and help, the input guide
     /// and the FPS counter), drawn as the frame for a window of `size`.

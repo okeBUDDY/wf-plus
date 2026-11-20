@@ -64,6 +64,16 @@ impl Art {
         self.pack.name(&self.pack.sprites[id.0 as usize])
     }
 
+    /// Tells `renderer` the segments of the cooked line shapes, which it
+    /// then draws as analytic line quads (`gfx::lines`) when it may.
+    pub fn register_line_shapes(&self, renderer: &mut crate::gfx::gpu::Renderer) {
+        for def in crate::shape_table::SHAPES.iter().filter(|d| d.primitive.is_line()) {
+            if let Some(id) = self.find(&format!("shape/{}", def.name)) {
+                renderer.set_line_sprite(id.0, def.primitive, def.points);
+            }
+        }
+    }
+
     pub fn count(&self) -> usize {
         self.pack.sprites.len()
     }

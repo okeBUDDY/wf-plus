@@ -21,7 +21,21 @@ struct ViewUniform {
     scale: [f32; 2],
     offset: [f32; 2],
     time: f32,
-    pad: [f32; 3],
+    /// Device pixels per logical pixel (the line quads' margin).
+    px: f32,
+    pad: [f32; 2],
+}
+
+/// A segment of a line shape (`gfx::lines`): its own vertex buffer.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineInstance {
+    seg: [f32; 4],
+    nbr: [f32; 4],
+    m0: [f32; 4],
+    m1: [f32; 2],
+    flags: u32,
+    tint: [f32; 4],
 }
 
 #[repr(C)]
@@ -40,6 +54,8 @@ enum BatchKind {
     Bitmaps,
     /// Textured quads from a sprite cache page.
     Cached(u16),
+    /// Line segments (`gfx::lines`), from the line instances.
+    Lines,
 }
 
 struct Batch {
@@ -75,6 +91,10 @@ pub struct RenderStats {
     pub noise_px: f64,
     /// Pixels drawn from the sprite cache (one texel fetch each).
     pub cached_px: f64,
+    /// Pixels of the line segments' quads (inside the window) and their
+    /// edge tests (four a rectangle, up to three rectangles a pixel).
+    pub line_px: f64,
+    pub line_edges: f64,
     /// `curve_px` as it would be with the cache off (every sprite in Slug).
     pub nocache_curve_px: f64,
     /// Rasterizing new cache entries: texels written and the estimated
@@ -192,6 +212,16 @@ pub struct Renderer {
     sprite_pipelines: [wgpu::RenderPipeline; 2],
     bitmap_pipelines: [wgpu::RenderPipeline; 2],
     cached_pipelines: [wgpu::RenderPipeline; 2],
+    line_pipelines: [wgpu::RenderPipeline; 2],
+    /// The cooked line shapes' segments, by sprite (registered by the game,
+    /// which has their points).
+    line_sprites: HashMap<u32, Vec<super::lines::Segment>>,
+    /// Draw line shapes with `fs_line` (else as Slug strokes).
+    pub lines_enabled: bool,
+    line_instances: Vec<LineInstance>,
+    line_buffer: wgpu::Buffer,
+    line_capacity: usize,
+    plain_stroke: Vec<bool>,
     /// Slug into a cache page: replaces the texels, never counts.
     atlas_pipeline: wgpu::RenderPipeline,
     /// The Slug bind group with the page's pixel space as the view.
@@ -449,7 +479,7 @@ impl Renderer {
         let page_layout = cache::page_layout(&device);
         let cache = SpriteCache::new(&device, page_layout.clone());
         let p = cache.page_size() as f32;
-        let atlas_view = ViewUniform { scale: [2.0 / p, -2.0 / p], offset: [-1.0, 1.0], time: 0.0, pad: [0.0; 3] };
+        let atlas_view = ViewUniform { scale: [2.0 / p, -2.0 / p], offset: [-1.0, 1.0], time: 0.0, px: 1.0, pad: [0.0; 2] };
         let atlas_view_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprite cache view"),
             size: std::mem::size_of::<ViewUniform>() as u64,
@@ -486,11 +516,13 @@ impl Renderer {
                         BatchKind::Bitmaps => "vs_bitmap",
                         BatchKind::Sprites => "vs_main",
                         BatchKind::Cached(_) => "vs_cached",
+                        BatchKind::Lines => unreachable!("lines have their own pipelines"),
                     },
                     match kind {
                         BatchKind::Bitmaps => "fs_bitmap",
                         BatchKind::Sprites => "fs_main",
                         BatchKind::Cached(_) => "fs_cached",
+                        BatchKind::Lines => unreachable!("lines have their own pipelines"),
                     },
                     wgpu::PrimitiveTopology::TriangleStrip,
                     wgpu::VertexBufferLayout {
@@ -506,6 +538,7 @@ impl Renderer {
                     BatchKind::Bitmaps => "bitmaps",
                     BatchKind::Sprites => "sprites",
                     BatchKind::Cached(_) => "cached sprites",
+                    BatchKind::Lines => "lines",
                 }),
                 layout: Some(if matches!(kind, BatchKind::Cached(_)) { &cached_layout } else { &pipeline_layout }),
                 vertex: wgpu::VertexState {
@@ -536,6 +569,39 @@ impl Renderer {
         let bitmap_pipelines = [make(Blend::Normal, BatchKind::Bitmaps), make(Blend::Additive, BatchKind::Bitmaps)];
         let cached_pipelines = [make(Blend::Normal, BatchKind::Cached(0)), make(Blend::Additive, BatchKind::Cached(0))];
         let atlas_pipeline = make_with(None, BatchKind::Sprites, true);
+        let line_attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x2, 4 => Uint32, 5 => Float32x4];
+        let make_line = |blend: Blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("lines"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_line"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<LineInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &line_attrs,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_line"),
+                    compilation_options: options.clone(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend_state(if counting { Blend::Additive } else { blend })),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let line_pipelines = [make_line(Blend::Normal), make_line(Blend::Additive)];
         let costs = pack_layer_costs(art);
         let sprites = art
             .sprites
@@ -557,6 +623,21 @@ impl Renderer {
             })
             .collect();
         let timer = GpuTimer::new(&device, &queue);
+        let line_capacity = 256;
+        let line_buffer = Self::buffer(&device, "line instances", RING * line_capacity * std::mem::size_of::<LineInstance>());
+        // Which sprites are one plain stroke layer (white, solid): those a
+        // registered line shape may draw with `fs_line`.
+        let plain_stroke: Vec<bool> = art
+            .sprites
+            .iter()
+            .map(|s| {
+                s.layer_count == 1
+                    && s.flags & wf_art::sprite_flags::BITMAP == 0
+                    && art.layers.get(s.first_layer as usize).is_some_and(|l| {
+                        l.paint == paint::SOLID | paint::FLAG_STROKE && l.color.map(f32::from_bits) == [1.0; 4]
+                    })
+            })
+            .collect();
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);
@@ -569,6 +650,13 @@ impl Renderer {
             sprite_pipelines,
             bitmap_pipelines,
             cached_pipelines,
+            line_pipelines,
+            line_sprites: HashMap::new(),
+            plain_stroke,
+            lines_enabled: true,
+            line_instances: Vec::new(),
+            line_buffer,
+            line_capacity,
             atlas_pipeline,
             atlas_bind_group,
             cache,
@@ -706,6 +794,48 @@ impl Renderer {
         Some(cache::Entry { done, ..e })
     }
 
+    /// Registers cooked sprite `id` as the line shape `points` drawn as
+    /// `primitive`, so it is drawn with `fs_line`. Ignored unless the sprite
+    /// is one plain stroke layer and the shape is a line.
+    pub fn set_line_sprite(&mut self, id: u32, primitive: Primitive, points: &[[f32; 2]]) {
+        let segs = super::lines::segments(primitive, points);
+        if self.plain_stroke.get(id as usize).copied().unwrap_or(false) && !segs.is_empty() {
+            self.line_sprites.insert(id, segs);
+        }
+    }
+
+    /// Whether sprite `id` is drawn with `fs_line`.
+    pub fn is_line_sprite(&self, id: u32) -> bool {
+        self.line_sprites.contains_key(&id)
+    }
+
+    /// Queues the line instances of `segs` under `m`, `color`.
+    #[allow(clippy::too_many_arguments)]
+    fn push_lines(&mut self, segs: &[super::lines::Segment], m: &[[f32; 3]; 3], color: super::Argb, blend: Blend, pass: Pass, layout: &super::Layout, size: (u32, u32)) {
+        let start = self.line_instances.len() as u32;
+        for s in segs {
+            let nan = f32::NAN;
+            let (na, nb) = (s.nbr_a.unwrap_or([nan; 2]), s.nbr_b.unwrap_or([nan; 2]));
+            self.line_instances.push(LineInstance {
+                seg: [s.a[0], s.a[1], s.b[0], s.b[1]],
+                nbr: [na[0], na[1], nb[0], nb[1]],
+                m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
+                m1: [m[2][0], m[2][1]],
+                flags: s.flags(),
+                tint: color.to_f32(),
+            });
+            if self.collect {
+                let px = line_area(s, m, layout, size);
+                self.stats.line_px += px;
+                self.stats.line_edges += px * 4.0 * (1 + s.nbr_a.is_some() as u32 + s.nbr_b.is_some() as u32) as f64;
+            }
+        }
+        let end = self.line_instances.len() as u32;
+        if end > start {
+            self.push_batch(BatchKind::Lines, blend, pass, start, end);
+        }
+    }
+
     /// Whether sprite `id` is drawn from the cache when it is on.
     pub fn sprite_cacheable(&self, id: u32) -> bool {
         self.sprites.get(id as usize).is_some_and(|s| s.cacheable)
@@ -753,6 +883,9 @@ impl Renderer {
         let mut wanted: Vec<(u64, Primitive, &[[f32; 2]], i32)> = Vec::new();
         for draw in &list.draws {
             if let Draw::Shape { primitive, points, transform, .. } = draw {
+                if self.lines_enabled && primitive.is_line() && !self.collect {
+                    continue;
+                }
                 let Some(bucket) = scale_bucket(transform) else {
                     continue;
                 };
@@ -821,6 +954,41 @@ impl Renderer {
         }
     }
 
+}
+
+/// The device pixels of a line segment's quad inside the window: its
+/// length clipped to the window (Liang-Barsky) times its width with the
+/// antialiasing margin.
+fn line_area(s: &super::lines::Segment, m: &[[f32; 3]; 3], layout: &super::Layout, size: (u32, u32)) -> f64 {
+    let k = layout.scale;
+    let dev = |p: [f32; 2]| {
+        [
+            (p[0] * m[0][0] + p[1] * m[1][0] + m[2][0] - layout.visible[0]) * k,
+            (p[0] * m[0][1] + p[1] * m[1][1] + m[2][1] - layout.visible[1]) * k,
+        ]
+    };
+    let (a, b) = (dev(s.a), dev(s.b));
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-d[0], a[0]), (d[0], size.0 as f32 - a[0]), (-d[1], a[1]), (d[1], size.1 as f32 - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return 0.0;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+        }
+    }
+    if t1 <= t0 {
+        return 0.0;
+    }
+    let len = (d[0] * d[0] + d[1] * d[1]).sqrt() * (t1 - t0);
+    ((len + 3.0) * (k + 3.0)) as f64
 }
 
 /// An instance's estimated fragment work (pixels).
@@ -912,6 +1080,7 @@ impl Renderer {
         self.instances.clear();
         self.batches.clear();
         self.raster_jobs.clear();
+        self.line_instances.clear();
         self.raster_budget = RASTER_BUDGET;
         self.cache.begin_frame();
         if let Some(t) = &mut self.timer {
@@ -925,6 +1094,19 @@ impl Renderer {
                     let Some(&info) = self.sprites.get(sprite.0 as usize) else {
                         continue;
                     };
+                    if self.lines_enabled
+                        && clip.is_none()
+                        && let Some(segs) = self.line_sprites.get(&sprite.0)
+                    {
+                        let segs = segs.clone();
+                        if self.collect {
+                            let c = estimate(&self.costs, &transform.m, &layout, size, info.bounds, info.first_layer, info.layer_count);
+                            self.stats.nocache_curve_px += c.curve;
+                            self.by_sprite.entry(sprite.0).or_default().0 += 1;
+                        }
+                        self.push_lines(&segs, &transform.m, *color, *blend, *pass, &layout, size);
+                        continue;
+                    }
                     if let Some(rect) = info.bitmap {
                         let m = &transform.m;
                         let i = self.instances.len() as u32;
@@ -1007,6 +1189,20 @@ impl Renderer {
                     });
                     self.push_batch(BatchKind::Sprites, *blend, *pass, i, i + 1);
                 }
+                Draw::Shape { primitive, points, transform, color, blend, pass, .. } if self.lines_enabled && primitive.is_line() => {
+                    if self.collect {
+                        // The Slug cost it replaces (its layer when built).
+                        if let Some(bucket) = scale_bucket(transform)
+                            && let Some(&(layer, b)) = self.dynamic.built.get(&shape_key(*primitive, points, bucket))
+                        {
+                            let c = estimate(&self.costs, &transform.m, &layout, size, b, layer, 1);
+                            self.stats.nocache_curve_px += c.curve;
+                        }
+                        self.by_sprite.entry(u32::MAX - 1).or_default().0 += 1;
+                    }
+                    let segs = super::lines::segments(*primitive, points);
+                    self.push_lines(&segs, &transform.m, *color, *blend, *pass, &layout, size);
+                }
                 Draw::Shape { primitive, points, transform, color, blend, pass, .. } => {
                     let m = &transform.m;
                     let Some(bucket) = scale_bucket(transform) else {
@@ -1057,13 +1253,22 @@ impl Renderer {
         if !self.instances.is_empty() {
             self.queue.write_buffer(&self.instance_buffer, ring_offset, bytemuck::cast_slice(&self.instances));
         }
+        if self.line_instances.len() > self.line_capacity {
+            self.line_capacity = self.line_instances.len().next_power_of_two();
+            self.line_buffer = Self::buffer(&self.device, "line instances", RING * self.line_capacity * std::mem::size_of::<LineInstance>());
+        }
+        let line_offset = (self.ring_slot * self.line_capacity * std::mem::size_of::<LineInstance>()) as u64;
+        if !self.line_instances.is_empty() {
+            self.queue.write_buffer(&self.line_buffer, line_offset, bytemuck::cast_slice(&self.line_instances));
+        }
         // Logical -> clip over the whole window (the visible rect).
         let [x0, y0, w, h] = layout.visible;
         let view = ViewUniform {
             scale: [2.0 / w, -2.0 / h],
             offset: [-1.0 - x0 * 2.0 / w, 1.0 + y0 * 2.0 / h],
             time: self.time,
-            pad: [0.0; 3],
+            px: k,
+            pad: [0.0; 2],
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
         let fading = list.fade.0 >> 24 != 0 && !self.counting;
@@ -1071,7 +1276,9 @@ impl Renderer {
             self.fade.prepare(&self.queue, list.fade.to_f32());
         }
         self.stats.instances = self.instances.len() as u32;
-        self.stats.upload_bytes += (self.instances.len() * std::mem::size_of::<Instance>() + std::mem::size_of::<ViewUniform>()) as u64;
+        self.stats.upload_bytes += (self.instances.len() * std::mem::size_of::<Instance>()
+            + self.line_instances.len() * std::mem::size_of::<LineInstance>()
+            + std::mem::size_of::<ViewUniform>()) as u64;
         self.stats.upload_us = t1.elapsed().as_secs_f64() * 1e6;
         let t2 = std::time::Instant::now();
 
@@ -1155,6 +1362,11 @@ impl Renderer {
                         pass.set_vertex_buffer(0, instances);
                         pass.draw(0..4, batch.start..batch.end);
                     }
+                    BatchKind::Lines => {
+                        pass.set_pipeline(&self.line_pipelines[blend_index(batch.blend)]);
+                        pass.set_vertex_buffer(0, self.line_buffer.slice(line_offset..));
+                        pass.draw(0..4, batch.start..batch.end);
+                    }
                     BatchKind::Cached(page) => {
                         pass.set_pipeline(&self.cached_pipelines[blend_index(batch.blend)]);
                         pass.set_bind_group(1, &self.cache.pages[page as usize].bind_group, &[]);
@@ -1202,7 +1414,7 @@ impl Renderer {
     /// A counting renderer's frame: the curves visited by all pixels'
     /// rays, summed (the measured fragment work), and the sprite cache's
     /// texel fetches.
-    pub fn count_visits(&mut self, list: &DrawList, size: (u32, u32)) -> (f64, f64) {
+    pub fn count_visits(&mut self, list: &DrawList, size: (u32, u32)) -> (f64, f64, f64) {
         let (width, height) = size;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("visits"),
@@ -1238,15 +1450,16 @@ impl Renderer {
         buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map visits"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let data = buffer.slice(..).get_mapped_range().expect("mapped visits");
-        let (mut sum, mut fetches) = (0.0, 0.0);
+        let (mut sum, mut fetches, mut edges) = (0.0, 0.0, 0.0);
         for y in 0..height {
             for x in 0..width {
                 let o = (y * row + x * 8) as usize;
                 sum += f16_to_f32(u16::from_le_bytes([data[o], data[o + 1]])) as f64 * 64.0;
                 fetches += f16_to_f32(u16::from_le_bytes([data[o + 2], data[o + 3]])) as f64 * 64.0;
+                edges += f16_to_f32(u16::from_le_bytes([data[o + 4], data[o + 5]])) as f64 * 64.0;
             }
         }
-        (sum, fetches)
+        (sum, fetches, edges)
     }
 
     /// Renders `list` into a new `width` x `height` image and reads it back

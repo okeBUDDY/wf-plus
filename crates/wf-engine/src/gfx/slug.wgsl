@@ -11,7 +11,8 @@ struct View {
     scale: vec2<f32>,
     offset: vec2<f32>,
     time: f32,
-    _p0: f32,
+    // Device pixels per logical pixel.
+    px: f32,
     _p1: f32,
     _p2: f32,
 };
@@ -479,4 +480,178 @@ fn fs_cached(in: CachedOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 4.0 / 64.0, 0.0, 0.0);
     }
     return vec4<f32>(c.rgb * in.tint.rgb * in.tint.a, c.a * in.tint.a);
+}
+
+// Line shapes (gfx/lines.rs): one thin quad per segment. The coverage is
+// Slug's for the segment's stroke rectangle (the same corners, crossings,
+// weights and blend as `coverage` above, on the four edges directly), plus
+// the rectangles of the neighbours sharing its endpoints, so that joints
+// saturate as in Slug; the lowest-numbered segment covering a pixel draws
+// it.
+struct LineIn {
+    @location(0) seg: vec4<f32>,   // a, b (local)
+    @location(1) nbr: vec4<f32>,   // the neighbours' other endpoints
+    @location(2) m0: vec4<f32>,
+    @location(3) m1: vec2<f32>,
+    @location(4) flags: u32,
+    @location(5) tint: vec4<f32>,
+};
+
+struct LineOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) @interpolate(flat) seg: vec4<f32>,
+    @location(2) @interpolate(flat) nbr: vec4<f32>,
+    @location(3) @interpolate(flat) m0: vec4<f32>,
+    @location(4) @interpolate(flat) flags: u32,
+    @location(5) @interpolate(flat) tint: vec4<f32>,
+};
+
+const LINE_HALF: f32 = 0.5;
+const HAS_NBR_A: u32 = 1u;
+const HAS_NBR_B: u32 = 2u;
+const NBR_A_FIRST: u32 = 4u;
+const NBR_B_FIRST: u32 = 8u;
+
+// Logical pixels per local unit along unit vector `v`.
+fn px_along(v: vec2<f32>, m0: vec4<f32>) -> f32 {
+    return length(v.x * m0.xy + v.y * m0.zw);
+}
+
+@vertex
+fn vs_line(@builtin(vertex_index) vi: u32, inst: LineIn) -> LineOut {
+    let a = inst.seg.xy;
+    let b = inst.seg.zw;
+    let d = b - a;
+    let len = max(length(d), 1e-12);
+    let dir = d / len;
+    let n = vec2<f32>(-dir.y, dir.x);
+    // Half the line across, plus a device pixel and a half of margin for
+    // the antialiasing (both ways along the segment too).
+    let pn = max(px_along(n, inst.m0), 1.0 / 65536.0);
+    let pd = max(px_along(dir, inst.m0), 1.0 / 65536.0);
+    let k = max(view.px, 1e-6);
+    let across = LINE_HALF / pn + 1.5 / (pn * k);
+    let ext = 1.5 / (pd * k);
+    let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
+    let local = a + dir * mix(-ext, len + ext, corner.x) + n * mix(-across, across, corner.y);
+    let screen = vec2<f32>(
+        local.x * inst.m0.x + local.y * inst.m0.z + inst.m1.x,
+        local.x * inst.m0.y + local.y * inst.m0.w + inst.m1.y,
+    );
+    var out: LineOut;
+    out.pos = vec4<f32>(screen * view.scale + view.offset, 0.5, 1.0);
+    out.local = local;
+    out.seg = inst.seg;
+    out.nbr = inst.nbr;
+    out.m0 = inst.m0;
+    out.flags = inst.flags;
+    out.tint = inst.tint;
+    return out;
+}
+
+struct Crossings {
+    xcov: f32,
+    xwgt: f32,
+    ycov: f32,
+    ywgt: f32,
+};
+
+// One straight stroke edge (p1 to p3, relative to the sample) on both rays,
+// as `coverage` does for a curve whose control point is the midpoint.
+fn cross_edge(c: ptr<function, Crossings>, p1: vec2<f32>, p3: vec2<f32>, ppe: vec2<f32>) {
+    let p2 = (p1 + p3) * 0.5;
+    let hcode = root_code(p1.y, p2.y, p3.y);
+    if (hcode != 0u) {
+        let r = solve(p1, p2, p3) * ppe.x;
+        if ((hcode & 1u) != 0u) {
+            (*c).xcov += clamp(r.x + 0.5, 0.0, 1.0);
+            (*c).xwgt = max((*c).xwgt, clamp(1.0 - abs(r.x) * 2.0, 0.0, 1.0));
+        }
+        if (hcode > 1u) {
+            (*c).xcov -= clamp(r.y + 0.5, 0.0, 1.0);
+            (*c).xwgt = max((*c).xwgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0));
+        }
+    }
+    let s1 = p1.yx;
+    let s2 = p2.yx;
+    let s3 = p3.yx;
+    let vcode = root_code(s1.y, s2.y, s3.y);
+    if (vcode != 0u) {
+        let r = solve(s1, s2, s3) * ppe.y;
+        if ((vcode & 1u) != 0u) {
+            (*c).ycov -= clamp(r.x + 0.5, 0.0, 1.0);
+            (*c).ywgt = max((*c).ywgt, clamp(1.0 - abs(r.x) * 2.0, 0.0, 1.0));
+        }
+        if (vcode > 1u) {
+            (*c).ycov += clamp(r.y + 0.5, 0.0, 1.0);
+            (*c).ywgt = max((*c).ywgt, clamp(1.0 - abs(r.y) * 2.0, 0.0, 1.0));
+        }
+    }
+}
+
+// The stroke rectangle of segment a..b: the cooker's four edges (a to b on
+// the left, b's end, b to a on the right, a's end), their corners offset
+// half a line along the segment's normal as `load_curve` does.
+fn cross_rect(a: vec2<f32>, b: vec2<f32>, rc: vec2<f32>, m0: vec4<f32>, ppe: vec2<f32>) -> Crossings {
+    var c = Crossings(0.0, 0.0, 0.0, 0.0);
+    let d = b - a;
+    let len = length(d);
+    let n = vec2<f32>(-d.y / len, d.x / len);
+    let o = stroke_offset(n, m0, LINE_HALF);
+    let al = a + o - rc;
+    let bl = b + o - rc;
+    let br = b - o - rc;
+    let ar = a - o - rc;
+    cross_edge(&c, al, bl, ppe);
+    cross_edge(&c, bl, br, ppe);
+    cross_edge(&c, br, ar, ppe);
+    cross_edge(&c, ar, al, ppe);
+    return c;
+}
+
+fn crossings_coverage(c: Crossings) -> f32 {
+    let blended = abs(c.xcov * c.xwgt + c.ycov * c.ywgt) / max(c.xwgt + c.ywgt, 1.0 / 65536.0);
+    return clamp(max(blended, min(abs(c.xcov), abs(c.ycov))), 0.0, 1.0);
+}
+
+fn add_crossings(a: Crossings, b: Crossings) -> Crossings {
+    return Crossings(a.xcov + b.xcov, max(a.xwgt, b.xwgt), a.ycov + b.ycov, max(a.ywgt, b.ywgt));
+}
+
+@fragment
+fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
+    let rc = in.local;
+    let ppe = 1.0 / max(fwidth(rc), vec2<f32>(1.0 / 65536.0));
+    let a = in.seg.xy;
+    let b = in.seg.zw;
+    let own = cross_rect(a, b, rc, in.m0, ppe);
+    var total = own;
+    var drawn = crossings_coverage(own) > 0.0;
+    var rects = 1.0;
+    if ((in.flags & HAS_NBR_A) != 0u) {
+        let c = cross_rect(in.nbr.xy, a, rc, in.m0, ppe);
+        total = add_crossings(total, c);
+        rects += 1.0;
+        if ((in.flags & NBR_A_FIRST) != 0u && crossings_coverage(c) > 0.0) {
+            drawn = false;
+        }
+    }
+    if ((in.flags & HAS_NBR_B) != 0u) {
+        let c = cross_rect(b, in.nbr.zw, rc, in.m0, ppe);
+        total = add_crossings(total, c);
+        rects += 1.0;
+        if ((in.flags & NBR_B_FIRST) != 0u && crossings_coverage(c) > 0.0) {
+            drawn = false;
+        }
+    }
+    if (count_visits) {
+        // Edge tests (four a rectangle), counted apart (blue).
+        return vec4<f32>(0.0, 0.0, rects * 4.0 / 64.0, 0.0);
+    }
+    if (!drawn) {
+        return vec4<f32>(0.0);
+    }
+    let cov = crossings_coverage(total);
+    return vec4<f32>(in.tint.rgb * in.tint.a * cov, in.tint.a * cov);
 }

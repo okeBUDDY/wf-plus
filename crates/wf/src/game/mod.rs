@@ -335,7 +335,9 @@ mod coverage_tests {
     fn renderer(art: &crate::art::Art) -> Option<crate::gfx::gpu::Renderer> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let (_, device, queue) = crate::gfx::gpu::create_device(&instance, None).ok()?;
-        Some(crate::gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &art.pack))
+        let mut r = crate::gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &art.pack);
+        art.register_line_shapes(&mut r);
+        Some(r)
     }
 
     /// Pixels inside `rect` (x0, y0, x1, y1) of an RGBA image that are not
@@ -456,6 +458,66 @@ mod coverage_tests {
         // 0.5).
         assert!(worst_mean < 0.5, "a cached sprite differs from Slug: {}", report.join(", "));
         println!("worst: {} max {} mean {:.3}", worst.2, worst.0, worst.1);
+    }
+
+    /// The analytic line quads draw the line shapes as Slug does: the
+    /// cooked ones (the hexagon turned, scaled and faded as on the warning
+    /// screen, the cursors, the grid's lines) and runtime-built strips and
+    /// lists (the aim cone's sides, a polyline with sharp turns and one
+    /// whose segments cross), normal and additive, lines on against off.
+    #[test]
+    fn analytic_lines_match_slug() {
+        let art = crate::art::Art::load();
+        let Some(mut r) = renderer(&art) else { return };
+        let (w, h) = (1280u32, 720u32);
+        let mut list = DrawList::new();
+        list.clear = Argb(0xff20_2020);
+        let sh = &art.shapes;
+        let mut i = 0;
+        for &(id, scale) in &[(sh.hexagon, 20.0f32), (sh.hexagon, 7.3), (sh.menu_cursor, 1.5), (sh.title_line, 1.0), (sh.name_cursor, 2.0), (sh.grid_line, 1.0)] {
+            for &turn in &[0.0f32, 0.41, 1.9] {
+                let mut t = Transform::IDENTITY;
+                t.scale(scale, scale * if i % 2 == 1 { 0.7 } else { 1.0 });
+                t.rotate_z(turn);
+                t.translate((i % 6) as f32 * 100.0 + 50.3, (i / 6) as f32 * 100.0 + 50.6);
+                let (color, blend) = if i % 3 == 2 { (Argb(0x80ff_c040), Blend::Additive) } else { (Argb(0xc0ff_ffff), Blend::Normal) };
+                list.sprite(id, &t, color, blend);
+                i += 1;
+            }
+        }
+        let cone = [[0.0, 0.0], [-60.0, -150.0], [60.0, -150.0], [0.0, 0.0]];
+        let zigzag = [[0.0, 0.0], [60.0, 8.0], [5.0, 20.0], [70.0, 30.0], [70.0, 31.0], [10.0, 90.0]];
+        let crossing = [[0.0, 0.0], [80.0, 80.0], [80.0, 0.0], [0.0, 80.0]];
+        let pairs = [[0.0, 0.0], [90.0, 10.0], [90.0, 10.0], [100.0, 60.0], [20.0, 70.0], [60.0, 30.0]];
+        let mut t = Transform::translation(560.4, 470.2);
+        list.shape(crate::gfx::Primitive::LineStrip, &t, &cone, Argb(0x60ff_4040), Blend::Additive);
+        t = Transform::translation(20.25, 330.5);
+        list.shape(crate::gfx::Primitive::LineStrip, &t, &zigzag, Argb(0xffff_ffff), Blend::Normal);
+        t.rotate_z(0.3);
+        t.translate(150.0, 0.0);
+        list.shape(crate::gfx::Primitive::LineStrip, &t, &crossing, Argb(0xa040_ff40), Blend::Normal);
+        t.translate(150.0, 0.0);
+        list.shape(crate::gfx::Primitive::LineList, &t, &pairs, Argb(0xffff_ffff), Blend::Additive);
+        r.collect = true;
+        r.lines_enabled = false;
+        let slug = r.render_to_rgba(&list, w, h);
+        r.lines_enabled = true;
+        let lines = r.render_to_rgba(&list, w, h);
+        assert!(r.stats.line_px > 0.0, "no line quads drawn");
+        let (mut max, mut sum, mut far) = (0u8, 0u64, 0usize);
+        for (a, b) in slug.iter().zip(&lines) {
+            let d = a.abs_diff(*b);
+            max = max.max(d);
+            sum += d as u64;
+            far += (d > 8) as usize;
+        }
+        let mean = sum as f64 / slug.len() as f64 * 4.0 / 3.0;
+        if let Some(dir) = std::env::var_os("WF_CACHE_DUMP") {
+            std::fs::write(std::path::Path::new(&dir).join("lines_slug.rgba"), &slug).unwrap();
+            std::fs::write(std::path::Path::new(&dir).join("lines_quads.rgba"), &lines).unwrap();
+        }
+        println!("lines vs Slug: max {max} mean {mean:.4}, {far} channels off by more than 8");
+        assert!(far < 64 && mean < 0.02, "the line quads differ from Slug: max {max} mean {mean:.4}, {far} channels > 8");
     }
 
     /// Not a check: renders every sprite and glyph, white-tinted over black,

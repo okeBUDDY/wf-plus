@@ -1,6 +1,9 @@
 package io.github.okebuddy.wfplus;
 
+import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -8,8 +11,17 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.Surface;
+import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.nio.charset.StandardCharsets;
 
 import org.libsdl.app.SDLActivity;
 
@@ -28,7 +40,15 @@ import org.libsdl.app.SDLActivity;
  *  UI thread a moment after the window gains focus (the surface exists by
  *  then; again after every resume) and after display or configuration
  *  changes, debounced, and nothing it calls may throw out of it. A mode
- *  change relayouts the window, which must not land on SDL's startup. */
+ *  change relayouts the window, which must not land on SDL's startup.
+ *  The native side decides whether to ask at all (nativeRefreshState: not
+ *  in safe mode, nor with refresh = off in wf-plus.ini or the intent).
+ *
+ *  Diagnostics without adb: while the native side keeps wf-status.txt in
+ *  the app's files dir (safe mode, or no frame for 15 s), its text is shown
+ *  over the game, selectable, polled every half second. The intent extras
+ *  "backend" (vulkan|gl) and "refresh" (on|off) go to the native side
+ *  before SDL_main starts. */
 public class WarningForeverActivity extends SDLActivity implements DisplayManager.DisplayListener {
     private static final String TAG = "wf";
 
@@ -40,6 +60,27 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
 
     /** The panel's top refresh rate at the current resolution (Rust). */
     private static native void nativeSetMaxRefreshRate(float hz);
+
+    /** Intent overrides: backend 0 none, 1 vulkan, 2 gl; refresh 0 none,
+     *  1 on, 2 off. */
+    private static native void nativeSetOverrides(int backend, int refresh);
+
+    /** 0 not decided yet, 1 ask for the top refresh rate, 2 do not. */
+    private static native int nativeRefreshState();
+
+    /** How often the status file is polled. */
+    private static final long STATUS_POLL_MS = 500;
+
+    private ScrollView statusView;
+    private TextView statusText;
+    private String statusShown;
+    private final Runnable pollStatus = new Runnable() {
+        @Override
+        public void run() {
+            updateStatus();
+            ui.postDelayed(this, STATUS_POLL_MS);
+        }
+    };
 
     private DisplayManager displayManager;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -71,6 +112,20 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             return;
         }
         try {
+            Intent intent = getIntent();
+            String backend = intent != null ? intent.getStringExtra("backend") : null;
+            String refresh = intent != null ? intent.getStringExtra("refresh") : null;
+            int b = "vulkan".equalsIgnoreCase(backend) ? 1 : "gl".equalsIgnoreCase(backend) ? 2 : 0;
+            int r = "on".equalsIgnoreCase(refresh) ? 1 : "off".equalsIgnoreCase(refresh) ? 2 : 0;
+            nativeSetOverrides(b, r);
+            if (b != 0 || r != 0) {
+                Log.i(TAG, "intent overrides: backend " + backend + ", refresh " + refresh);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "intent overrides: " + t);
+        }
+        ui.postDelayed(pollStatus, STATUS_POLL_MS);
+        try {
             displayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
             if (displayManager != null) {
                 displayManager.registerDisplayListener(this, ui);
@@ -84,6 +139,7 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
     @Override
     protected void onDestroy() {
         ui.removeCallbacks(apply);
+        ui.removeCallbacks(pollStatus);
         if (displayManager != null) {
             try {
                 displayManager.unregisterDisplayListener(this);
@@ -152,6 +208,20 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             return;
         }
         try {
+            int state = nativeRefreshState();
+            if (state == 0) {
+                schedule(why);
+                return;
+            }
+            if (state != 1) {
+                Log.i(TAG, "refresh (" + why + "): not requested (safe mode or refresh = off)");
+                return;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "refresh: native side not reachable: " + t);
+            return;
+        }
+        try {
             Display d = currentDisplay();
             if (d == null) {
                 return;
@@ -189,6 +259,72 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             }
         } catch (Throwable t) {
             Log.w(TAG, "refresh (" + why + "): " + t);
+        }
+    }
+
+    /** The status file the native side writes (its storage dir: the
+     *  external files dir, else the internal one). */
+    private File statusFile() {
+        File dir = getExternalFilesDir(null);
+        if (dir == null) {
+            dir = getFilesDir();
+        }
+        return new File(dir, "wf-status.txt");
+    }
+
+    /** Shows the status file's text over the game while it exists. */
+    private void updateStatus() {
+        String text = null;
+        try {
+            File f = statusFile();
+            if (f.isFile()) {
+                byte[] bytes = new byte[(int) Math.min(f.length(), 64 * 1024)];
+                try (FileInputStream in = new FileInputStream(f)) {
+                    int n = 0;
+                    while (n < bytes.length) {
+                        int r = in.read(bytes, n, bytes.length - n);
+                        if (r < 0) {
+                            break;
+                        }
+                        n += r;
+                    }
+                    text = new String(bytes, 0, n, StandardCharsets.UTF_8);
+                }
+            }
+        } catch (Throwable t) {
+            text = null;
+        }
+        try {
+            if (text == null) {
+                if (statusView != null) {
+                    ((ViewGroup) statusView.getParent()).removeView(statusView);
+                    statusView = null;
+                    statusText = null;
+                    statusShown = null;
+                }
+                return;
+            }
+            if (statusView == null) {
+                ViewGroup root = (ViewGroup) getWindow().getDecorView();
+                statusText = new TextView(this);
+                statusText.setTextIsSelectable(true);
+                statusText.setTypeface(Typeface.MONOSPACE);
+                statusText.setTextSize(12);
+                statusText.setTextColor(Color.rgb(255, 255, 160));
+                statusText.setPadding(24, 16, 24, 16);
+                statusView = new ScrollView(this);
+                statusView.setBackgroundColor(Color.argb(200, 0, 0, 48));
+                statusView.addView(statusText);
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+                root.addView(statusView, lp);
+            }
+            if (!text.equals(statusShown)) {
+                statusText.setText(text);
+                statusShown = text;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "status: " + t);
         }
     }
 }

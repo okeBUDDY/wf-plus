@@ -62,7 +62,7 @@ struct Instance {
     layers: [u32; 4],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BatchKind {
     Sprites,
     Bitmaps,
@@ -326,6 +326,14 @@ fn upload(
     format: wgpu::TextureFormat,
     extra: u32,
 ) -> (wgpu::Texture, u32) {
+    let max = device.limits().max_texture_dimension_2d;
+    crate::log::breadcrumb(&format!(
+        "texture {label}: {}x{} {format:?} ({} KiB){}",
+        image.width,
+        image.height + extra,
+        image.data.len() / 1024,
+        if image.width.max(image.height + extra) > max { format!(" OVER THE DEVICE LIMIT {max}") } else { String::new() }
+    ));
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: image.width, height: image.height + extra, depth_or_array_layers: 1 },
@@ -523,6 +531,7 @@ impl Renderer {
         });
         queue.write_buffer(&atlas_view_buffer, 0, bytemuck::bytes_of(&atlas_view));
         let atlas_bind_group = slug_group("sprite cache slug", &atlas_view_buffer);
+        crate::log::breadcrumb("shader module slug.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("slug.wgsl"),
             source: wgpu::ShaderSource::Wgsl(include_str!("slug.wgsl").into()),
@@ -567,6 +576,7 @@ impl Renderer {
                     },
                 )
             };
+            crate::log::breadcrumb(&format!("pipeline {kind:?} {blend:?}"));
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(match kind {
                     _ if atlas => "sprite cache raster",
@@ -643,6 +653,7 @@ impl Renderer {
         };
         let line_pipelines = [make_analytic(Blend::Normal, false), make_analytic(Blend::Additive, false)];
         let fill_pipelines = [make_analytic(Blend::Normal, true), make_analytic(Blend::Additive, true)];
+        crate::log::breadcrumb(&format!("layer costs ({} layers)", art.layers.len()));
         let costs = pack_layer_costs(art);
         let sprites = art
             .sprites
@@ -681,6 +692,7 @@ impl Renderer {
                     })
             })
             .collect();
+        crate::log::breadcrumb("pipelines made");
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);
@@ -1689,6 +1701,12 @@ pub fn create_device(
         apply_limit_buckets: false,
     }))
     .map_err(|e| format!("no GPU adapter: {e}"))?;
+    let info = adapter.get_info();
+    let limits = adapter.limits();
+    crate::log::breadcrumb(&format!(
+        "GPU adapter: {} ({:?}, {:?}), driver {} {}; max 2D texture {}, max buffer {}",
+        info.name, info.backend, info.device_type, info.driver, info.driver_info, limits.max_texture_dimension_2d, limits.max_buffer_size
+    ));
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("wf"),
         // Frame timing where the adapter has it (Vulkan on Android does).
@@ -1697,5 +1715,6 @@ pub fn create_device(
         ..Default::default()
     }))
     .map_err(|e| format!("cannot create the GPU device: {e}"))?;
+    crate::log::breadcrumb("GPU device made");
     Ok((adapter, device, queue))
 }

@@ -43,20 +43,127 @@ pub fn log(level: Level, msg: &str) {
     }
 }
 
-static LAST_BREADCRUMB: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+/// Breadcrumbs kept for the reports: the game thread's last steps (its own
+/// list, so another thread's breadcrumb, such as the activity's refresh
+/// rate on the Java UI thread, cannot hide where the game thread stopped),
+/// another thread's last one, an optional log file and an optional status
+/// file (the Android activity shows it on screen).
+struct Crumbs {
+    start: std::time::Instant,
+    game: Option<std::thread::ThreadId>,
+    /// The game thread's last steps: (seconds since start, step).
+    recent: std::collections::VecDeque<(f32, String)>,
+    other: Option<(f32, String, String)>,
+    file: Option<std::fs::File>,
+    status: Option<(std::path::PathBuf, String)>,
+}
 
-/// The latest breadcrumb (the startup watchdog's report).
+/// Game-thread steps kept.
+const RECENT: usize = 8;
+
+static CRUMBS: std::sync::Mutex<Option<Crumbs>> = std::sync::Mutex::new(None);
+
+fn with_crumbs<R>(f: impl FnOnce(&mut Crumbs) -> R) -> Option<R> {
+    let mut guard = CRUMBS.lock().ok()?;
+    let c = guard.get_or_insert_with(|| Crumbs {
+        start: std::time::Instant::now(),
+        game: None,
+        recent: std::collections::VecDeque::new(),
+        other: None,
+        file: None,
+        status: None,
+    });
+    Some(f(c))
+}
+
+/// The calling thread is the game thread (its breadcrumbs are the steps).
+pub fn set_game_thread() {
+    with_crumbs(|c| c.game = Some(std::thread::current().id()));
+}
+
+/// Also writes every breadcrumb to `path` (truncated; the previous file is
+/// kept as `prev`).
+pub fn set_log_file(path: &std::path::Path, prev: &std::path::Path) {
+    let _ = std::fs::rename(path, prev);
+    let file = std::fs::File::create(path).ok();
+    with_crumbs(|c| c.file = file);
+}
+
+/// Keeps `path` holding `header` and the game thread's steps, rewritten at
+/// each step, until [`hide_status`].
+pub fn show_status(path: &std::path::Path, header: &str) {
+    with_crumbs(|c| {
+        c.status = Some((path.to_path_buf(), header.to_string()));
+        write_status(c);
+    });
+}
+
+/// Removes the status file.
+pub fn hide_status() {
+    with_crumbs(|c| {
+        if let Some((path, _)) = c.status.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    });
+}
+
+fn steps_text(c: &Crumbs) -> String {
+    let mut s = String::new();
+    for (t, msg) in &c.recent {
+        s.push_str(&format!("{t:7.2}s  {msg}\n"));
+    }
+    if let Some((t, thread, msg)) = &c.other {
+        s.push_str(&format!("(other thread {thread} at {t:.2}s: {msg})\n"));
+    }
+    s
+}
+
+fn write_status(c: &Crumbs) {
+    if let Some((path, header)) = &c.status {
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, format!("{header}\n{}", steps_text(c))).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+/// The game thread's last steps (newest last), with the time since start,
+/// and another thread's last breadcrumb.
+pub fn game_steps() -> String {
+    with_crumbs(|c| steps_text(c)).unwrap_or_default()
+}
+
+/// The game thread's latest step.
 pub fn last_breadcrumb() -> String {
-    LAST_BREADCRUMB.lock().map(|s| s.clone()).unwrap_or_default()
+    with_crumbs(|c| c.recent.back().map(|r| r.1.clone()).unwrap_or_default()).unwrap_or_default()
+}
+
+fn record(msg: &str) {
+    use std::io::Write as _;
+    with_crumbs(|c| {
+        let t = c.start.elapsed().as_secs_f32();
+        let thread = std::thread::current();
+        let game = c.game.is_none_or(|g| g == thread.id());
+        let name = thread.name().unwrap_or("?").to_string();
+        if let Some(file) = &mut c.file {
+            let _ = writeln!(file, "{t:8.3} {} {msg}", if game { "game" } else { &name });
+        }
+        if game {
+            if c.recent.len() == RECENT {
+                c.recent.pop_front();
+            }
+            c.recent.push_back((t, msg.to_string()));
+            write_status(c);
+        } else {
+            c.other = Some((t, name, msg.to_string()));
+        }
+    });
 }
 
 /// A lifecycle breadcrumb: always in logcat on Android (tag "wf", info),
 /// so a crash log shows the steps that led to it; debug level elsewhere.
 pub fn breadcrumb(msg: &str) {
-    if let Ok(mut last) = LAST_BREADCRUMB.lock() {
-        last.clear();
-        last.push_str(msg);
-    }
+    record(msg);
     #[cfg(target_os = "android")]
     crate::platform::android::log_at(crate::platform::android::INFO, &format!("lifecycle: {msg}"));
     #[cfg(not(target_os = "android"))]

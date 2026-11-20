@@ -31,3 +31,27 @@ pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nat
     platform::set_max_refresh(hz);
     log::breadcrumb(&format!("panel max refresh {hz} Hz"));
 }
+
+/// WarningForeverActivity.nativeSetOverrides: the intent extras `backend`
+/// (0 none, 1 vulkan, 2 gl) and `refresh` (0 none, 1 on, 2 off), before
+/// SDL_main starts.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nativeSetOverrides(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    backend: i32,
+    refresh: i32,
+) {
+    platform::android::set_intent_overrides(backend, refresh);
+}
+
+/// WarningForeverActivity.nativeRefreshState: 0 not decided yet (ask
+/// again), 1 request the panel's top refresh rate, 2 do not (safe mode or
+/// refresh = off).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nativeRefreshState(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+) -> i32 {
+    platform::android::refresh_state() as i32
+}

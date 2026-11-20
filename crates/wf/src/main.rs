@@ -977,6 +977,8 @@ impl BlackCheck {
 pub(crate) fn android_main() -> i32 {
     platform::android::install_panic_hook();
     log::init_from_env();
+    log::set_game_thread();
+    platform::android::launch();
     log::breadcrumb(&format!("SDL_main: {}", app_info::version_line()));
     // A panic must not unwind into SDL's C frames (that aborts with no
     // message): it is caught here, after the hook logged it.

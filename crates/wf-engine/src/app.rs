@@ -133,6 +133,10 @@ pub struct Display {
     scaler: gfx::scale::Scaler,
     /// Frames presented so far.
     presented: u64,
+    /// The first acquire was logged.
+    acquiring: bool,
+    /// Frames in a row not shown (logged now and then).
+    misses: u64,
 }
 
 /// The first uncaptured GPU error (see `Display::new`).
@@ -148,7 +152,14 @@ pub fn take_gpu_error() -> Option<String> {
 
 impl Display {
     pub fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack, cap: FpsCap) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?)));
+        #[allow(unused_mut)]
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?));
+        #[cfg(target_os = "android")]
+        if let Some(b) = platform::android::backends() {
+            desc.backends = b;
+        }
+        crate::log::breadcrumb(&format!("GPU instance: backends {:?}", desc.backends));
+        let instance = wgpu::Instance::new(desc);
         // The lock only covers reading the native window and making the
         // surface on it: the VkSurfaceKHR holds its own reference to the
         // ANativeWindow, so nothing after this can touch a freed window
@@ -163,7 +174,7 @@ impl Display {
             }
             (create_surface(&instance, platform)?, lock.window)
         };
-        crate::log::breadcrumb(&format!("surface made for window {window:#x}; creating the GPU device"));
+        crate::log::breadcrumb(&format!("surface made for window {window:#x}"));
         let (adapter, device, queue) = gfx::gpu::create_device(&instance, Some(&surface))?;
         // GPU errors are logged and kept: the loop stops with the first
         // one (a message box on Android) instead of showing black frames.
@@ -199,13 +210,15 @@ impl Display {
             color_space: Default::default(),
         };
         crate::log::breadcrumb(&format!(
-            "GPU: {} ({:?}, driver {} {}), {:?}, {:?}, {}x{}; building the renderer",
-            info.name, info.backend, info.driver, info.driver_info, format, config.present_mode, config.width, config.height
+            "surface caps: formats {:?}, present modes {:?}; chosen {:?}, {:?}, {}x{}; building the renderer",
+            caps.formats, caps.present_modes, format, config.present_mode, config.width, config.height
         ));
         let scope_oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
+        crate::log::breadcrumb("scaler");
         let scaler = gfx::scale::Scaler::new(&renderer);
+        crate::log::breadcrumb("waiting for the renderer's GPU errors");
         if let Some(e) = pollster::block_on(scope.pop()).or(pollster::block_on(scope_oom.pop())) {
             return Err(format!("the GPU renderer cannot be made on {} ({:?}): {e}", info.name, info.backend));
         }
@@ -222,6 +235,8 @@ impl Display {
             render_scale: 1.0,
             scaler,
             presented: 0,
+            acquiring: false,
+            misses: 0,
         };
         if !display.configure() {
             return Err("cannot configure the window surface".into());
@@ -275,6 +290,12 @@ impl Display {
     /// Configures the surface; false (and the surface dropped) on error.
     fn configure(&mut self) -> bool {
         let Some(surface) = &self.surface else { return false };
+        if self.presented == 0 {
+            crate::log::breadcrumb(&format!(
+                "configure: {:?}, {:?}, {}x{}",
+                self.config.format, self.config.present_mode, self.config.width, self.config.height
+            ));
+        }
         let device = self.renderer.device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         surface.configure(device, &self.config);
@@ -285,6 +306,15 @@ impl Display {
         }
         self.stale = false;
         true
+    }
+
+    /// A frame not shown for `why`: a breadcrumb for the first and every
+    /// 120th in a row, so a loop that never shows one says why.
+    fn missed(&mut self, why: &str) {
+        if self.misses.is_multiple_of(120) {
+            crate::log::breadcrumb(&format!("frame not shown: {why} ({} in a row)", self.misses + 1));
+        }
+        self.misses += 1;
     }
 
     /// Shows `list`, if the window has a surface to show it on. The
@@ -301,6 +331,7 @@ impl Display {
                 if self.surface.take().is_some() {
                     crate::log::breadcrumb("native window gone: surface dropped");
                 }
+                self.missed("no native window");
                 return;
             }
             if self.surface.is_some() && self.surface_window != lock.window {
@@ -328,6 +359,10 @@ impl Display {
             return;
         }
         let Some(surface) = &self.surface else { return };
+        if self.presented == 0 && !self.acquiring {
+            self.acquiring = true;
+            crate::log::breadcrumb("first acquire");
+        }
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -349,15 +384,31 @@ impl Display {
                 self.stale = true;
                 return;
             }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                self.missed("acquire timed out");
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                self.missed("surface occluded");
+                return;
+            }
         };
+        if self.presented == 0 {
+            crate::log::breadcrumb("first acquire: got a frame; rendering");
+        }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let size = (self.config.width, self.config.height);
         self.scaler.render(&mut self.renderer, list, &view, size, self.render_scale);
+        if self.presented == 0 {
+            crate::log::breadcrumb("first frame submitted; presenting");
+        }
         self.renderer.queue().present(frame);
         self.presented += 1;
+        self.misses = 0;
         if self.presented == 1 {
             crate::log::breadcrumb("first frame presented");
+            #[cfg(target_os = "android")]
+            platform::android::first_frame();
         }
         PRESENTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -445,20 +496,24 @@ impl Watchdog {
             let mut told = false;
             while !flag.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(500));
+                crate::platform::android::status_tick();
                 let now = PRESENTED.load(Ordering::Relaxed);
                 if now != seen || BACKGROUND.load(Ordering::Relaxed) {
                     (seen, since) = (now, Instant::now());
                     continue;
                 }
                 if since.elapsed() >= Self::STALL && !flag.load(Ordering::Relaxed) {
-                    let last = crate::log::last_breadcrumb();
-                    crate::log::error(&format!("watchdog: no frame shown for {} s ({now} so far); last step: {last}", since.elapsed().as_secs()));
+                    let steps = crate::log::game_steps();
+                    crate::log::error(&format!("watchdog: no frame shown for {} s ({now} so far); game thread steps:\n{steps}", since.elapsed().as_secs()));
                     if !told {
                         told = true;
-                        crate::platform::android::fatal(&format!(
-                            "No frame for {} seconds ({now} shown so far).\nLast step: {last}\n\nPlease send the logcat (tag wf).",
-                            Self::STALL.as_secs()
-                        ));
+                        let header = format!(
+                            "NO FRAME for {} s ({now} shown so far). Game thread's last steps (seconds since start; also in {}):",
+                            Self::STALL.as_secs(),
+                            crate::platform::android::status_path().with_file_name("wf-log.txt").display()
+                        );
+                        crate::log::show_status(&crate::platform::android::status_path(), &header);
+                        crate::platform::android::fatal(&format!("{header}\n{steps}\nThe same text stays on screen, selectable."));
                     }
                     since = Instant::now();
                 }

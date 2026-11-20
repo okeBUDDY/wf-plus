@@ -33,10 +33,9 @@ pub fn log(error: bool, msg: &str) {
 
 /// Holds SDL's activity mutex: while it is held, the Java thread cannot
 /// release the window's ANativeWindow (surfaceDestroyed) or set a new one.
-/// Every use of the wgpu surface (create, configure, acquire, present)
-/// happens under it, after checking the window pointer is still the one
-/// the surface was made for. Never held across SDL's event pump (which
-/// blocks while the app is paused).
+/// Held only to read the window pointer and make a wgpu surface on it (see
+/// app::Display); never across a GPU call that can wait, nor SDL's event
+/// pump (which blocks while the app is paused).
 pub struct ActivityLock(());
 
 impl ActivityLock {
@@ -129,4 +128,138 @@ pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
 pub fn fatal(msg: &str) {
     log(true, msg);
     let _ = sdl3::messagebox::show_simple_message_box(sdl3::messagebox::MessageBoxFlag::ERROR, "WARNING FOREVER", msg, None);
+}
+
+// Launch modes, safe mode and the on-screen steps.
+//
+// A launch that never shows a frame leaves `wf-launch-pending` in the
+// storage dir (its mode inside). The next launch then runs in safe mode:
+// the GL backend instead of Vulkan, no refresh-rate requests, and the game
+// thread's steps on screen (the activity shows `wf-status.txt`). A safe
+// launch that also fails is followed by a normal one, so a launch killed
+// before its first frame for another reason never locks the app in safe
+// mode. wf-plus.ini (`[android] backend = gl|vulkan`, `refresh = on|off`) and
+// the intent extras `backend` and `refresh` (adb: `am start -n
+// io.github.okebuddy.wfplus/.WarningForeverActivity --es backend gl --es
+// refresh off`) override both modes; the extras win.
+
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+/// From the intent: 0 none, 1 Vulkan, 2 GL.
+static INTENT_BACKEND: AtomicU8 = AtomicU8::new(0);
+/// From the intent: 0 none, 1 on, 2 off.
+static INTENT_REFRESH: AtomicU8 = AtomicU8::new(0);
+/// 0 undecided (SDL_main has not started), 1 allowed, 2 off.
+static REFRESH: AtomicU8 = AtomicU8::new(0);
+/// 0 auto, 1 Vulkan, 2 GL.
+static BACKEND: AtomicU8 = AtomicU8::new(0);
+static SAFE: AtomicBool = AtomicBool::new(false);
+static FIRST_FRAME: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// The activity's intent extras (codes as in the statics above).
+pub fn set_intent_overrides(backend: i32, refresh: i32) {
+    INTENT_BACKEND.store(backend.clamp(0, 2) as u8, Ordering::Relaxed);
+    INTENT_REFRESH.store(refresh.clamp(0, 2) as u8, Ordering::Relaxed);
+}
+
+/// For the activity: 0 ask again later, 1 request the top refresh rate,
+/// 2 do not.
+pub fn refresh_state() -> u8 {
+    REFRESH.load(Ordering::Relaxed)
+}
+
+/// The backends to use; None for wgpu's default.
+pub fn backends() -> Option<wgpu::Backends> {
+    match BACKEND.load(Ordering::Relaxed) {
+        1 => Some(wgpu::Backends::VULKAN),
+        2 => Some(wgpu::Backends::GL),
+        _ => None,
+    }
+}
+
+pub fn safe_mode() -> bool {
+    SAFE.load(Ordering::Relaxed)
+}
+
+/// The file the activity shows on screen while it exists.
+pub fn status_path() -> PathBuf {
+    storage().join("wf-status.txt")
+}
+
+/// Decides this launch's mode (call first thing in SDL_main): starts the
+/// log file (wf-log.txt, the previous launch's kept as wf-log-prev.txt),
+/// reads wf-plus.ini and the intent, and leaves the pending marker.
+pub fn launch() {
+    let dir = storage();
+    crate::log::set_log_file(&dir.join("wf-log.txt"), &dir.join("wf-log-prev.txt"));
+    let pending = dir.join("wf-launch-pending");
+    let prev = std::fs::read_to_string(&pending).ok();
+    let safe = prev.as_deref().map(str::trim) == Some("normal");
+    if let Err(e) = std::fs::write(&pending, if safe { "safe" } else { "normal" }) {
+        crate::log::breadcrumb(&format!("cannot write {}: {e}", pending.display()));
+    }
+    let ini = crate::config::Config::load(&dir.join("wf-plus.ini"));
+    let backend = match INTENT_BACKEND.load(Ordering::Relaxed) {
+        0 => match ini.get("android.backend").map(str::to_ascii_lowercase).as_deref() {
+            Some("vulkan") => 1,
+            Some("gl" | "gles" | "opengl") => 2,
+            _ if safe => 2,
+            _ => 0,
+        },
+        b => b,
+    };
+    let refresh = match INTENT_REFRESH.load(Ordering::Relaxed) {
+        0 => match ini.get("android.refresh").map(str::to_ascii_lowercase).as_deref() {
+            Some("off" | "false" | "0") => 2,
+            Some("on" | "true" | "1") => 1,
+            _ if safe => 2,
+            _ => 1,
+        },
+        r => r,
+    };
+    BACKEND.store(backend, Ordering::Relaxed);
+    REFRESH.store(refresh, Ordering::Relaxed);
+    SAFE.store(safe, Ordering::Relaxed);
+    let backend_name = ["auto", "Vulkan", "GL"][backend as usize];
+    let refresh_name = if refresh == 2 { "off" } else { "on" };
+    crate::log::breadcrumb(&format!(
+        "launch: {} mode (last launch: {}), backend {backend_name}, refresh requests {refresh_name}; log {}",
+        if safe { "SAFE" } else { "normal" },
+        match prev.as_deref().map(str::trim) {
+            None => "showed frames",
+            Some("normal") => "normal, no frame",
+            Some(_) => "safe, no frame",
+        },
+        dir.join("wf-log.txt").display()
+    ));
+    if safe {
+        crate::log::show_status(
+            &status_path(),
+            &format!(
+                "WARNING FOREVER+ SAFE MODE: the last start showed no frame.\nRenderer backend {backend_name}, refresh-rate requests {refresh_name}.\nThe next start is normal again. Steps (also in {}):",
+                dir.join("wf-log.txt").display()
+            ),
+        );
+    } else {
+        crate::log::hide_status();
+    }
+}
+
+/// The first frame is on screen: the launch worked.
+pub fn first_frame() {
+    let _ = std::fs::remove_file(storage().join("wf-launch-pending"));
+    if let Ok(mut f) = FIRST_FRAME.lock() {
+        f.get_or_insert_with(std::time::Instant::now);
+    }
+}
+
+/// Called every half second (the watchdog): takes the on-screen steps
+/// (safe mode, or a slow start the watchdog reported) away 10 s after the
+/// first frame.
+pub fn status_tick() {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    let shown = FIRST_FRAME.lock().ok().and_then(|f| *f);
+    if shown.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(10)) && !DONE.swap(true, Ordering::Relaxed) {
+        crate::log::hide_status();
+    }
 }

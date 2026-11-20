@@ -41,6 +41,10 @@ pub trait Game {
     }
     /// The measured display rate, once a frame (the FPS counter).
     fn set_fps(&mut self, _fps: f32) {}
+    /// The GPU time of a frame (ms, from timestamp queries; None when the
+    /// adapter has none) and the present-to-present time (ms, averaged),
+    /// once a frame (the perf overlay).
+    fn set_frame_time(&mut self, _gpu_ms: Option<f32>, _frame_ms: f32) {}
     /// Draw the subtle arena border when there are margins.
     fn wants_border(&self) -> bool {
         false
@@ -224,6 +228,8 @@ pub fn run_windowed(
     let mut fps = FpsCounter::default();
     let mut snaps = Snapshots::default();
     let mut title_at = Instant::now();
+    let mut presented: Option<Instant> = None;
+    let mut frame_ms = 0.0f32;
     display.render_scale = cfg.render_scale;
     while game.running() {
         for event in platform.poll() {
@@ -271,6 +277,14 @@ pub fn run_windowed(
         let now = Instant::now();
         fps.frame(now);
         game.set_fps(fps.fps as f32);
+        // Present to present: the CPU-side frame time (the fallback of the
+        // GPU timestamps), smoothed.
+        if let Some(at) = presented {
+            let ms = now.duration_since(at).as_secs_f32() * 1e3;
+            frame_ms = if frame_ms == 0.0 { ms } else { frame_ms + (ms - frame_ms) * 0.05 };
+        }
+        presented = Some(now);
+        game.set_frame_time(display.renderer.gpu_ms(), frame_ms);
         if cfg.show_fps && now.duration_since(title_at).as_secs_f32() > 0.5 {
             let title = format!("{} - {:.0} fps", platform.title, fps.fps);
             platform.set_title(&title);

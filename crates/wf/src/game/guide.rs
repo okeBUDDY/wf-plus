@@ -142,9 +142,23 @@ pub fn overlap(a: &[f32; 4], b: &[f32; 4]) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
 
+/// The FPS counter's text: with the perf overlay, the GPU time of a frame
+/// ("165 FPS 3.1MS GPU"), or the present-to-present time without GPU
+/// timestamps ("165 FPS 6.1MS FRAME").
+pub fn fps_text(s: &super::settings::Settings) -> String {
+    let fps = format!("{:.0} FPS", s.fps);
+    if !s.perf_overlay {
+        return fps;
+    }
+    match s.gpu_ms {
+        Some(ms) => format!("{fps} {ms:.1}MS GPU"),
+        None => format!("{fps} {:.1}MS FRAME", s.frame_ms),
+    }
+}
+
 /// Draws the guide and the FPS counter (after the frame's other draws).
 pub fn draw(cx: &mut Cx) {
-    let fps = cx.settings.display.show_fps.then(|| format!("{:.0} FPS", cx.settings.fps));
+    let fps = (cx.settings.display.show_fps || cx.settings.perf_overlay).then(|| fps_text(&cx.settings));
     let guide = cx.guide.filter(|_| shown(cx)).map(|g| text(cx, g));
     if fps.is_none() && guide.is_none() {
         return;
@@ -186,4 +200,20 @@ pub fn draw(cx: &mut Cx) {
         cx.hud.boxes.push(("guide", [x, top + 6.0, x + w, top + 14.0]));
     }
     cx.draw.set_pass(Pass::Arena);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::settings::Settings;
+
+    #[test]
+    fn perf_overlay_text() {
+        let mut s = Settings { fps: 164.6, ..Default::default() };
+        assert_eq!(super::fps_text(&s), "165 FPS");
+        s.perf_overlay = true;
+        s.frame_ms = 6.07;
+        assert_eq!(super::fps_text(&s), "165 FPS 6.1MS FRAME");
+        s.gpu_ms = Some(3.12);
+        assert_eq!(super::fps_text(&s), "165 FPS 3.1MS GPU");
+    }
 }

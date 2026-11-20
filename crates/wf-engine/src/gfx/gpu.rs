@@ -7,6 +7,8 @@
 //! only when their points change. Every draw, cooked or dynamic, is a Slug
 //! instance whose transform is applied on the GPU.
 
+use super::cache::{self, CacheStats, SpriteCache};
+use super::timer::GpuTimer;
 use super::{Blend, Draw, DrawList, Pass, Primitive};
 use std::collections::HashMap;
 use wf_art::shape::{Outline, outline, stroke_margin};
@@ -36,6 +38,8 @@ struct Instance {
 enum BatchKind {
     Sprites,
     Bitmaps,
+    /// Textured quads from a sprite cache page.
+    Cached(u16),
 }
 
 struct Batch {
@@ -69,6 +73,15 @@ pub struct RenderStats {
     pub layer_px: f64,
     pub curve_px: f64,
     pub noise_px: f64,
+    /// Pixels drawn from the sprite cache (one texel fetch each).
+    pub cached_px: f64,
+    /// `curve_px` as it would be with the cache off (every sprite in Slug).
+    pub nocache_curve_px: f64,
+    /// Rasterizing new cache entries: texels written and the estimated
+    /// curve visits.
+    pub atlas_px: f64,
+    pub atlas_curve_px: f64,
+    pub cache: CacheStats,
 }
 
 /// Per layer, for the fragment estimate: its box (local units), the
@@ -78,6 +91,7 @@ struct LayerCost {
     bbox: [f32; 4],
     curves: f32,
     noise: bool,
+    stroke: bool,
 }
 
 /// `bands` is the number of band texels: a layer whose bands do not fit in
@@ -96,6 +110,7 @@ fn layer_cost(l: &GpuLayer, bands: u32, band: impl Fn(u32) -> u32) -> LayerCost 
         bbox: l.bbox.map(f32::from_bits),
         curves: mean(l.band_base, l.hbands) + mean(l.band_base + l.hbands, l.vbands),
         noise: l.paint & paint::FLAG_NOISE != 0,
+        stroke: l.paint & paint::FLAG_STROKE != 0,
     }
 }
 
@@ -117,6 +132,7 @@ pub fn layer_curve_estimates(art: &wf_art::Pack) -> Vec<f32> {
 }
 
 /// Sprite data the CPU needs per draw.
+#[derive(Clone, Copy)]
 struct SpriteInfo {
     bounds: [f32; 4],
     first_layer: u32,
@@ -124,6 +140,47 @@ struct SpriteInfo {
     compose: u32,
     /// Atlas rect (x, y, w, h) of a bitmap sprite.
     bitmap: Option<[u32; 4]>,
+    /// The curves a pixel of its bounds visits on average (all layers, no
+    /// early exit), for the cache's choice and its rasterization budget.
+    curves_per_px: f32,
+    /// Drawn from the sprite cache when it is on.
+    cacheable: bool,
+}
+
+/// A sprite is cached when its pixels visit at least this many curves on
+/// average: the explosions (hundreds), the bullets and the bosses' parts,
+/// not the text (whose glyphs stay Slug-sharp at any size, and are cheap).
+pub const CACHE_MIN_CURVES: f32 = 24.0;
+
+/// Estimated curve visits (texels x curves per texel, no early exit, so
+/// about three times the real work) the cache may spend rasterizing in one
+/// frame: a few hundred microseconds on a phone GPU. A large entry is
+/// filled a strip at a time over several frames; its draws use Slug until
+/// it is complete.
+const RASTER_BUDGET: f64 = 24e6;
+/// The smallest strip, rasterized even over the budget when it is the
+/// frame's first.
+const MIN_STRIP_ROWS: u32 = 16;
+
+/// Sprites kept in Slug whatever their cost: the glyphs, and the title and
+/// menu art (`etc*`), whose pixel lettering a filtered image would soften;
+/// none of them is drawn in the heavy scenes.
+fn slug_only(name: &str) -> bool {
+    name.starts_with("font/") || name.starts_with("etc")
+}
+
+/// Whether a sprite of `layers` (its layer costs) in `bounds` is worth
+/// caching, and its mean curves per pixel.
+fn cache_choice(bounds: [f32; 4], layers: &[LayerCost]) -> (f32, bool) {
+    let area = |b: [f32; 4]| ((b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0)) as f64;
+    let total = area(bounds);
+    if total <= 0.0 || layers.is_empty() {
+        return (0.0, false);
+    }
+    let curves = (layers.iter().map(|l| area(l.bbox) * l.curves as f64).sum::<f64>() / total) as f32;
+    // Strokes are a screen pixel wide at any scale: not one image per bucket.
+    let stroke = layers.iter().any(|l| l.stroke);
+    (curves, !stroke && curves >= CACHE_MIN_CURVES)
 }
 
 pub struct Renderer {
@@ -134,6 +191,16 @@ pub struct Renderer {
     bind_group: wgpu::BindGroup,
     sprite_pipelines: [wgpu::RenderPipeline; 2],
     bitmap_pipelines: [wgpu::RenderPipeline; 2],
+    cached_pipelines: [wgpu::RenderPipeline; 2],
+    /// Slug into a cache page: replaces the texels, never counts.
+    atlas_pipeline: wgpu::RenderPipeline,
+    /// The Slug bind group with the page's pixel space as the view.
+    atlas_bind_group: wgpu::BindGroup,
+    pub cache: SpriteCache,
+    /// This frame's new cache entries: (page, the Slug instance filling it).
+    raster_jobs: Vec<(usize, Instance)>,
+    raster_budget: f64,
+    timer: Option<GpuTimer>,
     sprites: Vec<SpriteInfo>,
     /// A persistent ring of `RING` instance regions of `instance_capacity`
     /// each: a frame writes its own region, so a write never waits on the
@@ -362,19 +429,35 @@ impl Renderer {
                 },
             ],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("slug"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: view_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&curves) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&bands) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&layers) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&ramps) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&bitmaps) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&bitmap_sampler) },
-            ],
+        let slug_group = |label: &str, view: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: view.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&curves) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&bands) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&layers) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&ramps) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&bitmaps) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&bitmap_sampler) },
+                ],
+            })
+        };
+        let bind_group = slug_group("slug", &view_buffer);
+        // The cache pages' view: page texels -> clip.
+        let page_layout = cache::page_layout(&device);
+        let cache = SpriteCache::new(&device, page_layout.clone());
+        let p = cache.page_size() as f32;
+        let atlas_view = ViewUniform { scale: [2.0 / p, -2.0 / p], offset: [-1.0, 1.0], time: 0.0, pad: [0.0; 3] };
+        let atlas_view_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sprite cache view"),
+            size: std::mem::size_of::<ViewUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        queue.write_buffer(&atlas_view_buffer, 0, bytemuck::bytes_of(&atlas_view));
+        let atlas_bind_group = slug_group("sprite cache slug", &atlas_view_buffer);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("slug.wgsl"),
             source: wgpu::ShaderSource::Wgsl(include_str!("slug.wgsl").into()),
@@ -384,15 +467,31 @@ impl Renderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
+        let cached_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sprite cache"),
+            bind_group_layouts: &[Some(&layout), Some(&page_layout)],
+            immediate_size: 0,
+        });
         let instance_attrs =
             wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2, 3 => Float32x4, 4 => Uint32x4];
         let constants: &[(&str, f64)] = if counting { &[("count_visits", 1.0)] } else { &[] };
         let options = wgpu::PipelineCompilationOptions { constants, ..Default::default() };
-        let make = |blend: Blend, kind: BatchKind| {
+        let atlas_options = wgpu::PipelineCompilationOptions::default();
+        // `atlas`: Slug into a cache page (its format, no blending, never
+        // counting).
+        let make_with = |blend: Option<Blend>, kind: BatchKind, atlas: bool| {
             let (vs, fs, topology, buffers) = {
                 (
-                    if kind == BatchKind::Bitmaps { "vs_bitmap" } else { "vs_main" },
-                    if kind == BatchKind::Bitmaps { "fs_bitmap" } else { "fs_main" },
+                    match kind {
+                        BatchKind::Bitmaps => "vs_bitmap",
+                        BatchKind::Sprites => "vs_main",
+                        BatchKind::Cached(_) => "vs_cached",
+                    },
+                    match kind {
+                        BatchKind::Bitmaps => "fs_bitmap",
+                        BatchKind::Sprites => "fs_main",
+                        BatchKind::Cached(_) => "fs_cached",
+                    },
                     wgpu::PrimitiveTopology::TriangleStrip,
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Instance>() as u64,
@@ -403,10 +502,12 @@ impl Renderer {
             };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(match kind {
+                    _ if atlas => "sprite cache raster",
                     BatchKind::Bitmaps => "bitmaps",
                     BatchKind::Sprites => "sprites",
+                    BatchKind::Cached(_) => "cached sprites",
                 }),
-                layout: Some(&pipeline_layout),
+                layout: Some(if matches!(kind, BatchKind::Cached(_)) { &cached_layout } else { &pipeline_layout }),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vs),
@@ -419,10 +520,10 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
-                    compilation_options: options.clone(),
+                    compilation_options: if atlas { atlas_options.clone() } else { options.clone() },
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(blend_state(if counting { Blend::Additive } else { blend })),
+                        format: if atlas { cache::FORMAT } else { format },
+                        blend: blend.map(|b| blend_state(if counting { Blend::Additive } else { b })),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -430,21 +531,32 @@ impl Renderer {
                 cache: None,
             })
         };
+        let make = |blend: Blend, kind: BatchKind| make_with(Some(blend), kind, false);
         let sprite_pipelines = [make(Blend::Normal, BatchKind::Sprites), make(Blend::Additive, BatchKind::Sprites)];
         let bitmap_pipelines = [make(Blend::Normal, BatchKind::Bitmaps), make(Blend::Additive, BatchKind::Bitmaps)];
+        let cached_pipelines = [make(Blend::Normal, BatchKind::Cached(0)), make(Blend::Additive, BatchKind::Cached(0))];
+        let atlas_pipeline = make_with(None, BatchKind::Sprites, true);
+        let costs = pack_layer_costs(art);
         let sprites = art
             .sprites
             .iter()
-            .map(|s| SpriteInfo {
-                bounds: s.bounds,
-                first_layer: s.first_layer,
-                layer_count: s.layer_count,
-                compose: s.compose,
-                bitmap: (s.flags & wf_art::sprite_flags::BITMAP != 0)
-                    .then(|| [s.bitmap[0] & 0xffff, s.bitmap[0] >> 16, s.bitmap[1] & 0xffff, s.bitmap[1] >> 16]),
+            .map(|s| {
+                let bitmap = (s.flags & wf_art::sprite_flags::BITMAP != 0)
+                    .then(|| [s.bitmap[0] & 0xffff, s.bitmap[0] >> 16, s.bitmap[1] & 0xffff, s.bitmap[1] >> 16]);
+                let layers = costs.get(s.first_layer as usize..(s.first_layer + s.layer_count) as usize).unwrap_or(&[]);
+                let (curves_per_px, cacheable) = cache_choice(s.bounds, layers);
+                SpriteInfo {
+                    bounds: s.bounds,
+                    first_layer: s.first_layer,
+                    layer_count: s.layer_count,
+                    compose: s.compose,
+                    bitmap,
+                    curves_per_px,
+                    cacheable: cacheable && bitmap.is_none() && s.flags & wf_art::sprite_flags::TRACED == 0 && !slug_only(art.name(s)),
+                }
             })
             .collect();
-        let costs = pack_layer_costs(art);
+        let timer = GpuTimer::new(&device, &queue);
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);
@@ -456,6 +568,13 @@ impl Renderer {
             bind_group,
             sprite_pipelines,
             bitmap_pipelines,
+            cached_pipelines,
+            atlas_pipeline,
+            atlas_bind_group,
+            cache,
+            raster_jobs: Vec::new(),
+            raster_budget: 0.0,
+            timer,
             sprites,
             instance_buffer,
             instance_capacity,
@@ -504,6 +623,120 @@ impl Renderer {
             return;
         }
         self.batches.push(Batch { kind, blend, pass, start, end });
+    }
+
+    /// The cache entry to draw sprite `id` from under `m` (logical units)
+    /// at `k` device pixels per logical one: the existing one, or a new one
+    /// queued for rasterization this frame within the frame's budget. None:
+    /// draw it with Slug.
+    fn cached(&mut self, id: u32, info: SpriteInfo, m: &[[f32; 3]; 3], k: f32) -> Option<cache::Entry> {
+        if !self.cache.enabled || !info.cacheable {
+            return None;
+        }
+        let s = cache::max_scale([m[0][0], m[0][1], m[1][0], m[1][1]]) * k;
+        if s.is_nan() || s <= 1e-3 {
+            return None;
+        }
+        let n = cache::bucket(s * cache::OVERSAMPLE);
+        let e = match self.cache.get(id, n) {
+            Some(e) => e,
+            None if self.raster_budget <= 0.0 => {
+                self.cache.stats.deferred += 1;
+                return None;
+            }
+            None => match self.cache.insert(id, n, info.bounds) {
+                Some(e) => e,
+                None => {
+                    self.cache.stats.deferred += 1;
+                    return None;
+                }
+            },
+        };
+        if e.complete() {
+            self.cache.stats.hits += 1;
+            return Some(e);
+        }
+        // Rasterize the next rows the frame's budget pays for (at least a
+        // strip when nothing else was this frame, so every entry finishes).
+        let [_, _, w, h] = e.rect;
+        let row_work = w as f64 * info.curves_per_px.max(1.0) as f64;
+        let mut rows = (self.raster_budget / row_work).floor().max(0.0) as u32;
+        if self.raster_jobs.is_empty() {
+            rows = rows.max(MIN_STRIP_ROWS);
+        }
+        let rows = rows.min(h - e.done);
+        if rows == 0 {
+            self.cache.stats.deferred += 1;
+            return None;
+        }
+        let work = rows as f64 * row_work;
+        self.raster_budget -= work;
+        self.stats.atlas_px += (rows * w) as f64;
+        self.stats.atlas_curve_px += work;
+        self.cache.stats.rasterized += 1;
+        let scale = e.scale;
+        let o = e.origin;
+        self.raster_jobs.push((
+            e.page,
+            Instance {
+                bounds: e.strip(e.done, e.done + rows),
+                m0: [scale, 0.0, 0.0, scale],
+                m1: [e.rect[0] as f32 - o[0] * scale, e.rect[1] as f32 - o[1] * scale],
+                tint: [1.0; 4],
+                layers: [info.first_layer, info.layer_count, info.compose, LINE_WIDTH.to_bits()],
+            },
+        ));
+        let done = e.done + rows;
+        self.cache.set_done(id, n, done);
+        if done < h {
+            self.cache.stats.deferred += 1;
+            return None;
+        }
+        // Complete: the raster passes run before the frame's, so it is
+        // drawn from this frame.
+        self.cache.stats.hits += 1;
+        Some(cache::Entry { done, ..e })
+    }
+
+    /// Whether sprite `id` is drawn from the cache when it is on.
+    pub fn sprite_cacheable(&self, id: u32) -> bool {
+        self.sprites.get(id as usize).is_some_and(|s| s.cacheable)
+    }
+
+    /// Turns the sprite cache on or off (off frees its pages).
+    pub fn set_sprite_cache(&mut self, on: bool) {
+        self.cache.enabled = on;
+        if !on {
+            self.cache.clear();
+            self.cache.pages.clear();
+        }
+    }
+
+    /// The GPU time of a frame (ms, the mean over the last ~30 timed
+    /// frames) when the device has timestamp queries.
+    pub fn gpu_ms(&self) -> Option<f32> {
+        self.timer.as_ref().and_then(|t| t.mean_ms)
+    }
+
+    /// The last timed frame's GPU time (ms).
+    pub fn last_gpu_ms(&self) -> Option<f32> {
+        self.timer.as_ref().and_then(|t| t.last_ms)
+    }
+
+    /// Whether GPU timestamps are measured.
+    pub fn has_gpu_timer(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// Waits for the GPU and reads the timestamps of the frames submitted
+    /// (the benchmarks: `last_gpu_ms` is then this frame's).
+    pub fn collect_gpu_time(&mut self) {
+        if let Some(t) = &mut self.timer {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            t.collect();
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            t.collect();
+        }
     }
 
     /// Builds the frame's dynamic shapes into the dynamic region, unless all
@@ -582,10 +815,29 @@ impl Renderer {
 
 }
 
-/// Adds an instance's estimated fragment work to `stats`: each area in
-/// pixels, scaled by the part of its screen box inside the window.
+/// An instance's estimated fragment work (pixels).
+#[derive(Clone, Copy, Default)]
+struct Cost {
+    quad: f64,
+    layer: f64,
+    curve: f64,
+    noise: f64,
+}
+
+impl Cost {
+    fn add_to(self, stats: &mut RenderStats) {
+        stats.quad_px += self.quad;
+        stats.layer_px += self.layer;
+        stats.curve_px += self.curve;
+        stats.noise_px += self.noise;
+    }
+}
+
+/// An instance's estimated fragment work: each area in pixels, scaled by
+/// the part of its screen box inside the window.
 #[allow(clippy::too_many_arguments)]
-fn estimate(stats: &mut RenderStats, costs: &[LayerCost], m: &[[f32; 3]; 3], layout: &super::Layout, size: (u32, u32), bounds: [f32; 4], first: u32, count: u32) {
+fn estimate(costs: &[LayerCost], m: &[[f32; 3]; 3], layout: &super::Layout, size: (u32, u32), bounds: [f32; 4], first: u32, count: u32) -> Cost {
+    let mut cost = Cost::default();
     let k = layout.scale;
     let det = ((m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs() * k * k) as f64;
     let area = |b: [f32; 4]| -> f64 {
@@ -608,16 +860,17 @@ fn estimate(stats: &mut RenderStats, costs: &[LayerCost], m: &[[f32; 3]; 3], lay
         let clipped = ((hi[0].min(size.0 as f32) - lo[0].max(0.0)).max(0.0) * (hi[1].min(size.1 as f32) - lo[1].max(0.0)).max(0.0)) as f64;
         if boxed <= 0.0 { 0.0 } else { full * clipped / boxed }
     };
-    stats.quad_px += area(bounds);
+    cost.quad = area(bounds);
     for l in first..first + count {
         let Some(c) = costs.get(l as usize) else { continue };
         let px = area(c.bbox);
-        stats.layer_px += px;
-        stats.curve_px += px * c.curves as f64;
+        cost.layer += px;
+        cost.curve += px * c.curves as f64;
         if c.noise {
-            stats.noise_px += px;
+            cost.noise += px;
         }
     }
+    cost
 }
 
 impl Renderer {
@@ -650,12 +903,18 @@ impl Renderer {
         self.by_sprite.clear();
         self.instances.clear();
         self.batches.clear();
+        self.raster_jobs.clear();
+        self.raster_budget = RASTER_BUDGET;
+        self.cache.begin_frame();
+        if let Some(t) = &mut self.timer {
+            t.begin_frame(&self.device);
+        }
         self.build_dynamic(list);
         self.stats.dynamic_us = t0.elapsed().as_secs_f64() * 1e6;
         for draw in &list.draws {
             match draw {
                 Draw::Sprite { sprite, transform, color, blend, clip, pass, .. } => {
-                    let Some(info) = self.sprites.get(sprite.0 as usize) else {
+                    let Some(&info) = self.sprites.get(sprite.0 as usize) else {
                         continue;
                     };
                     if let Some(rect) = info.bitmap {
@@ -693,12 +952,37 @@ impl Renderer {
                             continue;
                         }
                     }
-                    if self.collect {
-                        let before = self.stats.curve_px;
-                        estimate(&mut self.stats, &self.costs, m, &layout, size, bounds, info.first_layer, info.layer_count);
+                    let cost = if self.collect {
+                        let c = estimate(&self.costs, m, &layout, size, bounds, info.first_layer, info.layer_count);
+                        self.stats.nocache_curve_px += c.curve;
+                        Some(c)
+                    } else {
+                        None
+                    };
+                    if clip.is_none()
+                        && let Some(e) = self.cached(sprite.0, info, m, k)
+                    {
+                        let (quad, texels) = e.quad();
+                        if self.collect {
+                            self.stats.cached_px += estimate(&self.costs, m, &layout, size, quad, 0, 0).quad;
+                            self.by_sprite.entry(sprite.0).or_default().0 += 1;
+                        }
+                        let i = self.instances.len() as u32;
+                        self.instances.push(Instance {
+                            bounds: quad,
+                            m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
+                            m1: [m[2][0], m[2][1]],
+                            tint: color.to_f32(),
+                            layers: texels,
+                        });
+                        self.push_batch(BatchKind::Cached(e.page as u16), *blend, *pass, i, i + 1);
+                        continue;
+                    }
+                    if let Some(c) = cost {
+                        c.add_to(&mut self.stats);
                         let e = self.by_sprite.entry(sprite.0).or_default();
                         e.0 += 1;
-                        e.1 += self.stats.curve_px - before;
+                        e.1 += c.curve;
                     }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {
@@ -723,11 +1007,12 @@ impl Renderer {
                     let sy = (m[1][0] * m[1][0] + m[1][1] * m[1][1]).sqrt();
                     let d = 1.0 / (sx.min(sy) * k).max(1e-6);
                     if self.collect {
-                        let before = self.stats.curve_px;
-                        estimate(&mut self.stats, &self.costs, m, &layout, size, [b[0] - d, b[1] - d, b[2] + d, b[3] + d], layer, 1);
+                        let c = estimate(&self.costs, m, &layout, size, [b[0] - d, b[1] - d, b[2] + d, b[3] + d], layer, 1);
+                        c.add_to(&mut self.stats);
+                        self.stats.nocache_curve_px += c.curve;
                         let e = self.by_sprite.entry(u32::MAX).or_default();
                         e.0 += 1;
-                        e.1 += self.stats.curve_px - before;
+                        e.1 += c.curve;
                     }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {
@@ -742,6 +1027,11 @@ impl Renderer {
             }
         }
 
+        // The new cache entries' Slug instances follow the frame's, by page.
+        self.raster_jobs.sort_by_key(|j| j.0);
+        let raster_start = self.instances.len() as u32;
+        self.instances.extend(self.raster_jobs.iter().map(|j| j.1));
+        self.stats.cache = self.cache.stats;
         self.stats.build_us = t0.elapsed().as_secs_f64() * 1e6;
         let t1 = std::time::Instant::now();
         if self.instances.len() > self.instance_capacity {
@@ -773,6 +1063,34 @@ impl Renderer {
         let t2 = std::time::Instant::now();
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        let instances = self.instance_buffer.slice(ring_offset..);
+        // Fill the new cache entries first: one pass per page written.
+        let mut first_pass = true;
+        let mut j = 0;
+        while j < self.raster_jobs.len() {
+            let page = self.raster_jobs[j].0;
+            let end = j + self.raster_jobs[j..].iter().take_while(|r| r.0 == page).count();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sprite cache"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.cache.pages[page].view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: self.timer.as_ref().and_then(|t| t.writes(first_pass, false)),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            first_pass = false;
+            pass.set_pipeline(&self.atlas_pipeline);
+            pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+            pass.set_vertex_buffer(0, instances);
+            pass.draw(0..4, raster_start + j as u32..raster_start + end as u32);
+            self.stats.draw_calls += 1;
+            j = end;
+        }
         {
             let clear = list.clear.to_f32();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -792,13 +1110,12 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self.timer.as_ref().and_then(|t| t.writes(first_pass, true)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
             let [ax, ay, aw, ah] = if list.menu { [0, 0, size.0, size.1] } else { layout.arena_px };
-            let instances = self.instance_buffer.slice(ring_offset..);
             let mut scissor = None;
             let mut pipeline = None;
             for batch in &self.batches {
@@ -825,13 +1142,25 @@ impl Renderer {
                         pass.set_vertex_buffer(0, instances);
                         pass.draw(0..4, batch.start..batch.end);
                     }
+                    BatchKind::Cached(page) => {
+                        pass.set_pipeline(&self.cached_pipelines[blend_index(batch.blend)]);
+                        pass.set_bind_group(1, &self.cache.pages[page as usize].bind_group, &[]);
+                        pass.set_vertex_buffer(0, instances);
+                        pass.draw(0..4, batch.start..batch.end);
+                    }
                 }
             }
             if fading {
                 self.fade.draw(&mut pass, size);
             }
         }
+        if let Some(t) = &self.timer {
+            t.resolve(&mut encoder);
+        }
         self.queue.submit([encoder.finish()]);
+        if let Some(t) = &mut self.timer {
+            t.after_submit();
+        }
         self.stats.submit_us = t2.elapsed().as_secs_f64() * 1e6;
     }
 
@@ -858,8 +1187,9 @@ impl Renderer {
     }
 
     /// A counting renderer's frame: the curves visited by all pixels'
-    /// rays, summed (the measured fragment work).
-    pub fn count_visits(&mut self, list: &DrawList, size: (u32, u32)) -> f64 {
+    /// rays, summed (the measured fragment work), and the sprite cache's
+    /// texel fetches.
+    pub fn count_visits(&mut self, list: &DrawList, size: (u32, u32)) -> (f64, f64) {
         let (width, height) = size;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("visits"),
@@ -895,14 +1225,15 @@ impl Renderer {
         buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map visits"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let data = buffer.slice(..).get_mapped_range().expect("mapped visits");
-        let mut sum = 0.0;
+        let (mut sum, mut fetches) = (0.0, 0.0);
         for y in 0..height {
             for x in 0..width {
                 let o = (y * row + x * 8) as usize;
                 sum += f16_to_f32(u16::from_le_bytes([data[o], data[o + 1]])) as f64 * 64.0;
+                fetches += f16_to_f32(u16::from_le_bytes([data[o + 2], data[o + 3]])) as f64 * 64.0;
             }
         }
-        sum
+        (sum, fetches)
     }
 
     /// Renders `list` into a new `width` x `height` image and reads it back
@@ -991,7 +1322,8 @@ pub fn create_device(
     .map_err(|e| format!("no GPU adapter: {e}"))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("wf"),
-        required_features: wgpu::Features::empty(),
+        // Frame timing where the adapter has it (Vulkan on Android does).
+        required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
         required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
         ..Default::default()
     }))

@@ -14,7 +14,9 @@
 //! wide whatever the transform, as Direct3D 7 drew them.
 
 pub mod gpu;
+pub mod cache;
 pub mod fade;
+pub mod timer;
 pub mod layout;
 pub mod scale;
 pub mod transform;

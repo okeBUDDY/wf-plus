@@ -430,3 +430,45 @@ fn fs_bitmap(in: BitmapOut) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(c.rgb * in.tint.rgb * in.tint.a, c.a * in.tint.a);
 }
+
+// The sprite cache (gfx/cache.rs): a sprite's Slug layers rasterized once
+// per scale bucket into an atlas page (premultiplied), drawn as a textured
+// quad under the instance's transform. The page is at least as fine as the
+// screen (the bucket is the next 1.25x step at or above the instance's
+// largest scale), so linear filtering only ever shrinks it. The tint
+// modulates it as it does the Slug path's output.
+@group(1) @binding(0) var atlas_tex: texture_2d<f32>;
+@group(1) @binding(1) var atlas_sampler: sampler;
+
+struct CachedOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) tint: vec4<f32>,
+};
+
+@vertex
+fn vs_cached(@builtin(vertex_index) vi: u32, inst: Instance) -> CachedOut {
+    let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
+    let local = mix(inst.bounds.xy, inst.bounds.zw, corner);
+    let screen = vec2<f32>(
+        local.x * inst.m0.x + local.y * inst.m0.z + inst.m1.x,
+        local.x * inst.m0.y + local.y * inst.m0.w + inst.m1.y,
+    );
+    var out: CachedOut;
+    out.pos = vec4<f32>(screen * view.scale + view.offset, 0.5, 1.0);
+    // layers = the entry's texel rect (x, y, w, h) in its page.
+    let texel = vec2<f32>(inst.layers.xy) + corner * vec2<f32>(inst.layers.zw);
+    out.uv = texel / vec2<f32>(textureDimensions(atlas_tex));
+    out.tint = inst.tint;
+    return out;
+}
+
+@fragment
+fn fs_cached(in: CachedOut) -> @location(0) vec4<f32> {
+    let c = textureSampleLevel(atlas_tex, atlas_sampler, in.uv, 0.0);
+    if (count_visits) {
+        // One texel fetch, counted apart from the curve visits (green).
+        return vec4<f32>(0.0, 1.0 / 64.0, 0.0, 0.0);
+    }
+    return vec4<f32>(c.rgb * in.tint.rgb * in.tint.a, c.a * in.tint.a);
+}

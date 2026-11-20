@@ -378,6 +378,79 @@ mod coverage_tests {
         assert!(failed.is_empty(), "uncovered pixels: {}", failed.join(", "));
     }
 
+    /// The sprite cache draws every cached sprite as Slug does: each one at
+    /// several scales (between and on the cache's buckets), turns, a
+    /// stretch and sub-pixel offsets, tinted and additive, cache on against
+    /// off. Only antialiasing may differ.
+    #[test]
+    fn sprite_cache_matches_slug() {
+        let art = crate::art::Art::load();
+        let Some(mut r) = renderer(&art) else { return };
+        let (w, h) = (1280u32, 720u32);
+        let mut worst = (0u8, 0.0f64, String::new());
+        let mut worst_mean = 0.0f64;
+        let mut report = Vec::new();
+        for id in 0..art.count() as u32 {
+            if !r.sprite_cacheable(id) {
+                continue;
+            }
+            let b = art.pack.sprites[id as usize].bounds;
+            let size = (b[2] - b[0]).max(b[3] - b[1]).max(1.0);
+            let mut list = DrawList::new();
+            list.clear = Argb(0xff20_2020);
+            let mut i = 0;
+            for &(sx, sy) in &[(0.45f32, 0.45f32), (0.8, 0.8), (1.0, 1.0), (1.13, 1.13), (1.7, 0.7), (2.3, 2.3)] {
+                for &turn in &[0.0f32, 0.37, 2.1] {
+                    let s = 70.0 / size;
+                    let mut t = Transform::translation(-(b[0] + b[2]) * 0.5, -(b[1] + b[3]) * 0.5);
+                    t.scale(sx * s, sy * s);
+                    t.rotate_z(turn);
+                    let (cx, cy) = ((i % 8) as f32 * 80.0 + 40.0 + 0.3 * i as f32 % 1.0, (i / 8) as f32 * 160.0 + 80.0 + 0.17 * i as f32 % 1.0);
+                    t.translate(cx, cy);
+                    let (color, blend) = if i % 3 == 2 { (Argb(0x80ff_c040), Blend::Additive) } else { (Argb(0xffff_ffff), Blend::Normal) };
+                    list.sprite(crate::gfx::SpriteId(id), &t, color, blend);
+                    i += 1;
+                }
+            }
+            r.set_sprite_cache(false);
+            let slug = r.render_to_rgba(&list, w, h);
+            r.set_sprite_cache(true);
+            for _ in 0..64 {
+                let _ = r.render_to_rgba(&list, w, h);
+                if r.stats.cache.rasterized == 0 {
+                    break;
+                }
+            }
+            let cached = r.render_to_rgba(&list, w, h);
+            assert_eq!(r.stats.cache.deferred, 0);
+            let (mut max, mut sum) = (0u8, 0u64);
+            for (a, b) in slug.iter().zip(&cached) {
+                let d = a.abs_diff(*b);
+                max = max.max(d);
+                sum += d as u64;
+            }
+            let mean = sum as f64 / slug.len() as f64 * 4.0 / 3.0;
+            let name = art.name(crate::gfx::SpriteId(id)).to_string();
+            if let Some(dir) = std::env::var_os("WF_CACHE_DUMP") {
+                let file = name.replace('/', "_");
+                std::fs::write(std::path::Path::new(&dir).join(format!("{file}_slug.rgba")), &slug).unwrap();
+                std::fs::write(std::path::Path::new(&dir).join(format!("{file}_cached.rgba")), &cached).unwrap();
+            }
+            report.push(format!("{name} max {max} mean {mean:.3}"));
+            worst_mean = worst_mean.max(mean);
+            if max > worst.0 {
+                worst = (max, mean, name);
+            }
+        }
+        println!("{}", report.join("\n"));
+        assert!(!report.is_empty(), "no sprite is cached");
+        // Antialiasing differences only: a shifted or softened sprite moves
+        // the mean far more (the 1x atlas, too soft on thin lines, measured
+        // up to 0.42 on these sprites; 1.5x stays under 0.4).
+        assert!(worst_mean < 0.5, "a cached sprite differs from Slug: {}", report.join(", "));
+        println!("worst: {} max {} mean {:.3}", worst.2, worst.0, worst.1);
+    }
+
     /// Not a check: renders every sprite and glyph, white-tinted over black,
     /// into 1280x720 pages written as raw RGBA to `$WF_COVERAGE_DUMP` (for
     /// comparing coverage across shader changes).

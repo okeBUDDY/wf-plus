@@ -42,6 +42,14 @@ pub struct Settings {
     pub input_dirty: bool,
     /// The display rate measured last, for SHOW FPS.
     pub fps: f32,
+    /// SHOW FPS with the frame's GPU time (`ui.perf_overlay`).
+    pub perf_overlay: bool,
+    /// The GPU time of a frame (ms; None without timestamp queries) and
+    /// the present-to-present time, for the perf overlay.
+    pub gpu_ms: Option<f32>,
+    pub frame_ms: f32,
+    /// Draw the heavy sprites from the sprite cache (`gfx.sprite_cache`).
+    pub sprite_cache: bool,
     /// When the input guide shows (`ui.input_guide`).
     pub input_guide: super::guide::Policy,
     /// The device the guide names, when forced (`--guide`, screenshots).
@@ -66,6 +74,10 @@ impl Default for Settings {
             touch_scale: 1.0,
             input_dirty: true,
             fps: 0.0,
+            perf_overlay: false,
+            gpu_ms: None,
+            frame_ms: 0.0,
+            sprite_cache: true,
             input_guide: Default::default(),
             guide_device: None,
             caps: wf_engine::platform::capabilities(),
@@ -92,6 +104,8 @@ impl Settings {
         s.fps_custom = c.get_or("display.fps_custom", s.fps_custom).clamp(1.0, 1000.0);
         s.hide_names = c.get_bool("ui.hide_names", false);
         s.input_guide = c.get("ui.input_guide").and_then(super::guide::Policy::parse).unwrap_or_default();
+        s.perf_overlay = c.get_bool("ui.perf_overlay", s.perf_overlay);
+        s.sprite_cache = c.get_bool("gfx.sprite_cache", s.sprite_cache);
         let b = Bindings::from_config(c);
         s.mouse_steering = b.mouse_steering;
         s.dead_zone = b.dead_zone;
@@ -111,6 +125,8 @@ impl Settings {
         c.set("display.fps_custom", self.fps_custom);
         c.set("ui.input_guide", self.input_guide.name());
         c.set("ui.hide_names", self.hide_names);
+        c.set("ui.perf_overlay", if self.perf_overlay { "on" } else { "off" });
+        c.set("gfx.sprite_cache", if self.sprite_cache { "on" } else { "off" });
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
         }

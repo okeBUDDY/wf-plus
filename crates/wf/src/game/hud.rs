@@ -290,23 +290,7 @@ impl GameHud {
 
     /// DrawGameOver (0x420500).
     fn draw_game_over(&mut self, cx: &mut Cx) {
-        let mut t = Transform::IDENTITY;
-        t.scale(1.0, self.frame_open);
-        t.translate(-(((cx.app.frame_count & 0x3f) * 4) as f32), -200.0);
-        // The original's literal (pi / 6 rounded to f32).
-        #[allow(clippy::approx_constant)]
-        t.rotate_z(0.523_598_8);
-        let mut band = t;
-        band.m[2][0] += 160.0;
-        band.m[2][1] += 200.0;
-        for k in band_copies(cx) {
-            texels::draw(cx, &texels::ETC0_BAND, &along(&band, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
-        }
-        let mut t = super::background::rotate(&t, 0x200);
-        t.translate(160.0, 200.0);
-        for k in band_copies(cx) {
-            texels::draw(cx, &texels::ETC0_BAND, &along(&t, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
-        }
+        warning_bands(cx, cx.app.frame_count, self.frame_open);
 
         let chart_color = alpha(self.chart_alpha, 200.0) | 0xff80;
         let info_color = alpha(self.info_alpha, 128.0) | 0xff_8000;
@@ -835,9 +819,35 @@ fn put(cx: &mut Cx, what: &'static str, font: Font, origin: [f32; 2], at: [f32; 
     cx.hud.boxes.push((what, [x, y, x + w, y + h]));
 }
 
-/// The copies of a scrolling band (768 units of texels long) that cover
-/// the view: one across 640 units; in a wider view (an HD arena, or the
-/// window around a Classic one), more on each side along the band.
+/// The two diagonal WARNING bands of the boss's introduction (etc0.pat's
+/// strip, one colour), sliding 4 units a frame along themselves, opened
+/// to `frame_open` of their height.
+pub(crate) fn warning_bands(cx: &mut Cx, frame_count: u32, frame_open: f32) {
+    let mut t = Transform::IDENTITY;
+    t.scale(1.0, frame_open);
+    t.translate(-(((frame_count & 0x3f) * 4) as f32), -200.0);
+    // The original's literal (pi / 6 rounded to f32).
+    #[allow(clippy::approx_constant)]
+    t.rotate_z(0.523_598_8);
+    let mut band = t;
+    band.m[2][0] += 160.0;
+    band.m[2][1] += 200.0;
+    for k in band_copies(cx) {
+        texels::draw(cx, &texels::ETC0_BAND, &along(&band, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+    }
+    let mut t = super::background::rotate(&t, 0x200);
+    t.translate(160.0, 200.0);
+    for k in band_copies(cx) {
+        texels::draw(cx, &texels::ETC0_BAND, &along(&t, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+    }
+}
+
+/// The copies of a scrolling band (1024 units long, its strip repeating
+/// every 256) that cover the view: one across 640 units; in a wider view
+/// (an HD arena, or the window around a Classic one), more on each side
+/// along the band, end to end. (Copies 768 apart overlapped by a quarter
+/// band, drawn twice there: that stretch was brighter and more orange,
+/// and slid along with the band.)
 fn band_copies(cx: &Cx) -> std::ops::RangeInclusive<i32> {
     let extra = (cx.hud_view().1 - 640.0).max(0.0);
     let k = (extra / 600.0).ceil() as i32;
@@ -848,7 +858,7 @@ fn band_copies(cx: &Cx) -> std::ops::RangeInclusive<i32> {
 fn along(t: &Transform, k: i32) -> Transform {
     let mut t = *t;
     if k != 0 {
-        let d = 768.0 * k as f32;
+        let d = (BAND[1][0] - BAND[0][0]) * k as f32;
         t.m[2][0] += t.m[0][0] * d;
         t.m[2][1] += t.m[0][1] * d;
     }

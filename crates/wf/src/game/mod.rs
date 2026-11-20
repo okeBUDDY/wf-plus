@@ -538,6 +538,67 @@ mod coverage_tests {
         assert!(far < 64 && mean < 0.02, "the analytic shapes differ from Slug: max {max} mean {mean:.4}, {far} channels > 8");
     }
 
+    /// The boss introduction's WARNING bands keep the original's one colour
+    /// (0xc8ff4000 over the strip's white) as they slide: at every slide
+    /// offset, in a wide HD arena (copies of the band end to end) and a
+    /// Classic one, with the sprite cache off and on, a fully covered
+    /// stroke pixel is that colour and none is brighter (a stretch drawn
+    /// twice was).
+    #[test]
+    fn warning_band_keeps_its_colour() {
+        let art = crate::art::Art::load();
+        let Some(mut r) = renderer(&art) else { return };
+        // The strip's opacity (0.933) times the colour's alpha.
+        let a = 200.0 / 255.0 * 0.933;
+        let (er, eg) = (255.0 * a, 64.0 * a);
+        let mut report = Vec::new();
+        for (size, mode) in [((2000u32, 1253u32), super::arena::Mode::Hd), ((1280, 720), super::arena::Mode::Classic)] {
+            let mut cx = super::tests::cx();
+            cx.window_size = size;
+            cx.window_arena_width = wf_engine::app::window_arena(size)[0];
+            cx.arena_choice = mode;
+            let arena = cx.chosen_arena();
+            super::app::begin_frame(&mut cx, true);
+            cx.set_arena(arena);
+            for cache in [false, true] {
+                r.set_sprite_cache(cache);
+                for frame in (0..64).step_by(3) {
+                    super::app::begin_frame(&mut cx, false);
+                    cx.draw.clear = Argb(0xff00_0000);
+                    super::hud::warning_bands(&mut cx, frame, 1.0);
+                    let mut rgba = r.render_to_rgba(&cx.draw, size.0, size.1);
+                    if cache {
+                        for _ in 0..16 {
+                            if r.stats.cache.rasterized == 0 {
+                                break;
+                            }
+                            rgba = r.render_to_rgba(&cx.draw, size.0, size.1);
+                        }
+                    }
+                    // Every stroke pixel: the hue (G/R of the sums) and the
+                    // brightest pixel (the colour at full cover; brighter
+                    // where the band is drawn twice).
+                    let (mut sr, mut sg, mut max, mut strokes) = (0.0f64, 0.0f64, 0u8, 0usize);
+                    for p in rgba.chunks_exact(4) {
+                        if p[0] > 0 {
+                            strokes += 1;
+                            max = max.max(p[0]);
+                            sr += p[0] as f64;
+                            sg += p[1] as f64;
+                        }
+                    }
+                    let hue = sg / sr.max(1.0);
+                    let line = format!("{size:?} {mode:?} cache {cache} frame {frame}: {strokes} px, G/R {hue:.4}, max R {max}");
+                    assert!(strokes > 1000, "no band drawn: {line}");
+                    assert!((hue - eg / er).abs() < 0.006, "the band's hue drifts (expected G/R {:.4}): {line}", eg / er);
+                    assert!((max as f64 - er).abs() < 2.5, "the band's colour is not 0xc8ff4000 (R {er:.1}) at full cover, or part is drawn twice: {line}");
+                    report.push(line);
+                }
+            }
+        }
+        println!("{}", report.join("\n"));
+    }
+
     /// Not a check: renders every sprite and glyph, white-tinted over black,
     /// into 1280x720 pages written as raw RGBA to `$WF_COVERAGE_DUMP` (for
     /// comparing coverage across shader changes).

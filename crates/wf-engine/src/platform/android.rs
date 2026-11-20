@@ -56,6 +56,38 @@ impl Drop for ActivityLock {
     }
 }
 
+/// Asks for `hz` on the native window (ANativeWindow_setFrameRate, API 30+,
+/// looked up at run time since the app runs from API 24), with
+/// FRAME_RATE_COMPATIBILITY_FIXED_SOURCE: the game renders at the panel's
+/// rate, so the system keeps that mode. Under an [`ActivityLock`], with a
+/// live window.
+pub fn set_frame_rate(window: usize, hz: f32) {
+    type SetFrameRate = unsafe extern "C" fn(*mut std::ffi::c_void, f32, i8) -> i32;
+    static FUNC: std::sync::OnceLock<Option<SetFrameRate>> = std::sync::OnceLock::new();
+    let func = FUNC.get_or_init(|| {
+        use sdl3::sys::loadso::{SDL_LoadFunction, SDL_LoadObject};
+        // SAFETY: loading libandroid (always present) and looking a symbol
+        // up; the pointer is the NDK's declared signature.
+        unsafe {
+            let lib = SDL_LoadObject(c"libandroid.so".as_ptr());
+            if lib.is_null() {
+                return None;
+            }
+            SDL_LoadFunction(lib, c"ANativeWindow_setFrameRate".as_ptr()).map(|f| std::mem::transmute::<unsafe extern "C" fn(), SetFrameRate>(f))
+        }
+    });
+    const FIXED_SOURCE: i8 = 1;
+    match func {
+        Some(f) if window != 0 => {
+            // SAFETY: a live ANativeWindow (the caller holds the lock).
+            let r = unsafe { f(window as *mut std::ffi::c_void, hz, FIXED_SOURCE) };
+            crate::log::breadcrumb(&format!("ANativeWindow_setFrameRate({hz}) = {r}"));
+        }
+        Some(_) => {}
+        None => crate::log::breadcrumb("ANativeWindow_setFrameRate unavailable (API < 30)"),
+    }
+}
+
 /// The window's ANativeWindow as SDL holds it now (null once
 /// surfaceDestroyed released it). Read under an [`ActivityLock`].
 pub fn native_window(window: &sdl3::video::Window) -> usize {

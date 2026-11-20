@@ -8,15 +8,6 @@ pub mod sdl;
 #[cfg(target_os = "android")]
 pub mod android;
 
-/// Reads a whole file. On Android a relative path reads from the APK's
-/// assets (through SDL's IO), so the bundled data.bin needs no unpacking.
-pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-    #[cfg(target_os = "android")]
-    return android::read_file(path);
-    #[cfg(not(target_os = "android"))]
-    std::fs::read(path)
-}
-
 /// The panel's highest refresh rate (Hz, f32 bits; 0 = unknown): set by
 /// the Android activity (it picks that display mode) or from SDL's display
 /// modes at start-up. The options offer it as an FPS cap.
@@ -49,6 +40,15 @@ pub fn set_display_size(width: u32, height: u32) {
 pub fn display_size() -> Option<(u32, u32)> {
     let v = DISPLAY_SIZE.load(std::sync::atomic::Ordering::Relaxed);
     (v != 0).then_some(((v >> 32) as u32, v as u32))
+}
+
+/// Reads a whole file. On Android a relative path reads from the APK's
+/// assets (through SDL's IO), so the bundled data.bin needs no unpacking.
+pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    #[cfg(target_os = "android")]
+    return android::read_file(path);
+    #[cfg(not(target_os = "android"))]
+    std::fs::read(path)
 }
 
 /// What the platform lets the game change about its display. The options

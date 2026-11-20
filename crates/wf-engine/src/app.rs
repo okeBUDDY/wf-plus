@@ -186,6 +186,7 @@ impl Display {
         if !display.configure() {
             return Err("cannot configure the window surface".into());
         }
+        platform.surface_created(lock.window);
         Ok(display)
     }
 
@@ -273,6 +274,7 @@ impl Display {
                     self.surface = Some(s);
                     self.surface_window = lock.window;
                     self.stale = true;
+                    platform.surface_created(lock.window);
                 }
                 Err(e) => {
                     crate::log::breadcrumb(&format!("cannot create the surface yet: {e}"));

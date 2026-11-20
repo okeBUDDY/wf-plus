@@ -186,7 +186,7 @@ impl Platform {
         }
         note_display_size(&window);
         let (pw, ph) = window.size_in_pixels();
-        crate::log::breadcrumb(&format!("platform: window {pw}x{ph}"));
+        crate::log::breadcrumb(&format!("platform: window {pw}x{ph}, panel max {:?} Hz", super::max_refresh()));
         Ok(Platform {
             title: title.to_string(),
             _sdl: sdl,
@@ -235,6 +235,17 @@ impl Platform {
         }
         #[cfg(not(target_os = "android"))]
         SurfaceLock { window: 1 }
+    }
+
+    /// A GPU surface was made for native window `window` (under the
+    /// surface lock): on Android, ask for the panel's top refresh rate on
+    /// it (again after every resume, as the window is new).
+    pub fn surface_created(&self, window: usize) {
+        #[cfg(target_os = "android")]
+        if let Some(hz) = super::max_refresh() {
+            super::android::set_frame_rate(window, hz);
+        }
+        let _ = window;
     }
 
     /// Pauses (true) or resumes the audio output.

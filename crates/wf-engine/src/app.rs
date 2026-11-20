@@ -45,8 +45,13 @@ pub trait Game {
     /// adapter has none) and the present-to-present time (ms, averaged),
     /// once a frame (the perf overlay).
     fn set_frame_time(&mut self, _gpu_ms: Option<f32>, _frame_ms: f32) {}
-    /// A file was dropped on the window.
+    /// A file was dropped on the window, or chosen in the file dialog.
     fn file_dropped(&mut self, _path: std::path::PathBuf) {}
+    /// True to open the system's file dialog (for a zip); the chosen file
+    /// arrives as [`Game::file_dropped`].
+    fn file_dialog(&mut self) -> bool {
+        false
+    }
     /// Draw the subtle arena border when there are margins.
     fn wants_border(&self) -> bool {
         false
@@ -243,6 +248,9 @@ pub fn run_windowed(
                     step.reset();
                 }
             }
+        }
+        if game.file_dialog() {
+            platform.open_file_dialog("Warning Forever 1.08 (wf108.zip, data.bin)", "zip;bin");
         }
         for path in platform.take_dropped() {
             game.file_dropped(path);

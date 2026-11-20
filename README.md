@@ -71,7 +71,8 @@ must be version 1.08's (its size and CRC-32 are checked).
 
 When nothing is found, a window explains where to get the game and links
 the official download page. Drop `wf108.zip` (or `data.bin`) on it and its
-`data.bin` is saved to the home folder; a `wf108.zip` that appears in the
+`data.bin` is saved to the home folder (CHOOSE WF108.ZIP opens the system file
+dialog for the same); a `wf108.zip` that appears in the
 searched folders meanwhile (the browser finishing the download) is used in
 place, as above.
 

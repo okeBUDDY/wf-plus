@@ -43,16 +43,49 @@ const RESCAN_TICKS: u32 = 60;
 const WHITE: Argb = Argb(0xffff_ffff);
 const GREY: Argb = Argb(0xff80_8080);
 const AMBER: Argb = Argb(0xffff_dd00);
+const DIM_AMBER: Argb = Argb(0xff90_7800);
 const RED: Argb = Argb(0xffff_4040);
 
-/// The link's line (logical units) and font size: `text` is 16 px.
-const LINK_Y: f32 = 208.0;
-const LINK_TEXT: &str = "HIKWARE.COM";
+/// Phones have no drop and no Downloads folder to search; the text says so.
+const MOBILE: bool = cfg!(any(target_os = "android", target_os = "ios"));
+
+/// The screen's two buttons: the download page, and the file picker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Button {
+    Download,
+    Choose,
+}
+
+impl Button {
+    const ALL: [Button; 2] = [Button::Download, Button::Choose];
+
+    fn label(self) -> &'static str {
+        match self {
+            Button::Download => "HIKWARE.COM",
+            Button::Choose => "CHOOSE WF108.ZIP",
+        }
+    }
+
+    /// The label's top (logical units); labels are 16 px text.
+    fn y(self) -> f32 {
+        match self {
+            Button::Download => 200.0,
+            Button::Choose => 296.0,
+        }
+    }
+
+    /// The box clicks and taps hit.
+    fn hit(self, p: [f32; 2]) -> bool {
+        let w = self.label().len() as f32 * 16.0 + 32.0;
+        let (x, y) = (320.0 - w / 2.0, self.y() - 10.0);
+        (x..x + w).contains(&p[0]) && (y..y + 36.0).contains(&p[1])
+    }
+}
 
 pub struct Setup {
     fonts: Fonts,
     draw: DrawList,
-    /// Where a dropped archive's data.bin is saved.
+    /// Where a chosen or dropped archive's data.bin is saved.
     dest: PathBuf,
     dirs: Vec<PathBuf>,
     pub found: Option<Found>,
@@ -60,8 +93,13 @@ pub struct Setup {
     /// The last import's error, shown under the instructions.
     error: Option<String>,
     ticks: u32,
-    /// Last tick's mouse buttons, Return and confirm, for presses.
-    held: (u32, bool, bool, bool),
+    /// The button Enter and the confirm button press.
+    selected: Button,
+    /// The file picker was asked for (the loop opens it).
+    pick: bool,
+    /// Last tick's mouse buttons, keys (Return, Up, Down), confirm and
+    /// touch, for presses.
+    held: (u32, [bool; 3], bool, bool),
     /// Files that did not hold the data, by size and time (not read again
     /// until they change).
     rejected: Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
@@ -78,12 +116,15 @@ impl Setup {
             quit: false,
             error: None,
             ticks: 0,
-            held: (0, false, false, false),
+            selected: Button::Download,
+            pick: false,
+            held: (0, [false; 3], false, false),
             rejected: Vec::new(),
         }
     }
 
-    /// A file handed over by the player: its data.bin is saved.
+    /// A file handed over by the player (dropped or chosen): its data.bin
+    /// is saved.
     pub fn import(&mut self, path: &std::path::Path) {
         match data_import::install_file(path, &self.dest) {
             Ok(()) => self.found = Some(Found::File(self.dest.clone())),
@@ -91,18 +132,16 @@ impl Setup {
         }
     }
 
-    /// The bytes of a file handed over by the player (a picker that gives
-    /// no path): its data.bin is saved.
-    pub fn import_bytes(&mut self, bytes: &[u8]) {
-        match data_import::install(bytes, &self.dest) {
-            Ok(()) => self.found = Some(Found::File(self.dest.clone())),
-            Err(e) => self.error = Some(e.to_string()),
-        }
-    }
-
-    fn open_download(&mut self) {
-        if let Err(e) = wf_engine::platform::sdl::open_url(data_import::DOWNLOAD_URL) {
-            self.error = Some(format!("CANNOT OPEN THE BROWSER ({})", e.to_ascii_uppercase()));
+    fn press(&mut self, button: Button) {
+        self.selected = button;
+        self.error = None;
+        match button {
+            Button::Download => {
+                if let Err(e) = wf_engine::platform::sdl::open_url(data_import::DOWNLOAD_URL) {
+                    self.error = Some(format!("CANNOT OPEN THE BROWSER ({})", e.to_ascii_uppercase()));
+                }
+            }
+            Button::Choose => self.pick = true,
         }
     }
 
@@ -123,43 +162,47 @@ impl Setup {
         }
     }
 
-    /// The link's box (logical units).
-    fn link_box() -> [f32; 4] {
-        let w = LINK_TEXT.len() as f32 * 16.0;
-        [320.0 - w / 2.0 - 8.0, LINK_Y - 6.0, w + 16.0, 28.0]
-    }
-
-    fn over_link(p: [f32; 2]) -> bool {
-        let [x, y, w, h] = Self::link_box();
-        (x..x + w).contains(&p[0]) && (y..y + h).contains(&p[1])
-    }
-
     fn centred(&mut self, big: bool, y: f32, text: &str, color: Argb) {
         let font = if big { &self.fonts.text } else { &self.fonts.small_text };
         let w = text.len() as f32 * if big { 16.0 } else { 8.0 };
         font.print(&mut self.draw, (320.0 - w / 2.0).round(), y, text.as_bytes(), None, color, -1, Blend::Normal);
     }
 
-    fn render(&mut self, hover: bool) {
+    fn button(&mut self, button: Button, hover: bool) {
+        let lit = hover || (self.selected == button && (self.ticks / 30).is_multiple_of(2)) || MOBILE;
+        let color = if lit { AMBER } else { DIM_AMBER };
+        self.centred(true, button.y(), button.label(), color);
+        let w = button.label().len() as f32 * 16.0;
+        let y = button.y() + 18.0;
+        let line = [[320.0 - w / 2.0, y], [320.0 + w / 2.0, y]];
+        self.draw.shape(Primitive::LineList, &Transform::IDENTITY, &line, color, Blend::Normal);
+    }
+
+    fn render(&mut self, hover: Option<Button>) {
         self.draw.reset();
         self.draw.menu = true;
         self.centred(true, 112.0, "WARNING FOREVER+", WHITE);
-        self.centred(false, 160.0, "THIS NEEDS THE GAME DATA OF WARNING FOREVER 1.08,", WHITE);
-        self.centred(false, 176.0, "A FREE DOWNLOAD FROM THE OFFICIAL WEBSITE:", WHITE);
-        let link = if hover || (self.ticks / 30).is_multiple_of(2) { AMBER } else { Argb(0xffc0_a000) };
-        self.centred(true, LINK_Y, LINK_TEXT, link);
-        let w = LINK_TEXT.len() as f32 * 16.0;
-        let y = LINK_Y + 18.0;
-        let line = [[320.0 - w / 2.0, y], [320.0 + w / 2.0, y]];
-        self.draw.shape(Primitive::LineList, &Transform::IDENTITY, &line, link, Blend::Normal);
-        self.centred(false, 256.0, "PRESS ENTER OR CLICK THE LINK TO OPEN IT, DOWNLOAD", WHITE);
-        self.centred(false, 272.0, "WF108.ZIP, THEN DROP IT ON THIS WINDOW.", WHITE);
-        self.centred(false, 300.0, "A WF108.ZIP NEXT TO THE GAME OR IN DOWNLOADS", GREY);
-        self.centred(false, 316.0, "IS FOUND BY ITSELF.", GREY);
-        if let Some(e) = self.error.clone() {
-            self.centred(false, 352.0, &e, RED);
+        self.centred(false, 152.0, "THIS NEEDS THE GAME DATA OF WARNING FOREVER 1.08,", WHITE);
+        self.centred(false, 168.0, "A FREE DOWNLOAD FROM THE OFFICIAL WEBSITE:", WHITE);
+        self.button(Button::Download, hover == Some(Button::Download));
+        if MOBILE {
+            self.centred(false, 248.0, "TAP IT TO DOWNLOAD WF108.ZIP THERE,", WHITE);
+            self.centred(false, 264.0, "THEN CHOOSE THE DOWNLOADED FILE:", WHITE);
+        } else {
+            self.centred(false, 248.0, "DOWNLOAD WF108.ZIP THERE, THEN DROP IT ON", WHITE);
+            self.centred(false, 264.0, "THIS WINDOW OR CHOOSE IT:", WHITE);
         }
-        self.centred(false, 440.0, "ESC: QUIT", GREY);
+        self.button(Button::Choose, hover == Some(Button::Choose));
+        if !MOBILE {
+            self.centred(false, 344.0, "A WF108.ZIP NEXT TO THE GAME OR IN DOWNLOADS", GREY);
+            self.centred(false, 360.0, "IS FOUND BY ITSELF.", GREY);
+        }
+        if let Some(e) = self.error.clone() {
+            self.centred(false, 392.0, &e, RED);
+        }
+        if !MOBILE {
+            self.centred(false, 440.0, "ENTER: OPEN   UP/DOWN: SELECT   ESC: QUIT", GREY);
+        }
     }
 }
 
@@ -170,18 +213,26 @@ impl wf_engine::app::Game for Setup {
         }
         let raw = &actions.raw;
         let buttons = raw.mouse.buttons;
-        let (ret, confirm, touching) = (raw.key(Key::Return), actions.held(Action::CONFIRM), !actions.touches.is_empty());
-        let clicked = buttons & 1 != 0 && self.held.0 & 1 == 0 && actions.cursor.is_some_and(Self::over_link);
-        let tapped = touching && !self.held.3 && actions.touches.iter().any(|&p| Self::over_link(p));
-        if clicked || tapped || (ret && !self.held.1) || (confirm && !self.held.2) {
-            self.open_download();
+        let keys = [raw.key(Key::Return), actions.held(Action::Up), actions.held(Action::Down)];
+        let (confirm, touching) = (actions.held(Action::CONFIRM), !actions.touches.is_empty());
+        let hover = actions.cursor.and_then(|p| Button::ALL.into_iter().find(|b| b.hit(p)));
+        let (was_buttons, was_keys, was_confirm, was_touching) = self.held;
+        self.held = (buttons, keys, confirm, touching);
+        let tapped = if touching && !was_touching { actions.touches.iter().find_map(|&p| Button::ALL.into_iter().find(|b| b.hit(p))) } else { None };
+        if let Some(b) = tapped {
+            self.press(b);
+        } else if buttons & 1 != 0 && was_buttons & 1 == 0 && let Some(b) = hover {
+            self.press(b);
+        } else if (keys[0] && !was_keys[0]) || (confirm && !was_confirm) {
+            self.press(self.selected);
+        } else if (keys[1] && !was_keys[1]) || (keys[2] && !was_keys[2]) {
+            self.selected = if self.selected == Button::Download { Button::Choose } else { Button::Download };
         }
-        self.held = (buttons, ret, confirm, touching);
         if self.ticks.is_multiple_of(RESCAN_TICKS) {
             self.rescan();
         }
         self.ticks += 1;
-        self.render(actions.cursor.is_some_and(Self::over_link));
+        self.render(hover);
         true
     }
     fn snapshot(&self) -> &DrawList {
@@ -202,5 +253,8 @@ impl wf_engine::app::Game for Setup {
     }
     fn file_dropped(&mut self, path: PathBuf) {
         self.import(&path);
+    }
+    fn file_dialog(&mut self) -> bool {
+        std::mem::take(&mut self.pick)
     }
 }

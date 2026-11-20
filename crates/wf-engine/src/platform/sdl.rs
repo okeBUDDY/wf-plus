@@ -332,9 +332,25 @@ impl Platform {
         }
     }
 
-    /// The files dropped on the window since the last call.
+    /// The files dropped on the window or chosen in the file dialog since
+    /// the last call.
     pub fn take_dropped(&mut self) -> Vec<std::path::PathBuf> {
-        std::mem::take(&mut self.dropped)
+        let mut out = std::mem::take(&mut self.dropped);
+        out.append(&mut CHOSEN.lock().unwrap_or_else(|e| e.into_inner()));
+        out
+    }
+
+    /// Opens the system's file dialog for one file of `pattern`'s
+    /// extensions ("zip;bin"); the choice arrives through
+    /// [`Platform::take_dropped`] (on Android, a content:// URI).
+    pub fn open_file_dialog(&self, name: &str, pattern: &str) {
+        let filters = [sdl3::dialog::DialogFileFilter { name, pattern }, sdl3::dialog::DialogFileFilter { name: "All files", pattern: "*" }];
+        let callback: sdl3::dialog::DialogCallback = Box::new(|result, _| {
+            if let Ok(paths) = result {
+                CHOSEN.lock().unwrap_or_else(|e| e.into_inner()).extend(paths);
+            }
+        });
+        let _ = sdl3::dialog::show_open_file_dialog(&filters, None::<&std::path::Path>, false, &self.window, callback);
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -410,6 +426,10 @@ pub fn local_utc_offset() -> i32 {
     let ok = unsafe { SDL_GetCurrentTime(&mut now) && SDL_TimeToDateTime(now, &mut dt, true) };
     if ok { dt.utc_offset } else { 0 }
 }
+
+/// The files chosen in the file dialog (its callback may run on another
+/// thread), until [`Platform::take_dropped`] takes them.
+static CHOSEN: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 /// Opens `url` in the system's browser.
 pub fn open_url(url: &str) -> Result<(), String> {

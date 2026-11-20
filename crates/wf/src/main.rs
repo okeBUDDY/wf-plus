@@ -379,8 +379,6 @@ fn script_input(o: &Options, frame: u32) -> RawInput {
     raw
 }
 
-/// Runs `frames` ticks without a window and saves the last one; or, with
-/// --bench, measures the uncapped frame rate offscreen.
 /// Headless with no game data: a screenshot of the setup screen.
 fn setup_shot(o: &Options, path: &std::path::Path) -> Result<(), String> {
     let art = art::Art::load();
@@ -399,6 +397,8 @@ fn setup_shot(o: &Options, path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs `frames` ticks without a window and saves the last one; or, with
+/// --bench, measures the uncapped frame rate offscreen.
 fn run_headless(o: &Options) -> Result<(), String> {
     if let (None, Some(path)) = (&o.data, &o.screenshot) {
         return setup_shot(o, path);

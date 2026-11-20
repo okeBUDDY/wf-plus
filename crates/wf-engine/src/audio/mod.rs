@@ -35,24 +35,27 @@ pub enum Music {
 }
 
 impl Music {
-    /// g_bgm.Load: bgm.seq, else bgm.ogg, else bgm.wav, in `dir`.
+    /// g_bgm.Load: bgm.seq, else bgm.ogg, else bgm.wav, in `dir`. Files
+    /// are read through the platform (on Android a relative `dir` is in
+    /// the APK's assets).
     pub fn load(dir: &std::path::Path) -> Option<Music> {
+        let read = crate::platform::read_file;
         let seq = dir.join("bgm.seq");
-        if seq.exists() {
+        if read(&seq).is_ok() {
             match seq::SeqData::load(&seq) {
                 Ok(d) => return Some(Music::Seq(Arc::new(d))),
                 Err(e) => crate::log::warn(&format!("{}: {e}", seq.display())),
             }
         }
         let ogg = dir.join("bgm.ogg");
-        if let Ok(b) = std::fs::read(&ogg) {
+        if let Ok(b) = read(&ogg) {
             match ogg::decode(&b, 1) {
                 Ok(s) => return Some(Music::Sound(Arc::new(s))),
                 Err(e) => crate::log::warn(&format!("{}: {e}", ogg.display())),
             }
         }
         let wav = dir.join("bgm.wav");
-        if let Ok(b) = std::fs::read(&wav) {
+        if let Ok(b) = read(&wav) {
             match wav::decode(&b, 1) {
                 Ok(s) => return Some(Music::Sound(Arc::new(s))),
                 Err(e) => crate::log::warn(&format!("{}: {e}", wav.display())),

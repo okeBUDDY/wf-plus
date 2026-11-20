@@ -239,7 +239,7 @@ fn data_dirs(home: &std::path::Path) -> Vec<PathBuf> {
 /// cGlobal::Initialize and WinMain's setup: everything the stages share.
 fn startup(o: &Options, art: art::Art) -> Result<(Cx, App), String> {
     let assets = match &o.data {
-        Some(setup::Found::File(path)) => Assets::load(path)?,
+        Some(setup::Found::File(path)) => Assets::load(path, &o.home)?,
         Some(setup::Found::Zip(zip)) => Assets::load_zip(zip, &o.home)?,
         None => {
             return Err(format!(
@@ -291,6 +291,8 @@ struct WfGame {
     app: App,
     /// The trigger maps last given to the bindings.
     synced: Option<([Key; 8], [u8; 8])>,
+    /// A finger was down last tick (a new touch resumes a stopped game).
+    touching: bool,
 }
 
 impl WfGame {
@@ -312,6 +314,14 @@ impl wf_engine::app::Game for WfGame {
             // A forced guide device (screenshots) is the one the menus show.
             self.cx.ui.shown = self.cx.settings.guide_device;
         }
+        // Touch has no pause button: a new touch resumes a stopped game
+        // (stopped when the app went to the background). The guide still
+        // holds last frame's screen (begin_frame clears it).
+        let touching = !actions.raw.fingers.is_empty();
+        if touching && !self.touching && self.cx.guide == Some(game::guide::Guide::Paused) {
+            self.cx.app.set_time_stop(false);
+        }
+        self.touching = touching;
         let made = self.app.frame(&mut self.cx);
         if made {
             // The input guide and SHOW FPS along the bottom (display only).
@@ -378,6 +388,15 @@ impl wf_engine::app::Game for WfGame {
     fn wants_border(&self) -> bool {
         self.cx.arena.is_classic()
     }
+    /// Going to the background stops the time of a game in play (as its
+    /// pause button does), so it waits for the player.
+    fn background(&mut self, on: bool) {
+        self.focus(!on);
+        let stopped = self.cx.app.flags & game::AppFlags::TIME_STOPPED != 0;
+        if on && self.cx.input.time_stop_mask != 0 && !stopped {
+            self.cx.app.set_time_stop(true);
+        }
+    }
 }
 
 fn script_input(o: &Options, frame: u32) -> RawInput {
@@ -420,7 +439,7 @@ fn run_headless(o: &Options) -> Result<(), String> {
         return setup_shot(o, path);
     }
     let (cx, app) = startup(o, art::Art::load())?;
-    let mut game = WfGame { cx, app, synced: None };
+    let mut game = WfGame { cx, app, synced: None, touching: false };
     game.cx.settings.display.show_fps |= o.show_fps;
     game.cx.settings.perf_overlay |= o.perf_overlay;
     let size = o.size.unwrap_or((1280, 720));
@@ -822,7 +841,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     }
     let o = &Options { data: found.or_else(|| o.data.clone()), ..o.clone() };
     let (cx, app) = startup(o, art)?;
-    let mut game = WfGame { cx, app, synced: None };
+    let mut game = WfGame { cx, app, synced: None, touching: false };
     if let Some(mode) = o.arena {
         game.cx.arena_choice = mode;
     }

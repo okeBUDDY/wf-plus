@@ -35,6 +35,46 @@ pub struct Steer {
     /// The player's ship (arena units) when one is in play.
     pub ship: Option<[f32; 2]>,
     residual: [f32; 2],
+    /// Touch without a ship (see [`menu_touch`]): the swipe not yet
+    /// turned into steps, the finger's travel and ticks down.
+    swipe: [f32; 2],
+    travel: f32,
+    touch_ticks: u32,
+    was_touching: bool,
+}
+
+/// A swipe this long (arena units) is one menu step.
+const SWIPE_STEP: f32 = 48.0;
+
+/// Touch where there is no ship (the title's menu, name entry): a vertical
+/// swipe is a step up or down, and a short tap that stays put is the shot
+/// (confirm), on release. A finger held down is not the shot here, so a
+/// swipe never confirms. The options screen reads its taps itself.
+fn menu_touch(a: &ActionState, steer: &mut Steer, mut b: u16) -> u16 {
+    if steer.ship.is_some() {
+        (steer.swipe, steer.travel, steer.touch_ticks, steer.was_touching) = ([0.0; 2], 0.0, 0, false);
+        return b;
+    }
+    let fingers = !a.raw.fingers.is_empty();
+    if fingers {
+        b &= !SHOT;
+        steer.swipe[0] += a.drag[0];
+        steer.swipe[1] += a.drag[1];
+        steer.travel += a.drag[0].abs() + a.drag[1].abs();
+        steer.touch_ticks += 1;
+        let [x, y] = steer.swipe;
+        if y.abs() >= SWIPE_STEP && y.abs() > x.abs() {
+            b |= if y < 0.0 { UP } else { DOWN };
+            steer.swipe = [0.0; 2];
+        }
+    } else if steer.was_touching {
+        if steer.touch_ticks < 30 && steer.travel < 12.0 {
+            b |= SHOT;
+        }
+        (steer.swipe, steer.travel, steer.touch_ticks) = ([0.0; 2], 0.0, 0);
+    }
+    steer.was_touching = fingers;
+    b
 }
 
 /// The eight-way direction bits of `v` (any length), or none when it is
@@ -132,6 +172,7 @@ impl Pad {
                 b |= TRIGGER << i;
             }
         }
+        let b = menu_touch(a, steer, b);
         self.buttons = b;
         self.pressed = b & !self.previous;
         self.previous = b;
@@ -258,5 +299,37 @@ impl Input {
 
     pub fn pad(&self, i: usize) -> &Pad {
         &self.pads[i]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::Finger;
+
+    fn touch(at: Option<[f32; 2]>, drag: [f32; 2]) -> ActionState {
+        let mut a = ActionState::default();
+        (a.drag, a.touching) = (drag, at.is_some());
+        if let Some(pos) = at {
+            a.raw.fingers.push(Finger { id: 1, pos });
+        }
+        a
+    }
+
+    #[test]
+    fn menu_tap_confirms_on_release_and_swipe_steps() {
+        let mut steer = Steer::default();
+        // A finger held down is not the shot in a menu.
+        assert_eq!(menu_touch(&touch(Some([0.5; 2]), [0.0; 2]), &mut steer, SHOT), 0);
+        // Released soon and still: the shot, once.
+        assert_eq!(menu_touch(&touch(None, [0.0; 2]), &mut steer, 0), SHOT);
+        assert_eq!(menu_touch(&touch(None, [0.0; 2]), &mut steer, 0), 0);
+        // A swipe down: one step, then no shot on release.
+        assert_eq!(menu_touch(&touch(Some([0.5; 2]), [0.0, 30.0]), &mut steer, 0), 0);
+        assert_eq!(menu_touch(&touch(Some([0.5; 2]), [0.0, 30.0]), &mut steer, 0), DOWN);
+        assert_eq!(menu_touch(&touch(None, [0.0; 2]), &mut steer, 0), 0);
+        // With a ship, touch is play: nothing changes.
+        steer.ship = Some([320.0, 400.0]);
+        assert_eq!(menu_touch(&touch(Some([0.5; 2]), [0.0, 99.0]), &mut steer, SHOT), SHOT);
     }
 }

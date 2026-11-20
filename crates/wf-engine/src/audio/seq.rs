@@ -58,7 +58,7 @@ impl SeqData {
     /// piece they name (relative to the .seq's directory). Pieces whose
     /// format differs from the first one are left out, as OpenPiece does.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let b = std::fs::read(path).map_err(|e| e.to_string())?;
+        let b = crate::platform::read_file(path).map_err(|e| e.to_string())?;
         let u16_at = |o: usize| b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]));
         if b.len() < 12 || i32::from_le_bytes(b[0..4].try_into().unwrap()) != SEQ_VERSION {
             return Err("not a version 100 .seq".into());
@@ -85,8 +85,8 @@ impl SeqData {
             let name = String::from_utf8_lossy(&name).into_owned();
             let file = dir.join(&name);
             let decoded = match name.to_ascii_lowercase().chars().last() {
-                Some('v') => std::fs::read(&file).ok().and_then(|d| wav::decode(&d, 1).ok()),
-                Some('g') => std::fs::read(&file).ok().and_then(|d| ogg::decode(&d, 1).ok()),
+                Some('v') => crate::platform::read_file(&file).ok().and_then(|d| wav::decode(&d, 1).ok()),
+                Some('g') => crate::platform::read_file(&file).ok().and_then(|d| ogg::decode(&d, 1).ok()),
                 _ => None,
             };
             let samples = match decoded {

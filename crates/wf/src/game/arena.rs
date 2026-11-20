@@ -101,9 +101,14 @@ impl Arena {
 pub fn load_choice(cx: &mut super::Cx) {
     cx.arena_choice = match cx.port.get("game.arena") {
         Some(v) if v.eq_ignore_ascii_case("hd") => Mode::Hd,
-        _ => Mode::Classic,
+        Some(_) => Mode::Classic,
+        None => DEFAULT_MODE,
     };
 }
+
+/// The arena before the player picks one: HD on Android, at the phone's
+/// aspect; the original's screen elsewhere.
+pub const DEFAULT_MODE: Mode = if cfg!(target_os = "android") { Mode::Hd } else { Mode::Classic };
 
 /// Remembers the arena choice.
 pub fn save_choice(cx: &mut super::Cx) {

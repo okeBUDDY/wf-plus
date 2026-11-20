@@ -143,6 +143,14 @@ const ALL_PAD: [PadButton; PadButton::COUNT] = [
 impl Platform {
     /// Opens a resizable window of `width` x `height`.
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self, String> {
+        #[cfg(target_os = "android")]
+        {
+            // Touch is its own input (relative drag); no synthetic mouse,
+            // which would steer the ship to the finger instead.
+            sdl3::hint::set("SDL_TOUCH_MOUSE_EVENTS", "0");
+            // The Back button is a key (Escape), not "finish the activity".
+            sdl3::hint::set("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
+        }
         let sdl = sdl3::init().map_err(|e| e.to_string())?;
         let video = sdl.video().map_err(|e| e.to_string())?;
         let mut builder = video.window(title, width, height);
@@ -177,7 +185,8 @@ impl Platform {
             window,
             fingers: Vec::new(),
             dropped: Vec::new(),
-            last_device: Device::Keyboard,
+            // A phone's first input is a finger (the prompts say so).
+            last_device: if cfg!(target_os = "android") { Device::Touch } else { Device::Keyboard },
             mouse_inside: false,
             wheel: 0.0,
         })
@@ -210,6 +219,8 @@ impl Platform {
             match event {
                 SdlEvent::Quit { .. } => out.push(Event::Quit),
                 SdlEvent::DropFile { filename, .. } => self.dropped.push(std::path::PathBuf::from(filename)),
+                SdlEvent::AppWillEnterBackground { .. } => out.push(Event::Background),
+                SdlEvent::AppDidEnterForeground { .. } => out.push(Event::Foreground),
                 SdlEvent::Window { win_event, .. } => match win_event {
                     WindowEvent::DisplayChanged(_) => note_display_size(&self.window),
                     WindowEvent::FocusGained => out.push(Event::Focus(true)),
@@ -272,6 +283,11 @@ impl Platform {
         let mut raw = RawInput::default();
         for k in ALL_KEYS {
             raw.keys[k as usize] = state.is_scancode_pressed(keymap(k));
+        }
+        // Android's Back button is Escape.
+        #[cfg(target_os = "android")]
+        {
+            raw.keys[Key::Escape as usize] |= state.is_scancode_pressed(Scancode::AcBack);
         }
         for pad in &self.gamepads {
             let mut g = GamepadState::default();

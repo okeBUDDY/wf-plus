@@ -56,6 +56,11 @@ pub trait Game {
     fn wants_border(&self) -> bool {
         false
     }
+    /// The app went to the background (true) or came back (mobile). The
+    /// loop stops ticking meanwhile; a game may also pause itself.
+    fn background(&mut self, on: bool) {
+        self.focus(!on);
+    }
 }
 
 /// The arena border's colour: a muted indigo-violet (#7a5cff) at low
@@ -98,7 +103,10 @@ pub fn add_border(list: &mut DrawList, layout: &Layout) {
 
 /// The window's surface and the renderer.
 pub struct Display {
-    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    /// None while the app is in the background (mobile): the window has no
+    /// surface then.
+    surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
     caps: wgpu::SurfaceCapabilities,
     pub renderer: gfx::gpu::Renderer,
@@ -110,13 +118,7 @@ pub struct Display {
 impl Display {
     pub fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack, cap: FpsCap) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?)));
-        // SAFETY: the window outlives the surface: the Display is dropped
-        // before the Platform.
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&platform.window).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?
-        };
+        let surface = create_surface(&instance, platform)?;
         let (adapter, device, queue) = gfx::gpu::create_device(&instance, Some(&surface))?;
         let caps = surface.get_capabilities(&adapter);
         // Blend in gamma space, as the original's Direct3D 7 did.
@@ -142,7 +144,28 @@ impl Display {
         surface.configure(&device, &config);
         let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
         let scaler = gfx::scale::Scaler::new(&renderer);
-        Ok(Display { surface, config, caps, renderer, render_scale: 1.0, scaler })
+        Ok(Display { instance, surface: Some(surface), config, caps, renderer, render_scale: 1.0, scaler })
+    }
+
+    /// Drops the window surface (the app is going to the background).
+    pub fn suspend(&mut self) {
+        self.surface = None;
+    }
+
+    pub fn suspended(&self) -> bool {
+        self.surface.is_none()
+    }
+
+    /// Makes a new surface for the window (back in the foreground), at the
+    /// window's current size.
+    pub fn resume(&mut self, platform: &platform::sdl::Platform) -> Result<(), String> {
+        let surface = create_surface(&self.instance, platform)?;
+        let (w, h) = platform.drawable_size();
+        self.config.width = w.max(1);
+        self.config.height = h.max(1);
+        surface.configure(self.renderer.device(), &self.config);
+        self.surface = Some(surface);
+        Ok(())
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -152,7 +175,9 @@ impl Display {
     pub fn resize(&mut self, w: u32, h: u32) {
         self.config.width = w.max(1);
         self.config.height = h.max(1);
-        self.surface.configure(self.renderer.device(), &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(self.renderer.device(), &self.config);
+        }
     }
 
     /// Mailbox or Immediate uncapped (and under the limiter), Fifo for
@@ -161,15 +186,18 @@ impl Display {
         let mode = present_mode(&self.caps, cap);
         if mode != self.config.present_mode {
             self.config.present_mode = mode;
-            self.surface.configure(self.renderer.device(), &self.config);
+            if let Some(surface) = &self.surface {
+                surface.configure(self.renderer.device(), &self.config);
+            }
         }
     }
 
     pub fn present(&mut self, list: &DrawList) {
-        let frame = match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else { return };
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(self.renderer.device(), &self.config);
+                surface.configure(self.renderer.device(), &self.config);
                 return;
             }
             _ => return,
@@ -181,11 +209,29 @@ impl Display {
     }
 }
 
+/// The window's surface.
+fn create_surface(instance: &wgpu::Instance, platform: &platform::sdl::Platform) -> Result<wgpu::Surface<'static>, String> {
+    // SAFETY: the window outlives the surface: the Display is dropped
+    // before the Platform, and the surface is dropped (`suspend`) before
+    // a mobile window loses its native window.
+    unsafe {
+        instance
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&platform.window).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+}
+
 fn present_mode(caps: &wgpu::SurfaceCapabilities, cap: FpsCap) -> wgpu::PresentMode {
     if cap == FpsCap::VSync {
         return wgpu::PresentMode::Fifo;
     }
-    [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+    // Android: Mailbox where offered, else Fifo (always there); Immediate
+    // tears and is not offered by every driver.
+    #[cfg(target_os = "android")]
+    let modes = [wgpu::PresentMode::Mailbox];
+    #[cfg(not(target_os = "android"))]
+    let modes = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate];
+    modes
         .into_iter()
         .find(|m| caps.present_modes.contains(m))
         .unwrap_or(wgpu::PresentMode::Fifo)
@@ -238,6 +284,7 @@ pub fn run_windowed(
     let mut presented: Option<Instant> = None;
     let mut frame_ms = 0.0f32;
     display.render_scale = cfg.render_scale;
+    let mut background = false;
     while game.running() {
         for event in platform.poll() {
             match event {
@@ -247,7 +294,31 @@ pub fn run_windowed(
                     game.focus(active);
                     step.reset();
                 }
+                Event::Background => {
+                    background = true;
+                    game.background(true);
+                    display.suspend();
+                }
+                Event::Foreground => {
+                    background = false;
+                    game.background(false);
+                    step.reset();
+                }
             }
+        }
+        // Back in the foreground: a new surface for the new native window
+        // (tried again each pass until the window has one).
+        if !background && display.suspended() {
+            if let Err(e) = display.resume(platform) {
+                crate::log::debug(&format!("the window surface is not back yet: {e}"));
+            }
+            step.reset();
+        }
+        // In the background (mobile): no ticks, no frames. On Android the
+        // next poll blocks until the app comes back.
+        if display.suspended() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            continue;
         }
         if game.file_dialog() {
             platform.open_file_dialog("Warning Forever 1.08 (wf108.zip, data.bin)", "zip;bin");

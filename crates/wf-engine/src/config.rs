@@ -109,7 +109,12 @@ pub struct DisplayConfig {
 
 impl Default for DisplayConfig {
     fn default() -> Self {
-        DisplayConfig { width: 1280, height: 720, mode: WindowMode::Windowed, fps_cap: FpsCap::Off, render_scale: 1.0, show_fps: false }
+        // Android: the whole screen, at the display's rate.
+        #[cfg(target_os = "android")]
+        let (mode, fps_cap) = (WindowMode::Fullscreen, FpsCap::VSync);
+        #[cfg(not(target_os = "android"))]
+        let (mode, fps_cap) = (WindowMode::Windowed, FpsCap::Off);
+        DisplayConfig { width: 1280, height: 720, mode, fps_cap, render_scale: 1.0, show_fps: false }
     }
 }
 

@@ -308,4 +308,9 @@ pub enum Event {
     Focus(bool),
     /// The drawable size changed.
     Resized(u32, u32),
+    /// The app is going to the background (mobile): its window surface is
+    /// about to go away. Rendering must stop until [`Event::Foreground`].
+    Background,
+    /// The app is back in the foreground with a new window surface.
+    Foreground,
 }

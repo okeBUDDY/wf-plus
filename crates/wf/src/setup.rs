@@ -9,8 +9,9 @@ use std::path::PathBuf;
 
 use crate::art::Art;
 use crate::data_import;
+use crate::game::background::BackgroundGrid;
 use crate::game::text::Fonts;
-use crate::gfx::{Argb, Blend, DrawList, Primitive, Transform};
+use crate::gfx::{Argb, Blend, DrawList, Primitive, SpriteId, Transform};
 use wf_engine::input::{Action, ActionState};
 use wf_engine::platform::Key;
 
@@ -45,6 +46,11 @@ const GREY: Argb = Argb(0xff80_8080);
 const AMBER: Argb = Argb(0xffff_dd00);
 const DIM_AMBER: Argb = Argb(0xff90_7800);
 const RED: Argb = Argb(0xffff_4040);
+/// "WARNING FOREVER" as the title screen's subtitle draws it.
+const TITLE_AMBER: Argb = Argb(0xffff_d000);
+/// The "+": the arena border's violet ([`wf_engine::app::ARENA_BORDER`]),
+/// opaque.
+const PLUS_VIOLET: Argb = Argb(0xff00_0000 | (wf_engine::app::ARENA_BORDER & 0xff_ffff));
 
 /// Phones have no drop and no Downloads folder to search; the text says so.
 const MOBILE: bool = cfg!(any(target_os = "android", target_os = "ios"));
@@ -85,6 +91,9 @@ impl Button {
 pub struct Setup {
     fonts: Fonts,
     draw: DrawList,
+    /// The title screen's scrolling grid, and its line.
+    grid: BackgroundGrid,
+    grid_line: SpriteId,
     /// Where a chosen or dropped archive's data.bin is saved.
     dest: PathBuf,
     dirs: Vec<PathBuf>,
@@ -110,6 +119,12 @@ impl Setup {
         Setup {
             fonts: Fonts::load(art),
             draw: DrawList::new(),
+            // As the title's (colour, speed); a new angle each run.
+            grid: BackgroundGrid::started(0xff00_4030, 8.0, {
+                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+                (nanos >> 10 & 0x3ff) as i16
+            }),
+            grid_line: art.shapes.grid_line,
             dest,
             dirs,
             found: None,
@@ -181,7 +196,12 @@ impl Setup {
     fn render(&mut self, hover: Option<Button>) {
         self.draw.reset();
         self.draw.menu = true;
-        self.centred(true, 112.0, "WARNING FOREVER+", WHITE);
+        self.grid.draw(&mut self.draw, self.grid_line, 320.0);
+        // "WARNING FOREVER" in the title's amber, the "+" in the border's
+        // violet, centred as one.
+        let x = (320.0 - "WARNING FOREVER+".len() as f32 * 8.0).round();
+        self.fonts.text.print(&mut self.draw, x, 112.0, b"WARNING FOREVER", None, TITLE_AMBER, -1, Blend::Normal);
+        self.fonts.text.print(&mut self.draw, x + 15.0 * 16.0, 112.0, b"+", None, PLUS_VIOLET, -1, Blend::Normal);
         self.centred(false, 152.0, "THIS NEEDS THE GAME DATA OF WARNING FOREVER 1.08,", WHITE);
         self.centred(false, 168.0, "A FREE DOWNLOAD FROM THE OFFICIAL WEBSITE:", WHITE);
         self.button(Button::Download, hover == Some(Button::Download));
@@ -230,6 +250,7 @@ impl wf_engine::app::Game for Setup {
         } else if (keys[1] && !was_keys[1]) || (keys[2] && !was_keys[2]) {
             self.selected = if self.selected == Button::Download { Button::Choose } else { Button::Download };
         }
+        self.grid.scroll();
         if self.ticks.is_multiple_of(RESCAN_TICKS) {
             self.rescan();
         }

@@ -4,6 +4,8 @@ import android.content.res.Configuration;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
@@ -16,23 +18,41 @@ import org.libsdl.app.SDLActivity;
  *  and SDL_main is looked up in it.
  *
  *  It also asks for the panel's highest refresh rate: without a request
- *  Android keeps a game at 60 Hz on high-refresh panels. On create and on
- *  every display or configuration change it picks the display mode with
- *  the current resolution and the highest refresh rate
+ *  Android keeps a game at 60 Hz on high-refresh panels. It picks the
+ *  display mode with the current resolution and the highest refresh rate
  *  (preferredDisplayModeId), tells the native side that rate (for the
- *  options' FPS caps and ANativeWindow_setFrameRate, which the native side
- *  calls whenever it makes a surface, also after a resume), and on API 30+
- *  sets it on SDL's surface. Presenting stays Fifo (VSync). */
+ *  options' FPS caps) and, on API 30+, sets it on SDL's surface
+ *  (Surface.setFrameRate). Presenting stays Fifo (VSync).
+ *
+ *  None of that runs in onCreate or while SDL starts: it is posted to the
+ *  UI thread a moment after the window gains focus (the surface exists by
+ *  then; again after every resume) and after display or configuration
+ *  changes, debounced, and nothing it calls may throw out of it. A mode
+ *  change relayouts the window, which must not land on SDL's startup. */
 public class WarningForeverActivity extends SDLActivity implements DisplayManager.DisplayListener {
     private static final String TAG = "wf";
 
     /** System.loadLibrary name: lib + NATIVE_LIB + .so in the APK. */
     static final String NATIVE_LIB = "wfplus";
 
+    /** How long after focus or a change the rate is applied. */
+    private static final long APPLY_DELAY_MS = 750;
+
     /** The panel's top refresh rate at the current resolution (Rust). */
     private static native void nativeSetMaxRefreshRate(float hz);
 
     private DisplayManager displayManager;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private String pendingWhy;
+    private final Runnable apply = new Runnable() {
+        @Override
+        public void run() {
+            applyHighestRefreshRate(pendingWhy);
+        }
+    };
+    /** The surface and rate last given to Surface.setFrameRate. */
+    private Surface rateSurface;
+    private float rateHz;
 
     @Override
     protected String[] getLibraries() {
@@ -50,26 +70,46 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
         if (isFinishing()) {
             return;
         }
-        applyHighestRefreshRate("create");
-        displayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
-        if (displayManager != null) {
-            displayManager.registerDisplayListener(this, null);
+        try {
+            displayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+            if (displayManager != null) {
+                displayManager.registerDisplayListener(this, ui);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "refresh: no display listener: " + t);
+            displayManager = null;
         }
     }
 
     @Override
     protected void onDestroy() {
+        ui.removeCallbacks(apply);
         if (displayManager != null) {
-            displayManager.unregisterDisplayListener(this);
+            try {
+                displayManager.unregisterDisplayListener(this);
+            } catch (Throwable t) {
+                Log.w(TAG, "refresh: " + t);
+            }
             displayManager = null;
         }
         super.onDestroy();
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            // After a resume the Surface object is the same but its layer
+            // may be new: set the rate on it again.
+            rateSurface = null;
+            schedule("focus");
+        }
+    }
+
+    @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        applyHighestRefreshRate("configuration");
+        schedule("configuration");
     }
 
     @Override
@@ -80,10 +120,22 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
 
     @Override
     public void onDisplayChanged(int displayId) {
-        Display d = currentDisplay();
-        if (d != null && d.getDisplayId() == displayId) {
-            applyHighestRefreshRate("display");
+        try {
+            Display d = currentDisplay();
+            if (d != null && d.getDisplayId() == displayId) {
+                schedule("display");
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "refresh (display): " + t);
         }
+    }
+
+    /** Applies the rate on the UI thread after APPLY_DELAY_MS, once for a
+     *  burst of requests. */
+    private void schedule(String why) {
+        pendingWhy = why;
+        ui.removeCallbacks(apply);
+        ui.postDelayed(apply, APPLY_DELAY_MS);
     }
 
     private Display currentDisplay() {
@@ -94,8 +146,11 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
     }
 
     /** Picks the mode with the current resolution and the highest refresh
-     *  rate; a no-op when it is already the preferred one. */
+     *  rate; changes nothing that is already set. */
     private void applyHighestRefreshRate(String why) {
+        if (isFinishing()) {
+            return;
+        }
         try {
             Display d = currentDisplay();
             if (d == null) {
@@ -120,17 +175,20 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             }
             try {
                 nativeSetMaxRefreshRate(hz);
-            } catch (UnsatisfiedLinkError e) {
-                Log.w(TAG, "refresh: native library not loaded: " + e);
+            } catch (Throwable t) {
+                Log.w(TAG, "refresh: native side not reachable: " + t);
             }
             if (Build.VERSION.SDK_INT >= 30 && mSurface != null) {
                 Surface s = mSurface.getHolder().getSurface();
-                if (s != null && s.isValid()) {
+                if (s != null && s.isValid() && (s != rateSurface || hz != rateHz)) {
                     s.setFrameRate(hz, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+                    rateSurface = s;
+                    rateHz = hz;
+                    Log.i(TAG, "refresh (" + why + "): Surface.setFrameRate(" + hz + ")");
                 }
             }
-        } catch (RuntimeException e) {
-            Log.w(TAG, "refresh (" + why + "): " + e);
+        } catch (Throwable t) {
+            Log.w(TAG, "refresh (" + why + "): " + t);
         }
     }
 }

@@ -105,11 +105,14 @@ pub fn add_border(list: &mut DrawList, layout: &Layout) {
 ///
 /// Mobile windows lose their native surface when the app goes to the
 /// background, and on Android the Java thread releases it
-/// (surfaceDestroyed) without waiting for the game thread. So the surface
-/// is only touched in [`Display::present`] under [`Platform::lock_surface`]
-/// (SDL's activity mutex there), after checking the native window is still
-/// the one the surface was made for; it is dropped when the window is gone
-/// or changed, and made again (lazily, under the lock) when there is one.
+/// (surfaceDestroyed) without waiting for the game thread. So each frame
+/// [`Display::present`] checks, under [`Platform::lock_surface`] (SDL's
+/// activity mutex there), that the native window is still the one the
+/// surface was made for; the surface is dropped when the window is gone or
+/// changed, and made again (lazily, under the lock) when there is one. The
+/// lock is held only for that: a VkSurfaceKHR keeps its own reference to
+/// the ANativeWindow, and holding the lock across acquire and present can
+/// deadlock with the Java UI thread, which takes it in surfaceChanged.
 ///
 /// [`Platform::lock_surface`]: platform::sdl::Platform::lock_surface
 pub struct Display {
@@ -128,21 +131,51 @@ pub struct Display {
     /// Render target pixels per window pixel.
     pub render_scale: f32,
     scaler: gfx::scale::Scaler,
+    /// Frames presented so far.
+    presented: u64,
+}
+
+/// The first uncaptured GPU error (see `Display::new`).
+static GPU_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Frames presented by any Display (the Android startup watchdog).
+static PRESENTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The first uncaptured GPU error, taken.
+pub fn take_gpu_error() -> Option<String> {
+    GPU_ERROR.lock().ok().and_then(|mut e| e.take())
 }
 
 impl Display {
     pub fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack, cap: FpsCap) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?)));
-        let lock = platform.lock_surface();
-        if lock.window == 0 {
-            return Err("the window has no native surface".into());
-        }
-        let surface = create_surface(&instance, platform)?;
+        // The lock only covers reading the native window and making the
+        // surface on it: the VkSurfaceKHR holds its own reference to the
+        // ANativeWindow, so nothing after this can touch a freed window
+        // (a dead one gives surface errors, handled in `present`). Device
+        // and pipeline creation, configure, acquire and present all run
+        // without it, so the Java UI thread (surfaceChanged and
+        // surfaceDestroyed take the same lock) never waits on the GPU.
+        let (surface, window) = {
+            let lock = platform.lock_surface();
+            if lock.window == 0 {
+                return Err("the window has no native surface".into());
+            }
+            (create_surface(&instance, platform)?, lock.window)
+        };
+        crate::log::breadcrumb(&format!("surface made for window {window:#x}; creating the GPU device"));
         let (adapter, device, queue) = gfx::gpu::create_device(&instance, Some(&surface))?;
-        // GPU errors are logged, never a panic (wgpu's default handler
-        // panics; a surface error while the app is backgrounded is not
-        // fatal).
-        device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| crate::log::error(&format!("wgpu: {e}"))));
+        // GPU errors are logged and kept: the loop stops with the first
+        // one (a message box on Android) instead of showing black frames.
+        // Surface errors go through error scopes or `CurrentSurfaceTexture`
+        // and never get here.
+        device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| {
+            let msg = format!("wgpu: {e}");
+            crate::log::error(&msg);
+            if let Ok(mut first) = GPU_ERROR.lock() {
+                first.get_or_insert(msg);
+            }
+        }));
         let info = adapter.get_info();
         let caps = surface.get_capabilities(&adapter);
         // Blend in gamma space, as the original's Direct3D 7 did.
@@ -165,16 +198,22 @@ impl Display {
             view_formats: vec![],
             color_space: Default::default(),
         };
+        crate::log::breadcrumb(&format!(
+            "GPU: {} ({:?}, driver {} {}), {:?}, {:?}, {}x{}; building the renderer",
+            info.name, info.backend, info.driver, info.driver_info, format, config.present_mode, config.width, config.height
+        ));
+        let scope_oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
         let scaler = gfx::scale::Scaler::new(&renderer);
-        crate::log::breadcrumb(&format!(
-            "display: {} ({:?}), {:?}, {:?}, {}x{}, window {:#x}",
-            info.name, info.backend, format, config.present_mode, config.width, config.height, lock.window
-        ));
+        if let Some(e) = pollster::block_on(scope.pop()).or(pollster::block_on(scope_oom.pop())) {
+            return Err(format!("the GPU renderer cannot be made on {} ({:?}): {e}", info.name, info.backend));
+        }
+        crate::log::breadcrumb("renderer ready");
         let mut display = Display {
             instance,
             surface: Some(surface),
-            surface_window: lock.window,
+            surface_window: window,
             stale: true,
             background: false,
             config,
@@ -182,19 +221,19 @@ impl Display {
             renderer,
             render_scale: 1.0,
             scaler,
+            presented: 0,
         };
         if !display.configure() {
             return Err("cannot configure the window surface".into());
         }
-        platform.surface_created(lock.window);
+        crate::log::breadcrumb("surface configured");
         Ok(display)
     }
 
     /// The app is going to the background: drops the surface and makes
     /// none until [`Display::resume`].
     pub fn suspend(&mut self) {
-        // Taken so a surface still in use by the driver is released under
-        // the lock too.
+        BACKGROUND.store(true, std::sync::atomic::Ordering::Relaxed);
         self.background = true;
         if self.surface.take().is_some() {
             crate::log::breadcrumb("surface dropped (background)");
@@ -205,6 +244,7 @@ impl Display {
     /// the window has a native one.
     pub fn resume(&mut self) {
         self.background = false;
+        BACKGROUND.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn suspended(&self) -> bool {
@@ -233,7 +273,6 @@ impl Display {
     }
 
     /// Configures the surface; false (and the surface dropped) on error.
-    /// Under the surface lock.
     fn configure(&mut self) -> bool {
         let Some(surface) = &self.surface else { return false };
         let device = self.renderer.device();
@@ -248,37 +287,40 @@ impl Display {
         true
     }
 
-    /// Shows `list`, if the window has a surface to show it on. Every
-    /// surface operation is here, under the platform's surface lock.
+    /// Shows `list`, if the window has a surface to show it on. The
+    /// surface is checked and made here, under the platform's surface lock.
     pub fn present(&mut self, platform: &platform::sdl::Platform, list: &DrawList) {
         if self.background {
             return;
         }
-        let lock = platform.lock_surface();
-        if lock.window == 0 {
-            if self.surface.take().is_some() {
-                crate::log::breadcrumb("native window gone: surface dropped");
-            }
-            return;
-        }
-        if self.surface.is_some() && self.surface_window != lock.window {
-            crate::log::breadcrumb(&format!("native window changed {:#x} -> {:#x}: surface dropped", self.surface_window, lock.window));
-            self.surface = None;
-        }
-        if self.surface.is_none() {
-            match create_surface(&self.instance, platform) {
-                Ok(s) => {
-                    let (w, h) = platform.drawable_size();
-                    (self.config.width, self.config.height) = (w.max(1), h.max(1));
-                    crate::log::breadcrumb(&format!("surface created for window {:#x}, {w}x{h}", lock.window));
-                    self.surface = Some(s);
-                    self.surface_window = lock.window;
-                    self.stale = true;
-                    platform.surface_created(lock.window);
+        {
+            // Held only to read the native window and make a surface on it
+            // (see `new`); released before any GPU call that can wait.
+            let lock = platform.lock_surface();
+            if lock.window == 0 {
+                if self.surface.take().is_some() {
+                    crate::log::breadcrumb("native window gone: surface dropped");
                 }
-                Err(e) => {
-                    crate::log::breadcrumb(&format!("cannot create the surface yet: {e}"));
-                    return;
+                return;
+            }
+            if self.surface.is_some() && self.surface_window != lock.window {
+                crate::log::breadcrumb(&format!("native window changed {:#x} -> {:#x}: surface dropped", self.surface_window, lock.window));
+                self.surface = None;
+            }
+            if self.surface.is_none() {
+                match create_surface(&self.instance, platform) {
+                    Ok(s) => {
+                        let (w, h) = platform.drawable_size();
+                        (self.config.width, self.config.height) = (w.max(1), h.max(1));
+                        crate::log::breadcrumb(&format!("surface created for window {:#x}, {w}x{h}", lock.window));
+                        self.surface = Some(s);
+                        self.surface_window = lock.window;
+                        self.stale = true;
+                    }
+                    Err(e) => {
+                        crate::log::breadcrumb(&format!("cannot create the surface yet: {e}"));
+                        return;
+                    }
                 }
             }
         }
@@ -313,7 +355,11 @@ impl Display {
         let size = (self.config.width, self.config.height);
         self.scaler.render(&mut self.renderer, list, &view, size, self.render_scale);
         self.renderer.queue().present(frame);
-        // `lock` is released here, after the present.
+        self.presented += 1;
+        if self.presented == 1 {
+            crate::log::breadcrumb("first frame presented");
+        }
+        PRESENTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -375,6 +421,65 @@ impl Snapshots {
         &self.shown
     }
 }
+
+/// Android: reports an app that shows no frame for [`Watchdog::STALL`]
+/// while in the foreground, from start-up on (a hang that would otherwise
+/// be a black screen): to logcat with the last breadcrumb, and once in a
+/// message box. Runs until dropped.
+#[cfg(target_os = "android")]
+pub struct Watchdog {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(target_os = "android")]
+impl Watchdog {
+    pub const STALL: std::time::Duration = std::time::Duration::from_secs(15);
+
+    pub fn start() -> Self {
+        use std::sync::atomic::Ordering;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        let spawned = std::thread::Builder::new().name("wf-watchdog".into()).spawn(move || {
+            let mut seen = PRESENTED.load(Ordering::Relaxed);
+            let mut since = Instant::now();
+            let mut told = false;
+            while !flag.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let now = PRESENTED.load(Ordering::Relaxed);
+                if now != seen || BACKGROUND.load(Ordering::Relaxed) {
+                    (seen, since) = (now, Instant::now());
+                    continue;
+                }
+                if since.elapsed() >= Self::STALL && !flag.load(Ordering::Relaxed) {
+                    let last = crate::log::last_breadcrumb();
+                    crate::log::error(&format!("watchdog: no frame shown for {} s ({now} so far); last step: {last}", since.elapsed().as_secs()));
+                    if !told {
+                        told = true;
+                        crate::platform::android::fatal(&format!(
+                            "No frame for {} seconds ({now} shown so far).\nLast step: {last}\n\nPlease send the logcat (tag wf).",
+                            Self::STALL.as_secs()
+                        ));
+                    }
+                    since = Instant::now();
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            crate::log::warn(&format!("watchdog not started: {e}"));
+        }
+        Watchdog { stop }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// In the background (the watchdog waits for no frames then).
+static BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The windowed loop. `on_frame` sees each shown frame (screenshots).
 pub fn run_windowed(
@@ -468,6 +573,9 @@ pub fn run_windowed(
         let border = game.wants_border();
         let frame = snaps.frame(step.alpha(), &layout, border);
         display.present(platform, frame);
+        if let Some(e) = take_gpu_error() {
+            return Err(format!("GPU error: {e}"));
+        }
         on_frame(display, frame)?;
         let now = Instant::now();
         fps.frame(now);

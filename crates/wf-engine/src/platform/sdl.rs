@@ -237,17 +237,6 @@ impl Platform {
         SurfaceLock { window: 1 }
     }
 
-    /// A GPU surface was made for native window `window` (under the
-    /// surface lock): on Android, ask for the panel's top refresh rate on
-    /// it (again after every resume, as the window is new).
-    pub fn surface_created(&self, window: usize) {
-        #[cfg(target_os = "android")]
-        if let Some(hz) = super::max_refresh() {
-            super::android::set_frame_rate(window, hz);
-        }
-        let _ = window;
-    }
-
     /// Pauses (true) or resumes the audio output.
     pub fn set_audio_paused(&self, paused: bool) {
         if let Some(stream) = &self.audio {

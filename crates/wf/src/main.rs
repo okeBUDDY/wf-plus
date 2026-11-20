@@ -439,6 +439,7 @@ fn run_headless(o: &Options) -> Result<(), String> {
         return setup_shot(o, path);
     }
     let (cx, app) = startup(o, art::Art::load())?;
+    log::breadcrumb("game data loaded");
     let mut game = WfGame { cx, app, synced: None, touching: false };
     game.cx.settings.display.show_fps |= o.show_fps;
     game.cx.settings.perf_overlay |= o.perf_overlay;
@@ -841,6 +842,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     }
     let o = &Options { data: found.or_else(|| o.data.clone()), ..o.clone() };
     let (cx, app) = startup(o, art)?;
+    log::breadcrumb("game data loaded");
     let mut game = WfGame { cx, app, synced: None, touching: false };
     if let Some(mode) = o.arena {
         game.cx.arena_choice = mode;
@@ -881,6 +883,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
             if let Some((w, h, rgba)) = icon() {
                 platform.set_icon(w, h, &rgba);
             }
+            log::breadcrumb("window made");
             let display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
             (platform, display)
         }
@@ -896,8 +899,36 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     let frames = o.frames;
     let shot = o.screenshot.clone();
     let counter = std::cell::Cell::new(0u32);
+    #[cfg(target_os = "android")]
+    let mut black_check = Some(std::time::Instant::now());
     wf_engine::app::run_windowed(&mut game, &mut platform, &mut display, display_cfg, &mut input, |display, frame| {
         counter.set(counter.get() + 1);
+        // Android, once, 5 s in: the title always shows something by then,
+        // so a frame with no lit pixel means the GPU draws nothing (a
+        // driver problem) rather than a hang; reported instead of a black
+        // screen with no word.
+        #[cfg(target_os = "android")]
+        if black_check.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(5)) {
+            black_check = None;
+            use wgpu::TextureFormat as F;
+            // The readback reads 4-byte texels.
+            let format = display.renderer.format();
+            if matches!(format, F::Rgba8Unorm | F::Rgba8UnormSrgb | F::Bgra8Unorm | F::Bgra8UnormSrgb) {
+                let (w, h) = display.size();
+                let rgba = display.renderer.render_to_rgba(frame, w, h);
+                let lit = rgba.chunks_exact(4).filter(|p| p[0] | p[1] | p[2] != 0).count();
+                log::breadcrumb(&format!("frame check: {lit} of {} pixels lit", rgba.len() / 4));
+                if lit == 0 {
+                    platform::android::fatal(&format!(
+                        "The GPU drew an all-black frame ({w}x{h}, {} frames in).\nLast step: {}\n\nPlease send the logcat (tag wf).",
+                        counter.get(),
+                        log::last_breadcrumb()
+                    ));
+                }
+            } else {
+                log::breadcrumb(&format!("frame check skipped ({format:?})"));
+            }
+        }
         if let (Some(path), false) = (&shot, screenshot_taken)
             && counter.get() >= frames
         {
@@ -922,7 +953,9 @@ pub(crate) fn android_main() -> i32 {
     log::breadcrumb(&format!("SDL_main: {}", app_info::version_line()));
     // A panic must not unwind into SDL's C frames (that aborts with no
     // message): it is caught here, after the hook logged it.
+    let watchdog = wf_engine::app::Watchdog::start();
     let result = std::panic::catch_unwind(|| run_windowed(&options()));
+    drop(watchdog);
     let code = match result {
         Ok(Ok(())) => 0,
         Ok(Err(e)) => {
@@ -931,6 +964,8 @@ pub(crate) fn android_main() -> i32 {
         }
         Err(_) => {
             log::error("SDL_main: the game panicked (see the panic above)");
+            let msg = platform::android::panic_message().unwrap_or_else(|| "unknown panic".into());
+            platform::android::fatal(&format!("ERROR (crash): {msg}"));
             2
         }
     };

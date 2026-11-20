@@ -43,9 +43,20 @@ pub fn log(level: Level, msg: &str) {
     }
 }
 
+static LAST_BREADCRUMB: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// The latest breadcrumb (the startup watchdog's report).
+pub fn last_breadcrumb() -> String {
+    LAST_BREADCRUMB.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
 /// A lifecycle breadcrumb: always in logcat on Android (tag "wf", info),
 /// so a crash log shows the steps that led to it; debug level elsewhere.
 pub fn breadcrumb(msg: &str) {
+    if let Ok(mut last) = LAST_BREADCRUMB.lock() {
+        last.clear();
+        last.push_str(msg);
+    }
     #[cfg(target_os = "android")]
     crate::platform::android::log_at(crate::platform::android::INFO, &format!("lifecycle: {msg}"));
     #[cfg(not(target_os = "android"))]

@@ -434,7 +434,7 @@ fn perf(
     let cache_on = renderer.cache.enabled;
     let analytic_on = renderer.analytic_shapes;
     let mut csv = String::from(
-        "visits_m,frame,update_us,draw_us,build_us,dynamic_us,upload_us,submit_us,gpu_us,draws,instances,draw_calls,pipelines,upload_bytes,dynamic_rebuilt,quad_mpx,layer_mpx,curve_mpx,noise_mpx,\
+        "visits_m,frame,update_us,draw_us,build_us,dynamic_us,upload_us,submit_us,gpu_us,draws,instances,draw_calls,pipelines,dynamic_rebuilt,upload_bytes,quad_mpx,layer_mpx,curve_mpx,noise_mpx,\
          cached_mpx,est_on_m,est_off_m,visits_off_m,fetches_m,atlas_mpx,atlas_curve_m,gpu_off_us,ts_on_us,ts_off_us,hits,rasterized,deferred,pages,analytic_mpx,tests_m,top_slug\n",
     );
     let mut rows: Vec<Row> = Vec::new();
@@ -445,6 +445,7 @@ fn perf(
     let mut busiest: (f64, Vec<(u32, (u32, f64))>) = (0.0, Vec::new());
     let mut busiest_on: (f64, u32, Vec<(u32, (u32, f64))>) = (0.0, 0, Vec::new());
     let mut busiest_list = gfx::DrawList::new();
+    let mut busiest_px: Vec<(u32, f64)> = Vec::new();
     // WF_PERF_WARM=0: no settling draws, the cache fills as in play (the
     // CSV then shows each frame's atlas work and its Slug fallbacks).
     let warm = std::env::var("WF_PERF_WARM").map_or(true, |v| v != "0");
@@ -505,6 +506,8 @@ fn perf(
         if s.curve_px > busiest_on.0 {
             busiest_on = (s.curve_px, f, slug_left);
             busiest_list.clone_from(list);
+            busiest_px = renderer.px_by_sprite.iter().map(|(&k, &v)| (k, v)).collect();
+            busiest_px.sort_by(|a, b| b.1.total_cmp(&a.1));
         }
         let (mut visits, mut fetches, mut edges) = counter.count_visits(list, size);
         for _ in 0..settle {
@@ -663,6 +666,11 @@ fn perf(
                 }
             }
             println!("  {name:32} {:8.1} {:8.1} {count:4}", px / 1e6, measured / 1e6);
+        }
+        println!("most pixels drawn at that frame (estimated Mpx; cached, bitmap or Slug):");
+        for (id, px) in busiest_px.iter().take(10) {
+            let kind = if renderer.sprite_cacheable(*id) { "cached" } else { "other" };
+            println!("  {:32} {:8.2} {kind}", sprite_label(&game.cx.art, *id), px / 1e6);
         }
     }
     Ok(())

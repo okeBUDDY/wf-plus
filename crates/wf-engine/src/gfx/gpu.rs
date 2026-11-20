@@ -278,6 +278,9 @@ pub struct Renderer {
     /// With `collect`: estimated curve-pixels per sprite id this frame
     /// (dynamic shapes under u32::MAX).
     pub by_sprite: HashMap<u32, (u32, f64)>,
+    /// With `collect`: estimated pixels drawn per sprite id this frame
+    /// (quads in the window, whatever draws them; not the analytic shapes).
+    pub px_by_sprite: HashMap<u32, f64>,
     costs: Vec<LayerCost>,
 }
 
@@ -722,6 +725,7 @@ impl Renderer {
             collect: false,
             counting,
             by_sprite: HashMap::new(),
+            px_by_sprite: HashMap::new(),
             costs,
         }
     }
@@ -1165,6 +1169,7 @@ impl Renderer {
         let t0 = std::time::Instant::now();
         self.stats = RenderStats { draws: list.draws.len() as u32, ..Default::default() };
         self.by_sprite.clear();
+        self.px_by_sprite.clear();
         self.instances.clear();
         self.batches.clear();
         self.raster_jobs.clear();
@@ -1199,6 +1204,9 @@ impl Renderer {
                     }
                     if let Some(rect) = info.bitmap {
                         let m = &transform.m;
+                        if self.collect {
+                            *self.px_by_sprite.entry(sprite.0).or_default() += estimate(&self.costs, m, &layout, size, info.bounds, 0, 0).quad;
+                        }
                         let i = self.instances.len() as u32;
                         self.instances.push(Instance {
                             bounds: info.bounds,
@@ -1249,8 +1257,10 @@ impl Renderer {
                         let t0 = e.texel_of([quad[0], quad[1]]);
                         let texels = [t0[0].to_bits(), t0[1].to_bits(), e.scale.to_bits(), 0];
                         if self.collect {
-                            self.stats.cached_px += estimate(&self.costs, m, &layout, size, quad, 0, 0).quad;
+                            let px = estimate(&self.costs, m, &layout, size, quad, 0, 0).quad;
+                            self.stats.cached_px += px;
                             self.by_sprite.entry(sprite.0).or_default().0 += 1;
+                            *self.px_by_sprite.entry(sprite.0).or_default() += px;
                         }
                         let i = self.instances.len() as u32;
                         self.instances.push(Instance {
@@ -1268,6 +1278,7 @@ impl Renderer {
                         let e = self.by_sprite.entry(sprite.0).or_default();
                         e.0 += 1;
                         e.1 += c.curve;
+                        *self.px_by_sprite.entry(sprite.0).or_default() += c.quad;
                     }
                     let i = self.instances.len() as u32;
                     self.instances.push(Instance {

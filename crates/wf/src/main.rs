@@ -421,7 +421,7 @@ fn perf(
     let cache_on = renderer.cache.enabled;
     let mut csv = String::from(
         "visits_m,frame,update_us,draw_us,build_us,dynamic_us,upload_us,submit_us,gpu_us,draws,instances,draw_calls,pipelines,upload_bytes,dynamic_rebuilt,quad_mpx,layer_mpx,curve_mpx,noise_mpx,\
-         cached_mpx,est_on_m,est_off_m,visits_off_m,fetches_m,atlas_mpx,atlas_curve_m,gpu_off_us,ts_on_us,ts_off_us,hits,rasterized,deferred,pages\n",
+         cached_mpx,est_on_m,est_off_m,visits_off_m,fetches_m,atlas_mpx,atlas_curve_m,gpu_off_us,ts_on_us,ts_off_us,hits,rasterized,deferred,pages,top_slug\n",
     );
     let mut rows: Vec<Row> = Vec::new();
     // Render every `every`-th frame from `from` on (the GPU of a headless
@@ -430,6 +430,7 @@ fn perf(
     let from: u32 = std::env::var("WF_PERF_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut busiest: (f64, Vec<(u32, (u32, f64))>) = (0.0, Vec::new());
     let mut busiest_on: (f64, u32, Vec<(u32, (u32, f64))>) = (0.0, 0, Vec::new());
+    let mut busiest_list = gfx::DrawList::new();
     // WF_PERF_WARM=0: no settling draws, the cache fills as in play (the
     // CSV then shows each frame's atlas work and its Slug fallbacks).
     let warm = std::env::var("WF_PERF_WARM").map_or(true, |v| v != "0");
@@ -478,10 +479,14 @@ fn perf(
             (wall, ts) = timed(renderer, list);
         }
         let s = renderer.stats;
+        let mut slug_left: Vec<(u32, (u32, f64))> = renderer.by_sprite.iter().map(|(&k, &v)| (k, v)).filter(|v| v.1.1 > 0.0).collect();
+        slug_left.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+        let sprite_name = |id: u32| if id == u32::MAX { "(dynamic)" } else { game.cx.art.name(gfx::SpriteId(id)) };
+        let top_slug: Vec<String> = slug_left.iter().take(3).map(|(id, (n, px))| format!("{} {:.1}M/{n}", sprite_name(*id), px / 1e6)).collect();
+        let top_slug = top_slug.join("; ");
         if s.curve_px > busiest_on.0 {
-            let mut v: Vec<(u32, (u32, f64))> = renderer.by_sprite.iter().map(|(&k, &v)| (k, v)).filter(|v| v.1.1 > 0.0).collect();
-            v.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
-            busiest_on = (s.curve_px, f, v);
+            busiest_on = (s.curve_px, f, slug_left);
+            busiest_list.clone_from(list);
         }
         let (mut visits, mut fetches) = counter.count_visits(list, size);
         for _ in 0..settle {
@@ -510,7 +515,7 @@ fn perf(
         };
         let _ = writeln!(
             csv,
-            "{:.2},{},{},{:.1},{},{},{:.2},{:.2},{:.1},{:.4},{:.3},{:.1},{:.1},{:.2},{:.2},{:.3},{:.1},{:.1},{:.1},{:.1},{},{},{},{}",
+            "{:.2},{},{},{:.1},{},{},{:.2},{:.2},{:.1},{:.4},{:.3},{:.1},{:.1},{:.2},{:.2},{:.3},{:.1},{:.1},{:.1},{:.1},{},{},{},{},{}",
             r.visits,
             r.frame,
             r.cpu.map(|v| format!("{v:.1}")).join(","),
@@ -535,6 +540,7 @@ fn perf(
             first.cache.rasterized,
             first.cache.deferred,
             s.cache.pages,
+            top_slug,
         );
         rows.push(r);
         if !game.running() {
@@ -613,10 +619,28 @@ fn perf(
         println!("  {name:32} {:8.1} {count:4} {cached:6} layers {}", px / 1e6, desc.join(" "));
     }
     if cache_on {
-        println!("still drawn with Slug at the heaviest frame with the cache on (frame {}, curve Mpx, draws):", busiest_on.1);
+        println!(
+            "still drawn with Slug at the heaviest frame with the cache on (frame {}; estimated and measured curve visits, M; draws):",
+            busiest_on.1
+        );
         for (id, (count, px)) in busiest_on.2.iter().take(8) {
             let name = if *id == u32::MAX { "(dynamic shapes)" } else { game.cx.art.name(gfx::SpriteId(*id)) };
-            println!("  {name:32} {:8.1} {count:4}", px / 1e6);
+            // Only this sprite's draws, counted.
+            let mut only = busiest_list.clone();
+            only.draws.retain(|d| match d {
+                gfx::Draw::Sprite { sprite, .. } => sprite.0 == *id,
+                gfx::Draw::Shape { .. } => *id == u32::MAX,
+            });
+            only.fade = gfx::Argb(0);
+            let (measured, _) = counter.count_visits(&only, size);
+            if *id == u32::MAX && std::env::var_os("WF_PERF_SHAPES").is_some() {
+                for d in &only.draws {
+                    if let gfx::Draw::Shape { primitive, points, transform, color, blend, .. } = d {
+                        eprintln!("shape {primitive:?} {} pts color {:08x} {blend:?} m {:?} pts {:?}", points.len(), color.0, transform.m, &points[..points.len().min(8)]);
+                    }
+                }
+            }
+            println!("  {name:32} {:8.1} {:8.1} {count:4}", px / 1e6, measured / 1e6);
         }
     }
     Ok(())

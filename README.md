@@ -1,15 +1,37 @@
-# Warning Forever in Rust
+# Warning Forever+ (Warning Forever Plus)
 
-A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust, 64-bit and
-platform independent: SDL3 for the window, input and audio, wgpu for the GPU.
-The decompilation of the original is the reference for behaviour (read only,
-not part of this repository). No Win32, DirectX or HL-library code is
+A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust.
+
+> [!WARNING]
+> **Disclaimer:** there is no official release of Warning Forever or Warning Forever+ on any
+> storefront. The only official sources are [the original
+> website](https://www.hikware.com/Prod/index.html#wf) and the
+> [wf-decomp](https://github.com/okeBUDDY/wf-decomp) and
+> [wf-plus](https://github.com/okeBUDDY/wf-plus) repositories on GitHub.
+
+Version 1.08 is the last release: the original developer ended development and support of the
+game after it. The game is still [freely available to download from the official
+website](https://www.hikware.com/Prod/index.html#wf). This repository does not contain the game;
+running the port needs your own copy of version 1.08's `data.bin`.
+
+The port is 64-bit and platform independent: SDL3 for the window, input and
+audio, wgpu for the GPU. The [decompilation](https://github.com/okeBUDDY/wf-decomp) of the original is
+the reference for behaviour (read only, not part of this repository). No Win32, DirectX or HL-library code is
 emulated: the port starts above those layers, at what the game asked of them.
 
 The whole game is ported: title, options, the game with every boss part and
 the boss generator, the HUD, game over and name entry, the score table,
 replays, and the music sequencer. It plays the original's own replays back
 frame-exact (see [Verification](#verification)).
+
+The original's renderer is replaced. Warning Forever drew bitmap sprites and
+1-pixel lines through Direct3D 7 at 640x480; the port draws vector versions of
+that art on the GPU with a renderer built on [Eric Lengyel's Slug algorithm](https://terathon.com/blog/decade-slug.html),
+which computes coverage straight from the shapes' quadratic Bézier curves in
+the fragment shader. The art stays sharp at any resolution or aspect, with no
+upscaling. The heaviest sprites are rasterized once per scale into a cache and
+reused, and the title character is still the original pixels (see
+[Rendering](#rendering)).
 
 | | |
 |---|---|
@@ -33,8 +55,8 @@ The screenshots are made by `scripts/docs-screenshots.sh`.
 ## The game data
 
 The original game data is not part of this repository. You need `data.bin`
-from the 1.08 release (`wf108.zip`). It is the only runtime input; `wf.exe`
-is never read, at run time or at build time. Constants that came from
+from the 1.08 release (`wf108.zip`, the game's download, see above). It is
+the only runtime input; `wf.exe` is never read, at run time or at build time. Constants that came from
 `wf.exe` (tables, literals) are in the source as `const` tables with their
 address cited.
 
@@ -205,7 +227,7 @@ libm's `sin`, `cos` and `atan2` over sweeps, and `sqrt`.
 
 ### Rendering
 
-Art is drawn with the Slug algorithm (Lengyel, JCGT 2017). The cooker turns
+Art is drawn with the [Slug algorithm](https://terathon.com/blog/decade-slug.html) (Lengyel, JCGT 2017). The cooker turns
 each SVG path into quadratic curves and builds horizontal and vertical bands
 per layer; the fragment shader casts a ray along each axis and turns the
 crossings into coverage. Layers are painted (solid, linear or radial ramp,
@@ -224,6 +246,14 @@ region of the textures, only when their points change. Glyphs come from vector S
 when present, else from exact traces of the font sheets. The title character
 stays the original pixels in a bitmap atlas, drawn with sharp-bilinear
 sampling.
+
+Two fast paths keep heavy scenes cheap without changing the image much. The
+sprite cache (`gfx/cache.rs`) rasterizes a sprite's whole layer stack with Slug
+once per scale step (1.25x) into an atlas, then draws it as a textured quad;
+strokes are never cached. Line shapes and small fills (`gfx/lines.rs`,
+`gfx/fills.rs`) skip Slug's bands and compute their coverage analytically on
+thin quads. Both are on by default; `sprite_cache = off` or
+`analytic_shapes = off` under `[gfx]` in `wf-plus.ini` turns them off.
 
 ## Verification
 

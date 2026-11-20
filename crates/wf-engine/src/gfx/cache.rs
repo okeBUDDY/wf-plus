@@ -34,12 +34,14 @@ pub const PAD: u32 = 3;
 /// The bucket step.
 pub const STEP: f32 = 1.25;
 /// Atlas texels per device pixel, at least: an entry is rasterized at the
-/// bucket at or above 1.5x the instance's scale. At 1x the filter's tent
-/// widens the coverage's one-pixel box enough to soften thin lines (the
-/// ship's); 1.5x keeps them within antialiasing of the Slug path, and at
-/// 2x the single bilinear tap starts to alias. Measured on every cached
-/// sprite (`sprite_cache_matches_slug`).
-pub const OVERSAMPLE: f32 = 1.5;
+/// bucket at or above twice the instance's scale, and drawn with a
+/// four-tap one-pixel box filter. Measured on every cached sprite
+/// (`sprite_cache_matches_slug`, mean difference per sprite): one tap at
+/// 1x was visibly soft on thin lines (0.17 mean over the sprites), one tap
+/// at 1.5x 0.17 (the title art's lettering up to 0.77), four taps at 2x
+/// 0.12 (the lettering under 0.47); 2.5x and 3x are no better. An entry
+/// over half a page takes a lower bucket, down to the screen's scale.
+pub const OVERSAMPLE: f32 = 2.0;
 /// Shelf heights are multiples of this.
 const SHELF_ROUND: u32 = 8;
 
@@ -83,6 +85,11 @@ impl Entry {
         let [x, y, w, h] = self.rect;
         let (o, s) = (self.origin, self.scale);
         ([o[0] + 1.0 / s, o[1] + 1.0 / s, o[0] + (w - 1) as f32 / s, o[1] + (h - 1) as f32 / s], [x + 1, y + 1, w - 2, h - 2])
+    }
+
+    /// The page texel coordinates of local point `p`.
+    pub fn texel_of(&self, p: [f32; 2]) -> [f32; 2] {
+        [(p[0] - self.origin[0]) * self.scale + self.rect[0] as f32, (p[1] - self.origin[1]) * self.scale + self.rect[1] as f32]
     }
 
     /// The whole rect in local units (what the rasterization covers).
@@ -398,5 +405,6 @@ mod tests {
         // Local -> texel is linear: (l - origin) * scale + rect origin.
         assert_eq!(((q[0] + 8.0) * 2.0 + 10.0, (q[1] + 6.0) * 2.0 + 20.0), (t[0] as f32, t[1] as f32));
         assert_eq!(((q[2] + 8.0) * 2.0 + 10.0, (q[3] + 6.0) * 2.0 + 20.0), ((t[0] + t[2]) as f32, (t[1] + t[3]) as f32));
+        assert_eq!(e.texel_of([q[0], q[1]]), [t[0] as f32, t[1] as f32]);
     }
 }

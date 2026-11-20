@@ -456,8 +456,9 @@ fn vs_cached(@builtin(vertex_index) vi: u32, inst: Instance) -> CachedOut {
     );
     var out: CachedOut;
     out.pos = vec4<f32>(screen * view.scale + view.offset, 0.5, 1.0);
-    // layers = the entry's texel rect (x, y, w, h) in its page.
-    let texel = vec2<f32>(inst.layers.xy) + corner * vec2<f32>(inst.layers.zw);
+    // layers = the page texel of the quad's min corner (x, y) and texels
+    // per local unit (f32 bits).
+    let texel = bitcast<vec2<f32>>(inst.layers.xy) + (local - inst.bounds.xy) * bitcast<f32>(inst.layers.z);
     out.uv = texel / vec2<f32>(textureDimensions(atlas_tex));
     out.tint = inst.tint;
     return out;
@@ -465,10 +466,17 @@ fn vs_cached(@builtin(vertex_index) vi: u32, inst: Instance) -> CachedOut {
 
 @fragment
 fn fs_cached(in: CachedOut) -> @location(0) vec4<f32> {
-    let c = textureSampleLevel(atlas_tex, atlas_sampler, in.uv, 0.0);
+    // A one-pixel box: four taps a quarter pixel from the centre, each
+    // bilinear over half-pixel texels (the page is 2x the screen or more).
+    let dx = dpdx(in.uv) * 0.25;
+    let dy = dpdy(in.uv) * 0.25;
+    let c = (textureSampleLevel(atlas_tex, atlas_sampler, in.uv + dx + dy, 0.0)
+        + textureSampleLevel(atlas_tex, atlas_sampler, in.uv + dx - dy, 0.0)
+        + textureSampleLevel(atlas_tex, atlas_sampler, in.uv - dx + dy, 0.0)
+        + textureSampleLevel(atlas_tex, atlas_sampler, in.uv - dx - dy, 0.0)) * 0.25;
     if (count_visits) {
-        // One texel fetch, counted apart from the curve visits (green).
-        return vec4<f32>(0.0, 1.0 / 64.0, 0.0, 0.0);
+        // Four texel fetches, counted apart from the curve visits (green).
+        return vec4<f32>(0.0, 4.0 / 64.0, 0.0, 0.0);
     }
     return vec4<f32>(c.rgb * in.tint.rgb * in.tint.a, c.a * in.tint.a);
 }

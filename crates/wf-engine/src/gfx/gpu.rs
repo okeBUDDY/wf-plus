@@ -162,11 +162,11 @@ const RASTER_BUDGET: f64 = 24e6;
 /// frame's first.
 const MIN_STRIP_ROWS: u32 = 16;
 
-/// Sprites kept in Slug whatever their cost: the glyphs, and the title and
-/// menu art (`etc*`), whose pixel lettering a filtered image would soften;
-/// none of them is drawn in the heavy scenes.
+/// Sprites kept in Slug whatever their cost: the font glyphs (small text
+/// stays exact; the title and HUD art, `etc*`, with its banners and
+/// labels, is cached since the four-tap filter keeps its lettering).
 fn slug_only(name: &str) -> bool {
-    name.starts_with("font/") || name.starts_with("etc")
+    name.starts_with("font/")
 }
 
 /// Whether a sprite of `layers` (its layer costs) in `bounds` is worth
@@ -637,7 +637,15 @@ impl Renderer {
         if s.is_nan() || s <= 1e-3 {
             return None;
         }
-        let n = cache::bucket(s * cache::OVERSAMPLE);
+        let mut n = cache::bucket(s * cache::OVERSAMPLE);
+        // Too large for a page's half: less oversampling, down to the
+        // screen's own scale (then Slug).
+        let max = self.cache.max_entry();
+        while cache::entry_size(info.bounds, cache::bucket_scale(n)).0.max(cache::entry_size(info.bounds, cache::bucket_scale(n)).1) > max
+            && cache::bucket_scale(n - 1) >= s * 0.999
+        {
+            n -= 1;
+        }
         let e = match self.cache.get(id, n) {
             Some(e) => e,
             None if self.raster_budget <= 0.0 => {
@@ -959,10 +967,15 @@ impl Renderer {
                     } else {
                         None
                     };
-                    if clip.is_none()
-                        && let Some(e) = self.cached(sprite.0, info, m, k)
-                    {
-                        let (quad, texels) = e.quad();
+                    if let Some(e) = self.cached(sprite.0, info, m, k) {
+                        let (mut quad, _) = e.quad();
+                        if let Some(c) = clip {
+                            // The texel region of a sheet: cut the quad, hard
+                            // edges as the Slug path's.
+                            quad = [quad[0].max(c[0]), quad[1].max(c[1]), quad[2].min(c[2]), quad[3].min(c[3])];
+                        }
+                        let t0 = e.texel_of([quad[0], quad[1]]);
+                        let texels = [t0[0].to_bits(), t0[1].to_bits(), e.scale.to_bits(), 0];
                         if self.collect {
                             self.stats.cached_px += estimate(&self.costs, m, &layout, size, quad, 0, 0).quad;
                             self.by_sprite.entry(sprite.0).or_default().0 += 1;

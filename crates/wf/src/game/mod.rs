@@ -408,7 +408,13 @@ mod coverage_tests {
                     let (cx, cy) = ((i % 8) as f32 * 80.0 + 40.0 + 0.3 * i as f32 % 1.0, (i / 8) as f32 * 160.0 + 80.0 + 0.17 * i as f32 % 1.0);
                     t.translate(cx, cy);
                     let (color, blend) = if i % 3 == 2 { (Argb(0x80ff_c040), Blend::Additive) } else { (Argb(0xffff_ffff), Blend::Normal) };
-                    list.sprite(crate::gfx::SpriteId(id), &t, color, blend);
+                    if i % 4 == 3 {
+                        // A sheet's texel region (the HUD's banners and labels).
+                        let clip = [b[0] + (b[2] - b[0]) * 0.2, b[1] + (b[3] - b[1]) * 0.3, b[2] - (b[2] - b[0]) * 0.25, b[3]];
+                        list.sprite_clipped(crate::gfx::SpriteId(id), &t, clip, color, blend);
+                    } else {
+                        list.sprite(crate::gfx::SpriteId(id), &t, color, blend);
+                    }
                     i += 1;
                 }
             }
@@ -445,8 +451,9 @@ mod coverage_tests {
         println!("{}", report.join("\n"));
         assert!(!report.is_empty(), "no sprite is cached");
         // Antialiasing differences only: a shifted or softened sprite moves
-        // the mean far more (the 1x atlas, too soft on thin lines, measured
-        // up to 0.42 on these sprites; 1.5x stays under 0.4).
+        // the mean far more (a one-tap 1x atlas, too soft on thin lines,
+        // measured up to 0.94 on these sprites; four taps at 2x stay under
+        // 0.5).
         assert!(worst_mean < 0.5, "a cached sprite differs from Slug: {}", report.join(", "));
         println!("worst: {} max {} mean {:.3}", worst.2, worst.0, worst.1);
     }

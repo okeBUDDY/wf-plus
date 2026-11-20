@@ -114,7 +114,8 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(settings::RENDER_SCALES.len() as i16, "RENDER SCALE    : "),
     // The presets, MAX (the panel's top refresh rate), CUSTOM.
     formatted(FpsCap::PRESETS.len() as i16 + 2, "FPS CAP         : "),
-    formatted(2, "SHOW FPS        : "),
+    // OFF, ON, ON (GPU MS) (the frame's GPU time too: ui.perf_overlay).
+    formatted(3, "SHOW FPS        : "),
     formatted(2, "HIDE NAMES      : "),
     button(Kind::Key, 0, "SHOT      (KEY) : "),
     button(Kind::Key, 1, "SLOW MOVE (KEY) : "),
@@ -500,6 +501,7 @@ impl FnOption {
                 },
                 None => format!("CUSTOM ({})", s.fps_custom),
             },
+            x if x == Item::ShowFps as usize && v == 2 => "ON (GPU MS)".into(),
             x if x == Item::ShowFps as usize || x == Item::HideNames as usize || x == Item::MouseSteering as usize => on_off(value != 0),
             x if (Item::MouseLeft as usize..=Item::MouseRight as usize).contains(&x) => settings::MOUSE_ACTIONS[v].0.into(),
             x if x == Item::DeadZone as usize => format!("{}%", (settings::DEAD_ZONES[v] * 100.0).round() as i32),
@@ -530,7 +532,7 @@ impl FnOption {
             (Item::Resolution, s.resolution_index()),
             (Item::RenderScale, settings::nearest(&settings::RENDER_SCALES, s.display.render_scale)),
             (Item::FpsCap, s.fps_index()),
-            (Item::ShowFps, s.display.show_fps as usize),
+            (Item::ShowFps, if s.perf_overlay { 2 } else { s.display.show_fps as usize }),
             (Item::HideNames, s.hide_names as usize),
             (Item::MouseLeft, s.mouse[0] as usize),
             (Item::MouseMiddle, s.mouse[1] as usize),
@@ -562,7 +564,10 @@ impl FnOption {
             }
             x if x == Item::RenderScale as usize => s.display.render_scale = settings::RENDER_SCALES[v],
             x if x == Item::FpsCap as usize => s.set_fps_index(v),
-            x if x == Item::ShowFps as usize => s.display.show_fps = v != 0,
+            x if x == Item::ShowFps as usize => {
+                s.display.show_fps = v != 0;
+                s.perf_overlay = v == 2;
+            }
             x if x == Item::HideNames as usize => {
                 s.hide_names = v != 0;
                 return;

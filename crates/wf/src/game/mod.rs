@@ -19,6 +19,7 @@ pub mod hud;
 pub mod game_state;
 pub mod input;
 pub mod math;
+pub mod pointer;
 pub mod profile;
 pub mod records;
 pub mod replay;

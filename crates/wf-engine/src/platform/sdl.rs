@@ -276,7 +276,7 @@ impl Platform {
         let density = if lw > 0 { pw as f32 / lw as f32 } else { 1.0 };
         raw.mouse = MouseState {
             pos: [ms.x() * density, ms.y() * density],
-            buttons: (ms.left() as u32) | (ms.middle() as u32) << 1 | (ms.right() as u32) << 2,
+            buttons: (ms.left() as u32) | (ms.middle() as u32) << 1 | (ms.right() as u32) << 2 | (ms.x1() as u32) << 3 | (ms.x2() as u32) << 4,
             inside: self.mouse_inside,
             wheel: self.wheel,
         };

@@ -101,19 +101,25 @@ pub fn text(cx: &Cx, guide: Guide) -> String {
     let (shot, slow, pause) = (trigger(cx, pad, 0), trigger(cx, pad, 1), trigger(cx, pad, 7));
     match (guide, dev) {
         (Guide::Menu, Device::Touch) => "SWIPE UP/DOWN: MENU   TAP: OK   BACK: EXIT".into(),
+        (Guide::Menu, Device::Mouse) => "WHEEL OR ARROWS: SELECT   CLICK: OK".into(),
         (Guide::Menu, Device::Gamepad) => format!("D-PAD: SELECT   {shot}: OK"),
         (Guide::Menu, _) => format!("UP/DOWN: SELECT   {shot}: OK   ESC: EXIT"),
         (Guide::ArenaSelect, Device::Touch) => "SWIPE UP/DOWN: ARENA   TAP: START".into(),
+        (Guide::ArenaSelect, Device::Mouse) => "WHEEL OR ARROWS: ARENA   CLICK: START   RIGHT CLICK: BACK".into(),
         (Guide::ArenaSelect, Device::Gamepad) => format!("D-PAD: ARENA   {shot}: START   {slow}: BACK"),
         (Guide::ArenaSelect, _) => format!("UP/DOWN: ARENA   {shot}: START   {slow}: BACK"),
         (Guide::Options, Device::Touch) => "TAP: SELECT/CHANGE   BACK: EXIT".into(),
+        (Guide::Options, Device::Mouse) => "CLICK: SELECT/CHANGE   RIGHT CLICK: BACK A STEP   WHEEL: CHANGE".into(),
         (Guide::Options, Device::Gamepad) => format!("D-PAD: SELECT/CHANGE   {slow}: BACK"),
         (Guide::Options, _) => format!("UP/DOWN: SELECT   LEFT/RIGHT: CHANGE   {slow}: BACK"),
         (Guide::Paused, Device::Touch) => "PAUSED   TAP: RESUME".into(),
+        (Guide::Paused, Device::Mouse) => "PAUSED   CLICK: RESUME".into(),
         (Guide::Paused, _) => format!("PAUSED   {pause}: RESUME"),
         (Guide::Skip, Device::Touch) => "TAP: SKIP".into(),
+        (Guide::Skip, Device::Mouse) => "CLICK: SKIP".into(),
         (Guide::Skip, _) => format!("{shot}: SKIP"),
         (Guide::NameEntry, Device::Touch) => "SWIPE UP/DOWN: LETTER   TAP: ENTER".into(),
+        (Guide::NameEntry, Device::Mouse) => "WHEEL OR CLICK: LETTER   RIGHT CLICK: DELETE".into(),
         (Guide::NameEntry, Device::Gamepad) => format!("D-PAD: LETTER   {shot}: ENTER   {slow}: DELETE"),
         (Guide::NameEntry, _) => format!("ARROWS: LETTER   {shot}: ENTER   {slow}: DELETE"),
     }
@@ -129,6 +135,11 @@ fn row(cx: &Cx) -> (f32, f32, f32) {
         let (left, width) = cx.hud_view();
         (left, width, cx.arena.height)
     }
+}
+
+/// Whether boxes `a` and `b` ([x0, y0, x1, y1]) share any area.
+pub fn overlap(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
 
 /// Draws the guide and the FPS counter (after the frame's other draws).
@@ -149,17 +160,30 @@ pub fn draw(cx: &mut Cx) {
     if let Some(f) = &fps {
         let w = 8.0 * f.len() as f32;
         let mut x = left + width - w - 6.0;
-        if let Some(corner) = cx.hud.corner {
+        if let Some(corner) = cx.hud.corner
+            && corner - w - 16.0 >= left + 6.0
+        {
             x = x.min(corner - w - 16.0);
         }
-        cx.fonts.small_text.print(&mut cx.draw, x, bottom - 14.0, f.as_bytes(), None, Argb(0xa0ff_ffff), -1, Blend::Normal);
-        right = x - 16.0;
+        // Up a row at a time while it would cover a HUD text (the replay's
+        // in a narrow arena).
+        let mut y = bottom - 14.0;
+        let at = |y: f32| [x - 2.0, y - 2.0, x + w + 2.0, y + 10.0];
+        while y > 0.0 && cx.hud.boxes.iter().any(|(_, b)| overlap(b, &at(y))) {
+            y -= 12.0;
+        }
+        cx.fonts.small_text.print(&mut cx.draw, x, y, f.as_bytes(), None, Argb(0xa0ff_ffff), -1, Blend::Normal);
+        cx.hud.boxes.push(("fps", [x, y, x + w, y + 8.0]));
+        if y == bottom - 14.0 {
+            right = x - 16.0;
+        }
     }
     if let Some(g) = &guide {
         // Centred, or left of the FPS counter when they would meet.
         let w = 8.0 * g.len() as f32;
         let x = (left + (width - w) * 0.5).min(right - w).max(left + 6.0);
         cx.fonts.small_text.print(&mut cx.draw, x, top + 6.0, g.as_bytes(), None, Argb(0xa0ff_ffff), -1, Blend::Normal);
+        cx.hud.boxes.push(("guide", [x, top + 6.0, x + w, top + 14.0]));
     }
     cx.draw.set_pass(Pass::Arena);
 }

@@ -169,6 +169,16 @@ pub struct UiInput {
     pub click: Option<[f32; 2]>,
     /// Wheel notches this tick (up positive).
     pub wheel: f32,
+    /// The device the menus show their pointer targets for, when forced
+    /// (screenshots); else `device`.
+    pub shown: Option<Device>,
+    /// A mouse right press this tick, where.
+    pub right_click: Option<[f32; 2]>,
+    /// The mouse's back button (X1) was pressed this tick: cancel.
+    pub back: bool,
+    /// A step through a list asked this tick by the wheel (one notch) or a
+    /// vertical swipe: -1 up, +1 down.
+    pub nav: i8,
     held: u32,
     wheel_total: f32,
     touch_start: Option<([f32; 2], u32)>,
@@ -197,8 +207,20 @@ const UI_PGDN: u32 = 8;
 const UI_LB: u32 = 16;
 const UI_RB: u32 = 32;
 const UI_CLICK: u32 = 64;
+const UI_RIGHT: u32 = 128;
+const UI_BACK: u32 = 256;
 
 impl UiInput {
+    /// The pointer is the device in use (the mouse or a finger).
+    pub fn pointing(&self) -> bool {
+        matches!(self.device, Device::Mouse | Device::Touch)
+    }
+
+    /// The menus show their pointer targets (arrows, BACK).
+    pub fn shows_pointer(&self) -> bool {
+        matches!(self.shown.unwrap_or(self.device), Device::Mouse | Device::Touch)
+    }
+
     pub fn update(&mut self, a: &wf_engine::input::ActionState) {
         use wf_engine::platform::{Key, PadButton};
         self.ticks = self.ticks.wrapping_add(1);
@@ -213,6 +235,8 @@ impl UiInput {
             (pad(PadButton::LeftShoulder), UI_LB),
             (pad(PadButton::RightShoulder), UI_RB),
             (raw.mouse.buttons & 1 != 0, UI_CLICK),
+            (raw.mouse.buttons & 4 != 0, UI_RIGHT),
+            (raw.mouse.buttons & 8 != 0, UI_BACK),
         ] {
             if on {
                 held |= bit;
@@ -245,6 +269,15 @@ impl UiInput {
         if pressed & UI_CLICK != 0 {
             self.click = a.cursor;
         }
+        self.right_click = if pressed & UI_RIGHT != 0 { a.cursor } else { None };
+        self.back = pressed & UI_BACK != 0;
+        self.nav = if self.wheel > 0.0 {
+            -1
+        } else if self.wheel < 0.0 {
+            1
+        } else {
+            0
+        };
         // Touch: a short touch that stays put is a tap; a quick sideways
         // move is a swipe.
         match (a.touches.first(), self.touch_start) {
@@ -257,6 +290,9 @@ impl UiInput {
                 if quick && dx.abs() > 80.0 && dx.abs() > dy.abs() * 2.0 {
                     self.tab = if dx < 0.0 { 1 } else { -1 };
                     self.tab_by = TabBy::Pointer;
+                } else if quick && dy.abs() > 40.0 && dy.abs() > dx.abs() * 2.0 {
+                    // Swiping up shows the next item, as a list scrolls.
+                    self.nav = if dy < 0.0 { 1 } else { -1 };
                 } else if quick && dx.abs() + dy.abs() < 12.0 {
                     self.click = Some(start);
                 }

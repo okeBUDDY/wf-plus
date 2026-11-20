@@ -582,10 +582,11 @@ impl FnOption {
 
     /// The tab-switch prompt for the device used last.
     fn hint(cx: &Cx) -> &'static str {
-        match cx.ui.device {
+        match cx.ui.shown.unwrap_or(cx.ui.device) {
             Device::Keyboard => "Q / E : SWITCH TAB",
             Device::Gamepad => "LB / RB : SWITCH TAB",
-            Device::Mouse => "CLICK OR WHEEL : SWITCH TAB",
+            // The tabs are plain to click.
+            Device::Mouse => "",
             Device::Touch => "TAP OR SWIPE : SWITCH TAB",
         }
     }
@@ -599,6 +600,7 @@ impl FnOption {
         let local = |p: [f32; 2]| [p[0] - o[0], p[1] - o[1]];
         ui.cursor = ui.cursor.map(local);
         ui.click = ui.click.map(local);
+        ui.right_click = ui.right_click.map(local);
         let tab = cx.options.tab;
         let n = TABS.len();
         // A key or button being remapped wins over the tab keys it shares.
@@ -621,6 +623,11 @@ impl FnOption {
             self.switch_tab(cx, to, dir as f32);
             return 0;
         }
+        // The back button leaves (a remap row takes it as nothing).
+        if ui.back && remap.is_none() {
+            self.exit(cx);
+            return 0;
+        }
         if let Some(p) = ui.cursor
             && ui.moved
             && ui.device == Device::Mouse
@@ -631,6 +638,25 @@ impl FnOption {
             cx.options.rows[tab] = row;
             self.blink = 255;
             Self::play(cx, sounds::FIRE_ME);
+        }
+        // The wheel over an adjustable row steps its value (up: the next
+        // one); elsewhere it moves the cursor.
+        if ui.nav != 0 {
+            let row = ui.cursor.and_then(|p| Self::row_at(cx, p)).filter(|&r| Self::adjustable(cx, Self::tab_items(cx)[r] as usize));
+            if let Some(row) = row {
+                cx.options.rows[tab] = row;
+                return if ui.nav < 0 { input::RIGHT } else { input::LEFT };
+            }
+            return if ui.nav < 0 { input::UP } else { input::DOWN };
+        }
+        // The right button steps a value back.
+        if let Some(p) = ui.right_click {
+            if let Some(row) = Self::row_at(cx, p).filter(|&r| Self::adjustable(cx, Self::tab_items(cx)[r] as usize)) {
+                cx.options.rows[tab] = row;
+                self.blink = 255;
+                return input::LEFT;
+            }
+            return 0;
         }
         let Some(p) = ui.click else { return 0 };
         if let Some(t) = Self::tab_at(p) {
@@ -645,14 +671,42 @@ impl FnOption {
         cx.options.rows[tab] = row;
         self.blink = 255;
         match OPTION_ITEMS[item].kind {
-            Kind::Choice | Kind::Formatted => {
-                // The left of the values steps down, the right up.
-                let mid = 464.0 + OPTION_ITEMS[item].column as f32 + cx.options.widths[item] as f32 * 0.5;
-                if p[0] < mid { input::LEFT } else { input::RIGHT }
-            }
+            Kind::Choice | Kind::Formatted => Self::value_step(item, cx.options.values[item], cx.options.widths[item], &self.items[item], p[0]),
             Kind::Action => input::SHOT,
             _ => 0,
         }
+    }
+
+    /// An enabled item with values to step through.
+    fn adjustable(cx: &Cx, item: usize) -> bool {
+        matches!(OPTION_ITEMS[item].kind, Kind::Choice | Kind::Formatted) && cx.options.enabled[item]
+    }
+
+    /// Where a choice's pointer arrows go: left of its values, and right
+    /// of its text.
+    fn choice_arrows(text: &[u8]) -> [f32; 2] {
+        let len = text.iter().rposition(|&c| c != b' ').map_or(0, |i| i + 1);
+        [456.0, 320.0 + len as f32 * 8.0 + 8.0]
+    }
+
+    /// The step a click at `x` on a value row makes: on the left arrow or
+    /// the left of the values, back; on the right, forward.
+    fn value_step(item: usize, value: i16, width: i16, text: &[u8], x: f32) -> u16 {
+        let o = &OPTION_ITEMS[item];
+        if o.kind == Kind::Choice {
+            let [l, r] = Self::choice_arrows(text);
+            if (l - 2.0..l + 10.0).contains(&x) {
+                return input::LEFT;
+            }
+            if x >= r - 2.0 {
+                return input::RIGHT;
+            }
+        }
+        // Left of the value shown steps down, right of it up (a choice
+        // shows all its values, the chosen one boxed).
+        let at = if o.kind == Kind::Choice { value as f32 * o.param as f32 } else { 0.0 };
+        let mid = 464.0 + o.column as f32 + at + width as f32 * 0.5;
+        if x < mid { input::LEFT } else { input::RIGHT }
     }
 }
 
@@ -864,7 +918,9 @@ impl Stage for FnOption {
             cx.fonts.small_text.print(&mut cx.draw, x, TAB_Y, name.as_bytes(), None, color, -1, Blend::Normal);
         }
         let hint = Self::hint(cx);
-        cx.fonts.small_text.print(&mut cx.draw, 320.0, TAB_Y + 20.0, hint.as_bytes(), None, Argb(0x5080_ffc0), -1, Blend::Normal);
+        if !hint.is_empty() {
+            cx.fonts.small_text.print(&mut cx.draw, 320.0, TAB_Y + 20.0, hint.as_bytes(), None, Argb(0x5080_ffc0), -1, Blend::Normal);
+        }
 
         // The items, sliding in on a tab switch.
         let k = self.slide as f32 / SLIDE_FRAMES as f32;
@@ -892,6 +948,20 @@ impl Stage for FnOption {
         for (row, &item) in items.iter().enumerate() {
             let y = ROW_Y + row as f32 * ROW_H;
             cx.fonts.small_text.print(&mut cx.draw, 320.0 + dx, y.trunc(), &self.items[item as usize], None, text, -1, Blend::Normal);
+            // The pointer's step arrows beside a choice's values (the
+            // formatted items carry theirs in the text).
+            let i = item as usize;
+            if cx.ui.shows_pointer() && OPTION_ITEMS[i].kind == Kind::Choice && cx.options.enabled[i] {
+                let [l, r] = Self::choice_arrows(&self.items[i]);
+                let v = cx.options.values[i];
+                let arrow = Argb((((0xc0 as f32) * fade) as u32) << 24 | 0xffdd00);
+                if v > 0 {
+                    cx.fonts.small_text.print(&mut cx.draw, l + dx, y.trunc(), b"<", None, arrow, -1, Blend::Normal);
+                }
+                if v < OPTION_ITEMS[i].count - 1 {
+                    cx.fonts.small_text.print(&mut cx.draw, r + dx, y.trunc(), b">", None, arrow, -1, Blend::Normal);
+                }
+            }
         }
         // The band, at the window's bottom and repeated across its width
         // (the text repeats every 64 units, so the copies join seamlessly).
@@ -910,5 +980,39 @@ impl Stage for FnOption {
 
     fn is_menu(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_hits_tabs_rows_and_value_arrows() {
+        let cx = super::super::tests::cx();
+        assert_eq!(FnOption::tab_at([TAB_X[0] + 8.0, TAB_Y + 4.0]), Some(0));
+        assert_eq!(FnOption::tab_at([TAB_X[4] + 8.0, TAB_Y + 4.0]), Some(4));
+        assert_eq!(FnOption::tab_at([TAB_X[2] + 8.0, TAB_Y + 40.0]), None);
+        assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + 2.0]), Some(0));
+        assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + ROW_H * 2.0 + 2.0]), Some(2));
+        assert_eq!(FnOption::row_at(&cx, [100.0, ROW_Y + 2.0]), None);
+        assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + ROW_H * 40.0]), None);
+        // A choice: its arrows, and either side of the value shown.
+        let boss = Item::BossName as usize;
+        let text = OPTION_ITEMS[boss].text.as_bytes();
+        let [l, r] = FnOption::choice_arrows(text);
+        assert_eq!(l, 456.0);
+        assert_eq!(FnOption::value_step(boss, 1, 56, text, l + 4.0), input::LEFT);
+        assert_eq!(FnOption::value_step(boss, 0, 64, text, r + 4.0), input::RIGHT);
+        // ENGLISH (value 1) is boxed at 536..592: JAPANESE, left of it, steps back.
+        assert_eq!(FnOption::value_step(boss, 1, 56, text, 480.0), input::LEFT);
+        assert_eq!(FnOption::value_step(boss, 0, 64, text, 560.0), input::RIGHT);
+        // A formatted item: "< NAME >", the left half back, the right on.
+        let mode = Item::GameMode as usize;
+        assert_eq!(FnOption::value_step(mode, 0, 48, b"", 466.0), input::LEFT);
+        assert_eq!(FnOption::value_step(mode, 0, 48, b"", 540.0), input::RIGHT);
+        assert!(FnOption::adjustable(&cx, mode));
+        assert!(!FnOption::adjustable(&cx, Item::Exit as usize));
+        assert!(!FnOption::adjustable(&cx, Item::ShotKey as usize));
     }
 }

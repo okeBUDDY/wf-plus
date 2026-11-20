@@ -90,7 +90,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|touch]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wf [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--render-scale K] [--arena classic|hd]\n          [--guide keyboard|gamepad|mouse|touch]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -153,6 +153,7 @@ fn options() -> Options {
                     "keyboard" => platform::Device::Keyboard,
                     "gamepad" => platform::Device::Gamepad,
                     "touch" => platform::Device::Touch,
+                    "mouse" => platform::Device::Mouse,
                     _ => usage(),
                 })
             }
@@ -240,6 +241,8 @@ impl wf_engine::app::Game for WfGame {
             self.cx.input.steer.ship = self.ship();
             self.cx.input.poll(actions);
             self.cx.ui.update(actions);
+            // A forced guide device (screenshots) is the one the menus show.
+            self.cx.ui.shown = self.cx.settings.guide_device;
         }
         let made = self.app.frame(&mut self.cx);
         if made {

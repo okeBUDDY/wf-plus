@@ -8,6 +8,7 @@ use super::background::BackgroundGrid;
 use super::fn_game::{self, FnGame, FnGameState};
 use super::input;
 use super::math::sin;
+use super::pointer::{self, Rect};
 use super::records;
 use super::sounds;
 use super::task::{self, ListId, Place, TaskId};
@@ -57,6 +58,52 @@ pub struct FnTitle {
     background: Option<TaskId>,
     /// The arena choice after GAME_START (the port's addition).
     choosing: bool,
+    /// The pointer's target (the port's; display only).
+    hover: Option<Target>,
+}
+
+/// A pointer target of the title (the port's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// The menu cursor's up and down chevrons.
+    Up,
+    Down,
+    /// The menu item (or the arena) shown.
+    Item,
+    /// BACK, beside SELECT ARENA.
+    Back,
+    /// The score table's heading: switches the table (and the arena).
+    Scores,
+}
+
+/// The menu cursor's chevrons, around (128, 408) in the menu's units.
+const UP_RECT: Rect = Rect::new(112.0, 378.0, 144.0, 397.0);
+const DOWN_RECT: Rect = Rect::new(112.0, 419.0, 144.0, 438.0);
+/// BACK while choosing the arena, right of SELECT ARENA.
+const BACK_TEXT: &[u8] = b"< BACK";
+const BACK_X: f32 = 176.0;
+const BACK_Y: f32 = 368.0;
+
+/// The target at `p` of the menu (in its own units: drawn from the
+/// window's bottom-left), with the item `item_w` units wide.
+pub fn menu_target(p: [f32; 2], item_w: f32, choosing: bool) -> Option<Target> {
+    if UP_RECT.contains(p) {
+        Some(Target::Up)
+    } else if DOWN_RECT.contains(p) {
+        Some(Target::Down)
+    } else if Rect::new(40.0, 397.0, (56.0 + item_w).max(144.0), 419.0).contains(p) {
+        Some(Target::Item)
+    } else if choosing && Rect::text(BACK_X, BACK_Y, BACK_TEXT.len(), 8.0, 8.0, 4.0).contains(p) {
+        Some(Target::Back)
+    } else {
+        None
+    }
+}
+
+/// Whether `p` (in the scores' units: from the window's top-left) is on
+/// the score table's heading of `len` characters.
+pub fn on_scores_heading(p: [f32; 2], len: usize) -> bool {
+    Rect::text(32.0, 24.0, len, 8.0, 8.0, 4.0).contains(p)
 }
 
 impl FnTitle {
@@ -161,7 +208,8 @@ impl Stage for FnTitle {
             let t = Transform::translation(128.0, 408.0);
             cx.draw.sprite(cx.art.shapes.menu_cursor, &t, Argb(((self.cursor_alpha as u32) << 24) | 0xffdd00), Blend::Normal);
         }
-        cx.fonts.text.print(&mut cx.draw, (self.menu_x + 48) as f32, 400.0, &self.menu_text, None, Argb(0x80ff_ffff), -1, Blend::Normal);
+        let item = if self.hover == Some(Target::Item) { Argb(0xffff_ffff) } else { Argb(0x80ff_ffff) };
+        cx.fonts.text.print(&mut cx.draw, (self.menu_x + 48) as f32, 400.0, &self.menu_text, None, item, -1, Blend::Normal);
         if self.choosing {
             let a = cx.chosen_arena();
             let note = match a.mode {
@@ -172,6 +220,10 @@ impl Stage for FnTitle {
             // name (400-416), down chevron (424-432), description (440-448).
             cx.fonts.small_text.print(&mut cx.draw, 48.0, 440.0, note.as_bytes(), None, Argb(0x8000_ff80), -1, Blend::Normal);
             cx.fonts.small_text.print(&mut cx.draw, 48.0, 368.0, b"SELECT ARENA", None, Argb(0x80ff_c800), -1, Blend::Normal);
+            if cx.ui.shows_pointer() {
+                let c = if self.hover == Some(Target::Back) { Argb(0xffff_ffff) } else { Argb(0x8000_ff80) };
+                cx.fonts.small_text.print(&mut cx.draw, BACK_X, BACK_Y, BACK_TEXT, None, c, -1, Blend::Normal);
+            }
         }
         cx.draw.set_origin([vx, vy]);
         if self.time >= 301 {
@@ -180,8 +232,9 @@ impl Stage for FnTitle {
             palette[0] = Argb(0x8000_ff80);
             palette[1] = Argb(((((((alpha >> 1) - 0x80) << 8) | alpha) << 16) as u32) | 0xff80);
             cx.fonts.small_text.print(&mut cx.draw, 32.0, 48.0, &self.scores, Some(&palette), palette[0], self.scores_shown as i32, Blend::Normal);
-            let mode: &[u8] = if cx.scores.is_hd() { b"HD SCORES" } else { b"CLASSIC SCORES" };
-            cx.fonts.small_text.print(&mut cx.draw, 32.0, 24.0, mode, None, palette[0], self.scores_shown.min(mode.len() as i16) as i32, Blend::Normal);
+            let mode = Self::scores_heading(cx);
+            let c = if self.hover == Some(Target::Scores) { Argb(0xff00_ff80) } else { palette[0] };
+            cx.fonts.small_text.print(&mut cx.draw, 32.0, 24.0, mode, None, c, self.scores_shown.min(mode.len() as i16) as i32, Blend::Normal);
         }
         cx.draw.set_origin([0.0, 0.0]);
         // The big W and F wait just outside the 640x480 screen (x 800 and
@@ -415,9 +468,75 @@ impl FnTitle {
         }
     }
 
+    fn scores_heading(cx: &Cx) -> &'static [u8] {
+        if cx.scores.is_hd() { b"HD SCORES" } else { b"CLASSIC SCORES" }
+    }
+
+    /// The pointer on the menu: hovers, clicks and taps on the targets,
+    /// the wheel and vertical swipes, the right button and the back
+    /// button. Returns the menu bits they make.
+    fn pointer(&mut self, cx: &mut Cx) -> u16 {
+        let ui = cx.ui.clone();
+        let [vx, vy, _, vh] = cx.screen_view();
+        let menu = [vx, vy + vh - 480.0];
+        let item_w = cx.fonts.text.measure(&self.menu_text).0;
+        let heading = Self::scores_heading(cx).len();
+        let scores = self.time >= 301;
+        let target = |p: [f32; 2]| {
+            menu_target(pointer::local(p, menu), item_w, self.choosing)
+                .or_else(|| (scores && on_scores_heading(pointer::local(p, [vx, vy]), heading)).then_some(Target::Scores))
+        };
+        self.hover = if ui.device == wf_engine::platform::Device::Mouse { ui.cursor.and_then(target) } else { None };
+        if matches!(self.hover, Some(Target::Up | Target::Down)) {
+            self.cursor_alpha = 255;
+        }
+        let mut bits = match ui.nav {
+            -1 => input::UP,
+            1 => input::DOWN,
+            _ => 0,
+        };
+        if ui.back || ui.right_click.is_some() {
+            if self.choosing {
+                bits |= input::SLOW;
+            } else if self.menu != MENU_EXIT {
+                // Cancel on the menu goes to EXIT (it does not leave).
+                self.menu = MENU_EXIT;
+                self.menu_text = MENU_ITEMS[self.menu as usize].as_bytes().to_vec();
+                self.cursor_alpha = 255;
+                cx.play_sound(sounds::FIRE_ME);
+            }
+            return bits;
+        }
+        let Some(p) = ui.click else { return bits };
+        match target(p) {
+            Some(Target::Up) => bits |= input::UP,
+            Some(Target::Down) => bits |= input::DOWN,
+            Some(Target::Item) => bits |= input::SHOT,
+            Some(Target::Back) => bits |= input::SLOW,
+            Some(Target::Scores) => {
+                use super::arena::Mode;
+                cx.arena_choice = if cx.arena_choice == Mode::Classic { Mode::Hd } else { Mode::Classic };
+                if self.choosing {
+                    self.set_arena_text(cx);
+                }
+                self.show_scores(cx);
+                cx.play_sound(sounds::FIRE_ME);
+            }
+            // A tap anywhere else is OK, as a touch was before.
+            None if ui.device == wf_engine::platform::Device::Touch => bits |= input::SHOT,
+            None => {}
+        }
+        bits
+    }
+
     /// The menu (steps 301 and 302).
     fn menu_input(&mut self, cx: &mut Cx) {
-        let pressed = cx.input.pad(0).pressed;
+        let mut pressed = cx.input.pad(0).pressed;
+        // The pointer's buttons act through its targets.
+        if cx.ui.pointing() {
+            pressed &= !SKIP_KEYS;
+        }
+        pressed |= self.pointer(cx);
         if self.choosing {
             self.choose_arena(cx, pressed);
             return;
@@ -470,5 +589,27 @@ impl FnTitle {
         if self.step_time >= 960 {
             self.time = STEP_DEMO;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_targets_hit_the_chevrons_item_and_back() {
+        let w = 160.0; // GAME_START
+        assert_eq!(menu_target([128.0, 388.0], w, false), Some(Target::Up));
+        assert_eq!(menu_target([128.0, 428.0], w, false), Some(Target::Down));
+        assert_eq!(menu_target([60.0, 408.0], w, false), Some(Target::Item));
+        assert_eq!(menu_target([200.0, 408.0], w, false), Some(Target::Item));
+        assert_eq!(menu_target([240.0, 408.0], w, false), None);
+        // BACK only while choosing the arena.
+        assert_eq!(menu_target([190.0, 372.0], w, true), Some(Target::Back));
+        assert_eq!(menu_target([190.0, 372.0], w, false), None);
+        assert_eq!(menu_target([300.0, 200.0], w, true), None);
+        assert!(on_scores_heading([40.0, 28.0], 14));
+        assert!(!on_scores_heading([40.0, 60.0], 14));
+        assert!(!on_scores_heading([200.0, 28.0], 9));
     }
 }

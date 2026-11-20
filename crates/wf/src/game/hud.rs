@@ -29,13 +29,17 @@ const FLAG_REPLAY: u32 = 0x100_0000;
 const TEXT_COLOR: u32 = 0xc8ff_c800;
 
 /// The requests fnGame makes of the HUD (RequestMode and busy()).
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct HudState {
     pub mode: i32,
     pub next_mode: i32,
     /// Display only: where the replay's date starts on the bottom row (the
     /// FPS counter keeps left of it), when it is there.
     pub corner: Option<f32>,
+    /// Display only: this frame's HUD texts, as (what, [x0, y0, x1, y1]) in
+    /// arena units (the FPS counter keeps clear of them; the tests check
+    /// that none overlap).
+    pub boxes: Vec<(&'static str, [f32; 4])>,
 }
 
 impl HudState {
@@ -70,6 +74,16 @@ const CHAR_DELETE: i32 = 49;
 const CHAR_END: i32 = 50;
 const CHARS: i32 = 51;
 const NAME_LENGTH: i32 = 3;
+/// The letters' strip under the name (each letter 8 units wide).
+const NAME_CHARS_X: f32 = 116.0;
+const NAME_CHARS_Y: f32 = 268.0;
+
+/// The letter of the strip under the name at `p` (in the name entry's
+/// units, centred on 640), if any.
+pub fn name_char_at(p: [f32; 2]) -> Option<i32> {
+    let strip = super::pointer::Rect::new(NAME_CHARS_X, NAME_CHARS_Y - 4.0, NAME_CHARS_X + CHARS as f32 * 8.0, NAME_CHARS_Y + 12.0);
+    strip.contains(p).then(|| ((p[0] - NAME_CHARS_X) / 8.0) as i32)
+}
 
 // The result's tables.
 const RESULT_BAR: [[f32; 2]; 4] = [[0.0, -8.0], [768.0, -8.0], [0.0, 8.0], [768.0, 8.0]]; // 0x45dd04
@@ -345,8 +359,9 @@ impl GameHud {
     /// EnterName (0x41f600): true once the name is ended.
     fn enter_name(&mut self, cx: &mut Cx) -> bool {
         let pad = cx.input.pad(0);
-        let mut pressed = pad.pressed;
-        let dirs = pad.buttons & (input::UP | input::DOWN | input::LEFT | input::RIGHT);
+        let (pressed, buttons) = (pad.pressed, pad.buttons);
+        let mut pressed = self.name_pointer(cx, pressed);
+        let dirs = buttons & (input::UP | input::DOWN | input::LEFT | input::RIGHT);
         if self.last_dirs == dirs {
             self.dirs_time += 1;
             if self.dirs_time > 30 && self.dirs_time & 3 == 0 {
@@ -359,11 +374,7 @@ impl GameHud {
         let text = &mut self.texts[2];
         if pressed & (input::UP | input::DOWN | input::LEFT | input::RIGHT) != 0 {
             // No delete or end at the first letter, only those after the last.
-            let (first, last) = match self.cursor {
-                0 => (0, CHAR_LAST_SIGN),
-                NAME_LENGTH => (CHAR_DELETE, CHAR_END),
-                _ => (0, CHAR_END),
-            };
+            let (first, last) = self.char_range();
             if pressed & (input::DOWN | input::RIGHT) != 0 {
                 self.char_index += 1;
                 if self.char_index > last {
@@ -420,6 +431,62 @@ impl GameHud {
         let text = &mut self.texts[2];
         text[self.cursor as usize] = NAME_CHARS[self.char_index as usize];
         false
+    }
+
+    /// The letters a name's next character can be: (first, last) of
+    /// `NAME_CHARS` (no delete or end at the first letter, only those after
+    /// the last).
+    fn char_range(&self) -> (i32, i32) {
+        match self.cursor {
+            0 => (0, CHAR_LAST_SIGN),
+            NAME_LENGTH => (CHAR_DELETE, CHAR_END),
+            _ => (0, CHAR_END),
+        }
+    }
+
+    /// The port's pointer on the name entry: the wheel or a vertical swipe
+    /// steps the letter, hovering the letters picks one, a click or tap on
+    /// one enters it (elsewhere: the letter shown), the right or back
+    /// button deletes. Returns `pressed` with the bits they make.
+    fn name_pointer(&mut self, cx: &mut Cx, mut pressed: u16) -> u16 {
+        let ui = cx.ui.clone();
+        if !ui.pointing() {
+            return pressed;
+        }
+        if ui.device == wf_engine::platform::Device::Touch {
+            // A finger is the shot button while it is down: the tap acts.
+            pressed &= !input::SHOT;
+        }
+        let (left, width) = cx.hud_view();
+        let origin = [left + width * 0.5 - 320.0, 0.0];
+        let (first, last) = self.char_range();
+        let pick = |p: [f32; 2]| {
+            name_char_at(super::pointer::local(p, origin))
+                .filter(|&i| (first..=last).contains(&i) && NAME_CHARS[i as usize] != b' ')
+        };
+        match ui.nav {
+            -1 => pressed |= input::UP,
+            1 => pressed |= input::DOWN,
+            _ => {}
+        }
+        if ui.moved
+            && ui.device == wf_engine::platform::Device::Mouse
+            && let Some(i) = ui.cursor.and_then(pick)
+            && i != self.char_index
+        {
+            self.char_index = i;
+            cx.play_sound(sounds::FIRE_ME);
+        }
+        if ui.back || ui.right_click.is_some() {
+            pressed |= input::SLOW;
+        }
+        if let Some(p) = ui.click {
+            if let Some(i) = pick(p) {
+                self.char_index = i;
+            }
+            pressed |= input::SHOT;
+        }
+        pressed
     }
 
     /// MoveNameEntry (0x41fc90).
@@ -520,7 +587,7 @@ impl GameHud {
             let t = Transform::translation(self.cursor as f32 * 16.0 + 296.0, 244.0);
             let a = super::math::ftol((1.0 - (self.mode_time & 0x3f) as f32 * (1.0 / 63.0)) * 200.0) as u32;
             cx.draw.sprite(cx.art.shapes.name_cursor, &t, Argb((a << 24) | 0xffc800), Blend::Normal);
-            let t = Transform::translation(self.char_index as f32 * 8.0 + 116.0, 268.0);
+            let t = Transform::translation(self.char_index as f32 * 8.0 + NAME_CHARS_X, NAME_CHARS_Y);
             cx.draw.sprite(cx.art.shapes.char_cursor, &t, Argb(0x6400_ff80), Blend::Normal);
         }
         let color = Argb(alpha(self.text_alpha, 200.0) | 0xffc800);
@@ -528,7 +595,7 @@ impl GameHud {
         cx.fonts.text.print(&mut cx.draw, 184.0, 204.0, &self.texts[0], None, color, -1, Blend::Normal);
         cx.fonts.small_text.print(&mut cx.draw, 228.0, 228.0, &self.texts[1], None, white, -1, Blend::Normal);
         cx.fonts.text.print(&mut cx.draw, 296.0, 244.0, &self.texts[2], None, color, -1, Blend::Normal);
-        cx.fonts.small_text.print(&mut cx.draw, 116.0, 268.0, &self.texts[3], None, white, -1, Blend::Normal);
+        cx.fonts.small_text.print(&mut cx.draw, NAME_CHARS_X, NAME_CHARS_Y, &self.texts[3], None, white, -1, Blend::Normal);
         // The table the name goes into (display only).
         let mode = mode_label(cx);
         cx.fonts.small_text.print(&mut cx.draw, 320.0 - 4.0 * mode.len() as f32, 168.0, mode.as_bytes(), None, white, -1, Blend::Normal);
@@ -672,40 +739,42 @@ impl Task for GameHud {
             MODE_RESULT => self.draw_result(cx),
             _ => {}
         }
-        let c = Argb(TEXT_COLOR);
-        cx.draw.set_origin([left, 0.0]);
+        cx.hud.boxes.clear();
+        let score = format!("1P:{:012}", cx.global.entry.score as i32);
+        // A narrow arena (HD in a portrait window) has no room for the
+        // timer beside the score: it goes below the ships left.
+        let score_w = cx.fonts.text.measure(score.as_bytes()).0;
+        let stacked = width - 640.0 + 448.0 < score_w + 8.0;
+        let timer_y = if stacked { 44.0 } else { 0.0 };
         if self.flags & FLAG_SCORE != 0 {
-            let s = format!("1P:{:012}", cx.global.entry.score as i32);
-            cx.fonts.text.print(&mut cx.draw, 0.0, 0.0, s.as_bytes(), None, c, -1, Blend::Normal);
+            put(cx, "score", Font::Text, [left, 0.0], [0.0, 0.0], score.as_bytes());
         }
         if self.flags & FLAG_LIVES != 0 {
             let (lives, extend) = (cx.game.lives, cx.game.extend_count);
             if lives >= 0 {
                 let s = format!("LEFT:{lives}");
-                cx.fonts.text.print(&mut cx.draw, 0.0, 20.0, s.as_bytes(), None, c, -1, Blend::Normal);
+                put(cx, "lives", Font::Text, [left, 0.0], [0.0, 20.0], s.as_bytes());
                 if extend >= 0 {
                     let s = format!(".{extend:02}");
-                    cx.fonts.small_text.print(&mut cx.draw, 96.0, 28.0, s.as_bytes(), None, c, -1, Blend::Normal);
+                    put(cx, "extend", Font::Small, [left, 0.0], [96.0, 28.0], s.as_bytes());
                 }
             }
         }
         // The timer and the replay's name keep to the right edge.
-        cx.draw.set_origin([left + width - 640.0, 0.0]);
+        let right = [left + width - 640.0, timer_y];
         if self.flags & FLAG_TIMER != 0 {
             let seconds = cx.game.timer / 60;
             if seconds >= 100 {
                 let s = format!("{seconds:03}");
-                cx.fonts.large_digit.print(&mut cx.draw, 448.0, 0.0, s.as_bytes(), None, c, -1, Blend::Normal);
+                put(cx, "timer", Font::LargeDigit, right, [448.0, 0.0], s.as_bytes());
             } else {
                 let s = format!("{seconds:02}");
-                cx.fonts.large_digit.print(&mut cx.draw, 496.0, 0.0, s.as_bytes(), None, c, -1, Blend::Normal);
+                put(cx, "timer", Font::LargeDigit, right, [496.0, 0.0], s.as_bytes());
             }
             let s = format!("{:02}", cx.game.timer % 60);
-            cx.fonts.digit.print(&mut cx.draw, 592.0, 1.0, s.as_bytes(), None, c, -1, Blend::Normal);
+            put(cx, "timer frames", Font::Digit, right, [592.0, 1.0], s.as_bytes());
         }
-        if self.flags & FLAG_REPLAY == 0 {
-            cx.draw.set_origin([0.0; 2]);
-        }
+        cx.draw.set_origin([0.0; 2]);
         cx.hud.corner = None;
         if self.flags & FLAG_REPLAY != 0 {
             // Above the input guide's strip when it shows; otherwise the
@@ -718,18 +787,46 @@ impl Task for GameHud {
             if lift == 0.0 {
                 cx.hud.corner = Some(left + width - 640.0 + 512.0);
             }
-            cx.draw.set_origin([left + width - 640.0, -lift]);
-            cx.fonts.small_text.print(&mut cx.draw, self.replay_name_x as f32, 456.0, &self.replay_name, None, c, -1, Blend::Normal);
-            cx.fonts.small_text.print(&mut cx.draw, 512.0, 468.0, &self.replay_date, None, c, -1, Blend::Normal);
-            cx.draw.set_origin([left, -lift]);
+            let right = [left + width - 640.0, -lift];
+            put(cx, "replay name", Font::Small, right, [self.replay_name_x as f32, 456.0], &self.replay_name.clone());
+            put(cx, "replay date", Font::Small, right, [512.0, 468.0], &self.replay_date.clone());
             if cx.fn_game.mode == 1 {
-                let help = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
-                cx.fonts.small_text.print(&mut cx.draw, 0.0, 460.0, help, None, c, -1, Blend::Normal);
+                let help: &[u8] = b"SHOT BUTTON -> NEXT REPLAY\nSLOW BUTTON -> GO TO TITLE";
+                // Above the name and date when they would meet.
+                let help_w = cx.fonts.small_text.measure(help).0;
+                let date_w = cx.fonts.small_text.measure(&self.replay_date).0.max(cx.fonts.small_text.measure(&self.replay_name).0);
+                let y = if help_w + 8.0 + date_w > width { 436.0 } else { 460.0 };
+                put(cx, "replay help", Font::Small, [left, -lift], [0.0, y], help);
             }
             cx.draw.set_origin([0.0; 2]);
         }
         cx.draw.set_pass(crate::gfx::Pass::Arena);
     }
+}
+
+/// A HUD text's font.
+#[derive(Clone, Copy)]
+enum Font {
+    Text,
+    Small,
+    LargeDigit,
+    Digit,
+}
+
+/// Prints a HUD text at `at` from `origin` and notes its box.
+fn put(cx: &mut Cx, what: &'static str, font: Font, origin: [f32; 2], at: [f32; 2], text: &[u8]) {
+    let c = Argb(TEXT_COLOR);
+    let f = match font {
+        Font::Text => &cx.fonts.text,
+        Font::Small => &cx.fonts.small_text,
+        Font::LargeDigit => &cx.fonts.large_digit,
+        Font::Digit => &cx.fonts.digit,
+    };
+    cx.draw.set_origin(origin);
+    f.print(&mut cx.draw, at[0], at[1], text, None, c, -1, Blend::Normal);
+    let (w, h) = f.measure(text);
+    let (x, y) = (origin[0] + at[0], origin[1] + at[1]);
+    cx.hud.boxes.push((what, [x, y, x + w, y + h]));
 }
 
 /// The copies of a scrolling band (768 units of texels long) that cover
@@ -786,6 +883,12 @@ mod tests {
     /// three-digit timer, a replay's name, date and help, the input guide
     /// and the FPS counter), drawn as the frame for a window of `size`.
     fn hud_frame(size: (u32, u32), mode: arena::Mode) -> Cx {
+        hud_frame_with(size, mode, true)
+    }
+
+    /// `hud_frame`, with or without the input guide (without it the FPS
+    /// counter shares the bottom row with the replay's date).
+    fn hud_frame_with(size: (u32, u32), mode: arena::Mode, with_guide: bool) -> Cx {
         let mut cx = super::super::tests::cx();
         cx.window_size = size;
         cx.window_arena_width = wf_engine::app::window_arena(size)[0];
@@ -802,7 +905,7 @@ mod tests {
         cx.game.lives = 9;
         cx.game.extend_count = 99;
         cx.fn_game.mode = 1;
-        cx.settings.input_guide = guide::Policy::Always;
+        cx.settings.input_guide = if with_guide { guide::Policy::Always } else { guide::Policy::Off };
         cx.settings.display.show_fps = true;
         cx.settings.fps = 165.0;
         cx.guide = Some(guide::Guide::Paused);
@@ -869,6 +972,41 @@ mod tests {
             }
         }
         assert!(failed.is_empty(), "{} of {checked} HUD draws leave the window:\n{}", failed.len(), failed.join("\n"));
+    }
+
+    #[test]
+    fn name_letters_are_hit_one_by_one() {
+        assert_eq!(name_char_at([NAME_CHARS_X + 1.0, NAME_CHARS_Y + 4.0]), Some(0));
+        assert_eq!(name_char_at([NAME_CHARS_X + 8.0 * 25.0 + 7.0, NAME_CHARS_Y]), Some(25));
+        assert_eq!(name_char_at([NAME_CHARS_X + 8.0 * 50.0 + 1.0, NAME_CHARS_Y]), Some(CHAR_END));
+        assert_eq!(name_char_at([NAME_CHARS_X - 1.0, NAME_CHARS_Y]), None);
+        assert_eq!(name_char_at([NAME_CHARS_X + 8.0 * 51.0, NAME_CHARS_Y]), None);
+        assert_eq!(name_char_at([NAME_CHARS_X + 10.0, NAME_CHARS_Y + 20.0]), None);
+    }
+
+    /// No two HUD texts overlap (score, ships, timer, the replay's name,
+    /// date and help, the input guide and the FPS counter), in any window
+    /// and arena: a narrow arena stacks them.
+    #[test]
+    fn hud_texts_never_overlap() {
+        let mut failed = Vec::new();
+        for size in SIZES {
+            for mode in [arena::Mode::Classic, arena::Mode::Hd] {
+                for with_guide in [true, false] {
+                    let cx = hud_frame_with(size, mode, with_guide);
+                    let b = &cx.hud.boxes;
+                    assert!(b.len() >= 9, "{size:?}: {} HUD texts", b.len());
+                    for (i, (a, ra)) in b.iter().enumerate() {
+                        for (c, rc) in &b[i + 1..] {
+                            if guide::overlap(ra, rc) {
+                                failed.push(format!("{}x{} {mode:?} guide {with_guide}: {a} {ra:?} and {c} {rc:?}", size.0, size.1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failed.is_empty(), "overlapping HUD texts:\n{}", failed.join("\n"));
     }
 
     /// The HUD's view is the camera's: its edges are the window's in

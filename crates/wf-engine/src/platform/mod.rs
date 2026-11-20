@@ -147,7 +147,7 @@ pub struct GamepadState {
 }
 
 /// The mouse: where it is (window pixels) and the buttons held (bit 0
-/// left, 1 middle, 2 right).
+/// left, 1 middle, 2 right, 3 back (X1), 4 forward (X2)).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MouseState {
     pub pos: [f32; 2],

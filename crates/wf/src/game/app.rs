@@ -156,11 +156,24 @@ impl App {
         // InputTask::IsProtected (0x405f30): the pause button of any pad,
         // checked only when the pads were polled (the window is active).
         if cx.app.flags & AppFlags::INACTIVE == 0 {
+            let mut toggled = false;
             for i in 0..cx.input.pads.len() {
                 if cx.input.pad(i).pressed & cx.input.time_stop_mask != 0 {
                     let stopped = cx.app.flags & AppFlags::TIME_STOPPED != 0;
                     cx.app.set_time_stop(!stopped);
+                    toggled = true;
                 }
+            }
+            // The port's: a click, a tap or the mouse's back button resumes
+            // a pause (they never pause; the pointer is not recorded).
+            let ui = &cx.ui;
+            if !toggled
+                && cx.app.flags & AppFlags::TIME_STOPPED != 0
+                && cx.input.time_stop_mask != 0
+                && ui.pointing()
+                && (ui.click.is_some() || ui.back)
+            {
+                cx.app.set_time_stop(false);
             }
         }
 
@@ -238,6 +251,7 @@ pub fn begin_frame(cx: &mut Cx, menu: bool) {
     cx.draw.menu = menu;
     cx.draw.arena = frame_arena(cx);
     cx.guide = None;
+    cx.hud.boxes.clear();
 }
 
 /// The arena (logical units) the camera fits to the window this frame: the

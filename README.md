@@ -131,6 +131,19 @@ remapped separately there, along with the mouse buttons, mouse steering,
 the pad dead zone and the touch speed; the display settings (window mode,
 resolution, render scale, FPS cap, show FPS) apply at once.
 
+Every menu also works with the mouse alone, and the same targets take
+taps. On the title, hover and click the item to choose it and the arrows
+above and below it (or the wheel, or a vertical swipe) to step through the
+items and the arenas; `< BACK` and the right button leave the arena
+choice, and clicking the score heading switches the Classic and HD tables.
+On the options screen, hovering picks a row; a click steps a value forward
+on its right half or `>` and back on its left half or `<`, the right
+button steps it back, and the wheel steps the value under the pointer (or
+moves the cursor elsewhere). EXIT ends every tab. A click or tap resumes a
+pause, the name entry takes a click on a letter, the wheel and the right
+button (delete). The mouse's back button (X1) cancels everywhere (on the
+title menu, like the right button, it moves to EXIT).
+
 ## Architecture and seams
 
 | Crate | |

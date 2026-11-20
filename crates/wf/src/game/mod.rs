@@ -290,6 +290,22 @@ pub(crate) mod tests {
         Cx::new(Art::load(), assets, 4)
     }
 
+    /// The renderer's start-up cost estimate goes through the whole pack
+    /// in well under a second: it once read the noise lattices as band
+    /// counts in the billions (75 s at start-up, never done on a phone).
+    #[test]
+    fn startup_layer_costs_are_quick_and_sane() {
+        let art = Art::load();
+        let t = std::time::Instant::now();
+        let costs = crate::gfx::gpu::layer_curve_estimates(&art.pack);
+        let took = t.elapsed();
+        assert!(took.as_secs_f32() < 1.0, "layer cost estimate took {took:?}");
+        assert_eq!(costs.len(), art.pack.layers.len());
+        let max = costs.iter().copied().fold(0.0f32, f32::max);
+        assert!(costs.iter().all(|c| c.is_finite() && *c >= 0.0) && max < 10_000.0, "max {max} curves per pixel");
+        assert!(max > 1.0, "the shapes have curves");
+    }
+
     #[test]
     fn art_pack_has_every_sheet_and_font() {
         let art = Art::load();

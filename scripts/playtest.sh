@@ -31,6 +31,20 @@ for i in range(count):
         print(struct.unpack_from("<i", sco, r + 8)[0])
 ' "$1" "$2"; }
 
+# Start-up must stay quick (the renderer and the art load; a headless run
+# builds the same renderer as a window). 10 s is far above the usual
+# fraction of a second, even for a software GPU.
+mkdir -p "$WORK/startup"
+start=$(date +%s%N)
+(cd "$WORK/startup" && "$WF" --data "$DATA" --home "$WORK/startup" --headless --frames 1 >/dev/null 2>&1)
+ms=$(( ($(date +%s%N) - start) / 1000000 ))
+if [ "$ms" -gt 10000 ]; then
+    printf 'start-up: FAIL %d ms (over 10000)\n' "$ms"
+    fail=1
+else
+    printf 'start-up: ok %d ms\n' "$ms"
+fi
+
 for dir in "$REC_DIR"/*/; do
     name=$(basename "$dir")
     stages=$(ls "$dir"stage??.rec 2>/dev/null | sort)

@@ -99,6 +99,23 @@ fn layer_cost(l: &GpuLayer, bands: u32, band: impl Fn(u32) -> u32) -> LayerCost 
     }
 }
 
+/// Every layer's cost estimate in `art` (at start-up).
+fn pack_layer_costs(art: &wf_art::Pack) -> Vec<LayerCost> {
+    let band_count = |i: u32| {
+        let o = i as usize * 8;
+        art.bands.data.get(o..o + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let band_texels = (art.bands.data.len() / 8) as u32;
+    art.layers.iter().map(|l| layer_cost(l, band_texels, band_count)).collect()
+}
+
+/// The curves a pixel's rays visit on average in each layer of `art`, as
+/// the renderer estimates them when it starts (0 for the noise lattices
+/// and bitmaps). For tests: it must stay quick on the whole pack.
+pub fn layer_curve_estimates(art: &wf_art::Pack) -> Vec<f32> {
+    pack_layer_costs(art).iter().map(|c| c.curves).collect()
+}
+
 /// Sprite data the CPU needs per draw.
 struct SpriteInfo {
     bounds: [f32; 4],
@@ -427,12 +444,7 @@ impl Renderer {
                     .then(|| [s.bitmap[0] & 0xffff, s.bitmap[0] >> 16, s.bitmap[1] & 0xffff, s.bitmap[1] >> 16]),
             })
             .collect();
-        let band_count = |i: u32| {
-            let o = i as usize * 8;
-            art.bands.data.get(o..o + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        };
-        let band_texels = (art.bands.data.len() / 8) as u32;
-        let costs = art.layers.iter().map(|l| layer_cost(l, band_texels, band_count)).collect();
+        let costs = pack_layer_costs(art);
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);

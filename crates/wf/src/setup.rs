@@ -199,6 +199,8 @@ impl Setup {
         }
         if let Some(e) = self.error.clone() {
             self.centred(false, 392.0, &e, RED);
+        } else if wf_engine::platform::sdl::Platform::file_dialog_open() {
+            self.centred(false, 392.0, "WAITING FOR THE FILE DIALOG", GREY);
         }
         if !MOBILE {
             self.centred(false, 440.0, "ENTER: OPEN   UP/DOWN: SELECT   ESC: QUIT", GREY);

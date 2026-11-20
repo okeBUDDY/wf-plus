@@ -341,16 +341,40 @@ impl Platform {
     }
 
     /// Opens the system's file dialog for one file of `pattern`'s
-    /// extensions ("zip;bin"); the choice arrives through
-    /// [`Platform::take_dropped`] (on Android, a content:// URI).
+    /// extensions ("zip;bin"), unless one is open already; the choice
+    /// arrives through [`Platform::take_dropped`] (on Android, a content://
+    /// URI). Call it from the main thread, as SDL requires.
+    ///
+    /// Threads: SDL calls the callback once, from wherever the platform
+    /// delivers the result: the dialog's own thread (Windows, zenity), the
+    /// main thread while events are pumped (the desktop portal, macOS) or
+    /// the Java UI thread (Android). The callback only moves the paths into
+    /// [`CHOSEN`] under its lock and clears [`DIALOG_OPEN`]; it never
+    /// touches the window, the renderer or the game, which stay on the main
+    /// thread, so nothing waits on the dialog and the dialog waits on
+    /// nothing but that lock (held for a Vec append). The game keeps
+    /// rendering while the dialog is up; the dialog is modal to the window.
     pub fn open_file_dialog(&self, name: &str, pattern: &str) {
+        use std::sync::atomic::Ordering;
+        if DIALOG_OPEN.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let filters = [sdl3::dialog::DialogFileFilter { name, pattern }, sdl3::dialog::DialogFileFilter { name: "All files", pattern: "*" }];
         let callback: sdl3::dialog::DialogCallback = Box::new(|result, _| {
             if let Ok(paths) = result {
                 CHOSEN.lock().unwrap_or_else(|e| e.into_inner()).extend(paths);
             }
+            DIALOG_OPEN.store(false, Ordering::Release);
         });
-        let _ = sdl3::dialog::show_open_file_dialog(&filters, None::<&std::path::Path>, false, &self.window, callback);
+        // An error here means SDL never took the callback.
+        if sdl3::dialog::show_open_file_dialog(&filters, None::<&std::path::Path>, false, &self.window, callback).is_err() {
+            DIALOG_OPEN.store(false, Ordering::Release);
+        }
+    }
+
+    /// A file dialog is open (its result not in yet).
+    pub fn file_dialog_open() -> bool {
+        DIALOG_OPEN.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -430,6 +454,10 @@ pub fn local_utc_offset() -> i32 {
 /// The files chosen in the file dialog (its callback may run on another
 /// thread), until [`Platform::take_dropped`] takes them.
 static CHOSEN: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// A file dialog is open: set by [`Platform::open_file_dialog`], cleared by
+/// its callback (chosen, cancelled or failed), so only one is ever open.
+static DIALOG_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Opens `url` in the system's browser.
 pub fn open_url(url: &str) -> Result<(), String> {

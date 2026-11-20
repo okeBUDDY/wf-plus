@@ -12,7 +12,8 @@ A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust.
 Version 1.08 is the last release: the original developer ended development and support of the
 game after it. The game is still [freely available to download from the official
 website](https://www.hikware.com/Prod/index.html#wf). This repository does not contain the game;
-running the port needs your own copy of version 1.08's `data.bin`.
+running the port needs version 1.08's `data.bin`, from your own copy of the download: the game
+finds `wf108.zip` by itself or asks for it on first run (see [The game data](#the-game-data)).
 
 The port is 64-bit and platform independent: SDL3 for the window, input and
 audio, wgpu for the GPU. The [decompilation](https://github.com/okeBUDDY/wf-decomp) of the original is
@@ -60,9 +61,22 @@ the only runtime input; `wf.exe` is never read, at run time or at build time. Co
 `wf.exe` (tables, literals) are in the source as `const` tables with their
 address cited.
 
-`data.bin` is looked up in this order: `--data <path>`, `WF_DATA`,
-`./data.bin`, then next to the executable. Music is `bgm.seq`, `bgm.ogg` or
-`bgm.wav` next to `data.bin`, as in the original.
+`data.bin` is looked up in this order: `--data <path>`, `WF_DATA`, then a
+`data.bin` in the working directory, the home folder (see below), next to
+the executable or in the user's Downloads folder. With none of those, the
+same folders are searched for the download itself, `wf108.zip` (also as a
+browser renames it, `wf108 (1).zip`), newest first, and its `data.bin` is read
+straight from the zip; nothing is extracted or saved. Either way the file
+must be version 1.08's (its size and CRC-32 are checked).
+
+When nothing is found, a window explains where to get the game and links
+the official download page. Drop `wf108.zip` (or `data.bin`) on it and its
+`data.bin` is saved to the home folder; a `wf108.zip` that appears in the
+searched folders meanwhile (the browser finishing the download) is used in
+place, as above.
+
+Music is `bgm.seq`, `bgm.ogg` or `bgm.wav` next to `data.bin`, as in the
+original (in the home folder when the data comes from a zip).
 
 Settings (`wf.ini`), the score table (`wf.sco`, the original's format) and
 replays (`rec/*.rec`, the original's format) live in the home folder:
@@ -103,7 +117,10 @@ compiler; on Linux also the X11/Wayland/PulseAudio development headers.
 The executable is `wfplus` (`wf+.exe` on Windows). `scripts/build-windows.sh`
 cross-builds the Windows release from Linux (rustup target
 `x86_64-pc-windows-gnu`, mingw-w64): a static `wf+.exe` with its icon,
-version resource and manifest, zipped with data.bin and the original readmes.
+version resource and manifest, zipped on its own: the release carries none of
+the original game's files, whose licence allows public redistribution only
+with the author's permission. `--with-data` adds data.bin and the original
+readmes, for a build of your own.
 
 Building needs the vector art and the font sheets, which `crates/wf/build.rs`
 cooks into the executable. By default they come from the project folder next

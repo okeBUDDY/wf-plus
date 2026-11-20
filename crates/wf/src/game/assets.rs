@@ -56,6 +56,19 @@ impl Assets {
     /// Loads data.bin at `path`; the music is looked for next to it.
     pub fn load(path: &Path) -> Result<Self, String> {
         let pack = Pack::open(path).map_err(|e| format!("data.bin がオープンできません ({e})"))?;
+        Self::from_pack(pack, path.parent())
+    }
+
+    /// Loads the data.bin inside the zip at `zip` (the download, read in
+    /// place: nothing is saved); the music is looked for in `music_dir`.
+    pub fn load_zip(zip: &Path, music_dir: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
+        let data = crate::data_import::extract(&bytes).map_err(|e| format!("{}: {e}", zip.display()))?;
+        let pack = Pack::from_bytes(data).map_err(|e| format!("data.bin がオープンできません ({e})"))?;
+        Self::from_pack(pack, Some(music_dir))
+    }
+
+    fn from_pack(pack: Pack, music_dir: Option<&Path>) -> Result<Self, String> {
         let mut pats = Vec::new();
         for sheet in SHEETS {
             let name = format!("{sheet}.pat");
@@ -68,7 +81,7 @@ impl Assets {
             sounds[slot] = Some(ogg::decode(bytes, 0).map_err(|e| format!("{name}: {e}"))?);
         }
         // The user's music, if any, next to data.bin.
-        let bgm = path.parent().and_then(crate::sound::Music::load);
+        let bgm = music_dir.and_then(crate::sound::Music::load);
         let mut registry = wf_engine::assets::Registry::new();
         registry.mount(pack);
         Ok(Assets { pack: registry, pats, sounds, bgm })

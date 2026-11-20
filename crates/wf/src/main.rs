@@ -26,7 +26,9 @@
 mod app_info;
 mod art;
 mod data;
+mod data_import;
 mod game;
+mod setup;
 mod shape_table;
 
 pub use wf_engine::{audio as sound, gfx, log, platform};
@@ -37,8 +39,11 @@ use game::assets::{Assets, CHANNELS};
 use game::{App, Cx};
 use platform::{Key, RawInput};
 
+#[derive(Clone)]
 struct Options {
-    data: PathBuf,
+    /// The game data: --data or WF_DATA, else what the start-up search
+    /// found (see [`find_data`]); None: nothing yet (the setup screen).
+    data: Option<setup::Found>,
     headless: bool,
     frames: u32,
     screenshot: Option<PathBuf>,
@@ -100,7 +105,8 @@ fn parse_key(s: &str) -> Option<Key> {
 fn usage() -> ! {
     eprintln!(
         "usage: wfplus [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--perf-overlay] [--render-scale K] [--arena classic|hd]\n          [--sprite-cache on|off] [--analytic-shapes on|off] [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
-         data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
+         data.bin also comes from WF_DATA, else data.bin in the working directory, --home, next to the executable or in\n\
+         Downloads, else wf108.zip (read in place) there; with none, a window asks for the download.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
     std::process::exit(2);
@@ -108,7 +114,7 @@ fn usage() -> ! {
 
 fn options() -> Options {
     let mut o = Options {
-        data: std::env::var_os("WF_DATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("data.bin")),
+        data: std::env::var_os("WF_DATA").map(|p| setup::Found::File(PathBuf::from(p))),
         headless: false,
         frames: 60,
         screenshot: None,
@@ -135,7 +141,7 @@ fn options() -> Options {
     while let Some(a) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| usage());
         match a.as_str() {
-            "--data" => o.data = value().into(),
+            "--data" => o.data = Some(setup::Found::File(value().into())),
             "--headless" => o.headless = true,
             "--home" => o.home = value().into(),
             "--viewer" => o.viewer = true,
@@ -199,20 +205,39 @@ fn options() -> Options {
             _ => usage(),
         }
     }
-    if !o.data.exists()
-        && let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
-            let beside = exe_dir.join("data.bin");
-            if beside.exists() {
-                o.data = beside;
-            }
-        }
+    if o.data.is_none() {
+        o.data = setup::search(&data_dirs(&o.home));
+    }
     o
 }
 
+/// Where the game data is looked for: the working directory, the home
+/// folder (where the setup screen saves it), beside the executable, and
+/// the user's Downloads. Every data.bin comes before any wf108.zip; a zip
+/// is read in place.
+fn data_dirs(home: &std::path::Path) -> Vec<PathBuf> {
+    let mut dirs = data_import::search_dirs();
+    let at = dirs.iter().position(|d| std::env::current_dir().is_ok_and(|c| *d == c)).map_or(0, |i| i + 1);
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    if !dirs.contains(&home) {
+        dirs.insert(at.min(dirs.len()), home);
+    }
+    dirs
+}
+
 /// cGlobal::Initialize and WinMain's setup: everything the stages share.
-fn startup(o: &Options) -> Result<(Cx, App), String> {
-    let assets = Assets::load(&o.data)?;
-    let mut cx = Cx::new(art::Art::load(), assets, CHANNELS);
+fn startup(o: &Options, art: art::Art) -> Result<(Cx, App), String> {
+    let assets = match &o.data {
+        Some(setup::Found::File(path)) => Assets::load(path)?,
+        Some(setup::Found::Zip(zip)) => Assets::load_zip(zip, &o.home)?,
+        None => {
+            return Err(format!(
+                "data.bin がオープンできません (no data.bin or wf108.zip found; get wf108.zip from {})",
+                data_import::DOWNLOAD_URL
+            ));
+        }
+    };
+    let mut cx = Cx::new(art, assets, CHANNELS);
     game::time::set_utc_offset(platform::sdl::local_utc_offset());
     cx.open_home(o.home.clone());
     if let Some(caps) = o.caps {
@@ -356,8 +381,29 @@ fn script_input(o: &Options, frame: u32) -> RawInput {
 
 /// Runs `frames` ticks without a window and saves the last one; or, with
 /// --bench, measures the uncapped frame rate offscreen.
+/// Headless with no game data: a screenshot of the setup screen.
+fn setup_shot(o: &Options, path: &std::path::Path) -> Result<(), String> {
+    let art = art::Art::load();
+    let size = o.size.unwrap_or((1280, 720));
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
+    let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &art.pack);
+    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::default());
+    let mut screen = setup::Setup::new(&art, o.home.join("data.bin"), data_dirs(&o.home));
+    let mut snaps = wf_engine::app::run_ticks(&mut screen, &mut input, o.frames, |f| script_input(o, f));
+    let layout = gfx::Layout::new(snaps.cur.arena, size);
+    let frame = snaps.frame(1.0, &layout, false);
+    let rgba = renderer.render_to_rgba(frame, size.0, size.1);
+    save_png(path, size.0, size.1, &rgba)?;
+    println!("saved {}", path.display());
+    Ok(())
+}
+
 fn run_headless(o: &Options) -> Result<(), String> {
-    let (cx, app) = startup(o)?;
+    if let (None, Some(path)) = (&o.data, &o.screenshot) {
+        return setup_shot(o, path);
+    }
+    let (cx, app) = startup(o, art::Art::load())?;
     let mut game = WfGame { cx, app, synced: None };
     game.cx.settings.display.show_fps |= o.show_fps;
     game.cx.settings.perf_overlay |= o.perf_overlay;
@@ -735,8 +781,31 @@ fn icon() -> Option<(u32, u32, Vec<u8>)> {
     Some((info.width, info.height, buf))
 }
 
+/// The setup screen until the game data turns up; None if the player quit.
+fn run_setup(o: &Options, art: &art::Art) -> Result<Option<(setup::Found, platform::sdl::Platform, wf_engine::app::Display)>, String> {
+    let cfg = wf_engine::config::DisplayConfig::default();
+    let mut platform = platform::sdl::Platform::new(app_info::NAME, cfg.width, cfg.height)?;
+    if let Some((w, h, rgba)) = icon() {
+        platform.set_icon(w, h, &rgba);
+    }
+    let mut display = wf_engine::app::Display::new(&platform, &art.pack, cfg.fps_cap)?;
+    let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::default());
+    let mut screen = setup::Setup::new(art, o.home.join("data.bin"), data_dirs(&o.home));
+    wf_engine::app::run_windowed(&mut screen, &mut platform, &mut display, cfg, &mut input, |_, _| Ok(()))?;
+    Ok(screen.found.take().map(|found| (found, platform, display)))
+}
+
 fn run_windowed(o: &Options) -> Result<(), String> {
-    let (cx, app) = startup(o)?;
+    let art = art::Art::load();
+    let mut ready = None;
+    let mut found = None;
+    if o.data.is_none() {
+        let Some((data, platform, display)) = run_setup(o, &art)? else { return Ok(()) };
+        found = Some(data);
+        ready = Some((platform, display));
+    }
+    let o = &Options { data: found.or_else(|| o.data.clone()), ..o.clone() };
+    let (cx, app) = startup(o, art)?;
     let mut game = WfGame { cx, app, synced: None };
     if let Some(mode) = o.arena {
         game.cx.arena_choice = mode;
@@ -765,12 +834,23 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         display_cfg.render_scale = k;
     }
     game.cx.settings.display = display_cfg;
-    let mut platform = platform::sdl::Platform::new(app_info::NAME, display_cfg.width, display_cfg.height)?;
+    let (mut platform, mut display) = match ready {
+        // The setup screen's window, now at the settings' size.
+        Some((mut platform, mut display)) => {
+            platform.set_window_size(display_cfg.width, display_cfg.height);
+            display.set_cap(display_cfg.fps_cap);
+            (platform, display)
+        }
+        None => {
+            let mut platform = platform::sdl::Platform::new(app_info::NAME, display_cfg.width, display_cfg.height)?;
+            if let Some((w, h, rgba)) = icon() {
+                platform.set_icon(w, h, &rgba);
+            }
+            let display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
+            (platform, display)
+        }
+    };
     wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
-    if let Some((w, h, rgba)) = icon() {
-        platform.set_icon(w, h, &rgba);
-    }
-    let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
     display.renderer.set_sprite_cache(game.cx.settings.sprite_cache);
     display.renderer.analytic_shapes = game.cx.settings.analytic_shapes;
     game.cx.art.register_line_shapes(&mut display.renderer);

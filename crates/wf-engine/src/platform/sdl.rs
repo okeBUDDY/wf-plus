@@ -24,6 +24,8 @@ pub struct Platform {
     wheel: f32,
     /// The window's title as created (the FPS display appends to it).
     pub title: String,
+    /// Files dropped on the window since the last [`Platform::take_dropped`].
+    dropped: Vec<std::path::PathBuf>,
 }
 
 pub struct MixerCallback {
@@ -174,6 +176,7 @@ impl Platform {
             events,
             window,
             fingers: Vec::new(),
+            dropped: Vec::new(),
             last_device: Device::Keyboard,
             mouse_inside: false,
             wheel: 0.0,
@@ -206,6 +209,7 @@ impl Platform {
         for event in self.events.poll_iter() {
             match event {
                 SdlEvent::Quit { .. } => out.push(Event::Quit),
+                SdlEvent::DropFile { filename, .. } => self.dropped.push(std::path::PathBuf::from(filename)),
                 SdlEvent::Window { win_event, .. } => match win_event {
                     WindowEvent::DisplayChanged(_) => note_display_size(&self.window),
                     WindowEvent::FocusGained => out.push(Event::Focus(true)),
@@ -328,6 +332,11 @@ impl Platform {
         }
     }
 
+    /// The files dropped on the window since the last call.
+    pub fn take_dropped(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.dropped)
+    }
+
     pub fn set_title(&mut self, title: &str) {
         let _ = self.window.set_title(title);
     }
@@ -400,4 +409,9 @@ pub fn local_utc_offset() -> i32 {
     // SAFETY: plain out-parameters on the stack.
     let ok = unsafe { SDL_GetCurrentTime(&mut now) && SDL_TimeToDateTime(now, &mut dt, true) };
     if ok { dt.utc_offset } else { 0 }
+}
+
+/// Opens `url` in the system's browser.
+pub fn open_url(url: &str) -> Result<(), String> {
+    sdl3::url::open_url(url).map_err(|e| e.to_string())
 }

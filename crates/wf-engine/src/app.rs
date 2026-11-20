@@ -45,6 +45,8 @@ pub trait Game {
     /// adapter has none) and the present-to-present time (ms, averaged),
     /// once a frame (the perf overlay).
     fn set_frame_time(&mut self, _gpu_ms: Option<f32>, _frame_ms: f32) {}
+    /// A file was dropped on the window.
+    fn file_dropped(&mut self, _path: std::path::PathBuf) {}
     /// Draw the subtle arena border when there are margins.
     fn wants_border(&self) -> bool {
         false
@@ -241,6 +243,9 @@ pub fn run_windowed(
                     step.reset();
                 }
             }
+        }
+        for path in platform.take_dropped() {
+            game.file_dropped(path);
         }
         if let Some(d) = game.display_request() {
             if d.mode != cfg.mode {

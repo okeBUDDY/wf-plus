@@ -139,12 +139,13 @@ pub fn install(bytes: &[u8], dest: &Path) -> Result<(), ImportError> {
 
 /// [`install`] from a file.
 pub fn install_file(path: &Path, dest: &Path) -> Result<(), ImportError> {
-    // wf108.zip is under 1 MiB; refuse anything far bigger unread.
-    let len = std::fs::metadata(path).map_err(|e| ImportError::Io(e.kind().to_string()))?.len();
-    if len > 64 << 20 {
+    // wf108.zip is under 1 MiB; refuse anything far bigger unread (a
+    // content:// URI from Android's picker has no metadata: read it).
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > 64 << 20) {
         return Err(ImportError::NotGameData);
     }
-    install(&std::fs::read(path).map_err(|e| ImportError::Io(e.kind().to_string()))?, dest)
+    // read_file: on Android also content:// URIs, through SDL's IO.
+    install(&crate::platform::read_file(path).map_err(|e| ImportError::Io(e.kind().to_string()))?, dest)
 }
 
 /// Whether a file name looks like the download: wf108.zip, as browsers

@@ -217,7 +217,7 @@ fn options() -> Options {
     #[cfg(target_os = "android")]
     {
         let (data, home) = platform::android::paths();
-        (o.data, o.home) = (Some(setup::Found::File(data)), home);
+        (o.data, o.home) = (data.map(setup::Found::File), home);
     }
     o
 }
@@ -227,6 +227,11 @@ fn options() -> Options {
 /// the user's Downloads. Every data.bin comes before any wf108.zip; a zip
 /// is read in place.
 fn data_dirs(home: &std::path::Path) -> Vec<PathBuf> {
+    // A phone has no folders the game can search (the file picker reaches
+    // the downloads instead).
+    if cfg!(target_os = "android") {
+        return Vec::new();
+    }
     let mut dirs = data_import::search_dirs();
     let at = dirs.iter().position(|d| std::env::current_dir().is_ok_and(|c| *d == c)).map_or(0, |i| i + 1);
     let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());

@@ -2,13 +2,14 @@
 //
 // The native code is the Rust crate `wf` (crates/wf), built by cargo-ndk as
 // libwfplus.so with SDL3 linked in statically; the cooked art is inside it.
-// data.bin (the original game's data, not redistributable) and the original
-// readme.txt and readme_j.txt beside it are bundled from outside the
-// repository: pass -PWF_DATA=/path/to/data.bin or set WF_DATA.
+// The original game's files are not bundled: on first run the game asks
+// for wf108.zip, the official download, and saves its data.bin. For a build
+// of your own, -PWF_DATA=/path/to/data.bin (or WF_DATA) bundles data.bin and
+// the original readme.txt and readme_j.txt beside it.
 //
-//   ./gradlew assembleDebug -PWF_DATA=/path/to/data.bin   (or gradle, 8.9+)
+//   ./gradlew assembleDebug [-PWF_DATA=/path/to/data.bin]   (or gradle, 8.9+)
 //
-// Properties: WF_DATA (required), skipCargo (use the jniLibs already built),
+// Properties: WF_DATA (optional), skipCargo (use the jniLibs already built),
 // cargoProfile (release, the default, or dev).
 
 plugins {
@@ -95,10 +96,13 @@ def cargoNdk = tasks.register('cargoNdk', Exec) {
     doFirst { project.delete(rustLibs) }
 }
 
-// data.bin, readme.txt and readme_j.txt into the APK's assets, from
-// outside the repository: data.bin from WF_DATA, the readmes from the same
-// folder. Copied byte for byte (readme_j.txt is Shift-JIS). The build fails
-// when WF_DATA is not given or a file is missing.
+// With WF_DATA (a build of your own): data.bin, readme.txt and readme_j.txt
+// into the APK's assets, from outside the repository: data.bin from
+// WF_DATA, the readmes from the same folder. Copied byte for byte
+// (readme_j.txt is Shift-JIS); the build fails if a file is missing.
+// Without it (a release: the original's licence allows public
+// redistribution only with the author's permission) nothing is bundled and
+// the game asks for wf108.zip on first run.
 def bundledFiles = ['data.bin', 'readme.txt', 'readme_j.txt']
 def bundleData = tasks.register('bundleWfData') {
     def src = project.findProperty('WF_DATA') ?: System.getenv('WF_DATA')
@@ -109,13 +113,13 @@ def bundleData = tasks.register('bundleWfData') {
     }
     sources.values().each { if (it.isFile()) inputs.file(it) }
     bundledFiles.each { outputs.file(wfAssets.get().file(it).asFile) }
-    outputs.upToDateWhen { srcFile != null }
+    outputs.upToDateWhen { false }
     doLast {
+        // Last build's files go, so a build without WF_DATA bundles none.
+        bundledFiles.each { wfAssets.get().file(it).asFile.delete() }
         if (srcFile == null) {
-            throw new GradleException(
-                "WF_DATA is not set. data.bin is the original game's data and is not in the repository: " +
-                'pass -PWF_DATA=/path/to/data.bin or set the WF_DATA environment variable ' +
-                '(readme.txt and readme_j.txt are taken from the same folder).')
+            logger.lifecycle('WF_DATA not set: no data.bin in the APK (the game asks for wf108.zip on first run)')
+            return
         }
         sources.each { name, f ->
             if (!f.isFile()) throw new GradleException("WF_DATA: there is no ${name} at ${f}")

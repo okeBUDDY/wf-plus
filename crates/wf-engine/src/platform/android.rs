@@ -104,13 +104,22 @@ fn storage() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// (data.bin, home). A data.bin the user put in the app's storage overrides
-/// the one bundled in the APK, which is read from the assets by the
-/// relative path "data.bin" (SDL_IOFromFile looks in the APK's assets).
-pub fn paths() -> (PathBuf, PathBuf) {
+/// (data.bin, home). The data.bin in the app's storage (saved there by the
+/// setup screen, or put there by the user) comes first; else one bundled
+/// in the APK (a build of your own), read from the assets by the relative
+/// path "data.bin" (SDL_IOFromFile looks in the APK's assets); else none,
+/// and the setup screen asks for the download.
+pub fn paths() -> (Option<PathBuf>, PathBuf) {
     let home = storage();
     let own = home.join("data.bin");
-    let data = if own.is_file() { own } else { PathBuf::from("data.bin") };
+    let bundled = PathBuf::from("data.bin");
+    let data = if own.is_file() {
+        Some(own)
+    } else if sdl3::iostream::IOStream::from_file(&bundled, "rb").is_ok() {
+        Some(bundled)
+    } else {
+        None
+    };
     (data, home)
 }
 

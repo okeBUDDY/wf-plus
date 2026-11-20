@@ -10,7 +10,7 @@ mod wf_main;
 
 // The game's modules refer to each other as `crate::...`.
 #[allow(unused_imports)]
-pub(crate) use wf_main::{app_info, art, data, game, gfx, log, platform, shape_table, sound};
+pub(crate) use wf_main::{app_info, art, data, data_import, game, gfx, log, platform, setup, shape_table, sound};
 
 use std::ffi::{c_char, c_int};
 

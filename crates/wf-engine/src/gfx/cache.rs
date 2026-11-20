@@ -301,6 +301,14 @@ impl SpriteCache {
     }
 
     fn new_page(&self) -> Page {
+        crate::log::breadcrumb(&format!(
+            "sprite cache: page {} of at most {}, {}x{} {FORMAT:?} (device max 2D texture {})",
+            self.pages.len() + 1,
+            self.max_pages,
+            self.page_size,
+            self.page_size,
+            self.device.limits().max_texture_dimension_2d
+        ));
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprite cache page"),
             size: wgpu::Extent3d { width: self.page_size, height: self.page_size, depth_or_array_layers: 1 },

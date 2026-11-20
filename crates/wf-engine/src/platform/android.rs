@@ -6,14 +6,79 @@ use std::path::PathBuf;
 
 unsafe extern "C" {
     fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+    // SDL's activity mutex (src/core/android/SDL_android.c, SDL 3.4.20; SDL
+    // is linked statically, so its internal symbols resolve). The Java UI
+    // thread holds it in onNativeSurfaceCreated/Changed/Destroyed while it
+    // sets or releases the ANativeWindow.
+    fn Android_LockActivityMutex();
+    fn Android_UnlockActivityMutex();
 }
 
+/// logcat priorities.
+pub const INFO: c_int = 4;
+pub const WARN: c_int = 5;
+pub const ERROR: c_int = 6;
+
 /// Writes one line to logcat under the tag "wf".
-pub fn log(error: bool, msg: &str) {
+pub fn log_at(prio: c_int, msg: &str) {
     let text = CString::new(msg.replace('\0', " ")).unwrap_or_default();
-    // ANDROID_LOG_ERROR = 6, ANDROID_LOG_WARN = 5.
     // SAFETY: both strings are NUL terminated and outlive the call.
-    unsafe { __android_log_write(if error { 6 } else { 5 }, c"wf".as_ptr(), text.as_ptr()) };
+    unsafe { __android_log_write(prio, c"wf".as_ptr(), text.as_ptr()) };
+}
+
+/// Writes one line to logcat under the tag "wf", as an error or a warning.
+pub fn log(error: bool, msg: &str) {
+    log_at(if error { ERROR } else { WARN }, msg);
+}
+
+/// Holds SDL's activity mutex: while it is held, the Java thread cannot
+/// release the window's ANativeWindow (surfaceDestroyed) or set a new one.
+/// Every use of the wgpu surface (create, configure, acquire, present)
+/// happens under it, after checking the window pointer is still the one
+/// the surface was made for. Never held across SDL's event pump (which
+/// blocks while the app is paused).
+pub struct ActivityLock(());
+
+impl ActivityLock {
+    #[allow(clippy::new_without_default)] // a lock taken, not a default value
+    pub fn new() -> Self {
+        // SAFETY: SDL_LockMutex on SDL's (recursive) mutex; a null mutex
+        // (SDL not set up) is a no-op.
+        unsafe { Android_LockActivityMutex() };
+        ActivityLock(())
+    }
+}
+
+impl Drop for ActivityLock {
+    fn drop(&mut self) {
+        // SAFETY: paired with the lock in `new`, on the same thread.
+        unsafe { Android_UnlockActivityMutex() };
+    }
+}
+
+/// The window's ANativeWindow as SDL holds it now (null once
+/// surfaceDestroyed released it). Read under an [`ActivityLock`].
+pub fn native_window(window: &sdl3::video::Window) -> usize {
+    use sdl3::sys::properties::SDL_GetPointerProperty;
+    use sdl3::sys::video::{SDL_GetWindowProperties, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER};
+    // SAFETY: the window is alive; SDL returns the property or null.
+    unsafe {
+        let props = SDL_GetWindowProperties(window.raw());
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, std::ptr::null_mut()) as usize
+    }
+}
+
+/// Logs panics to logcat (with where they happened) before the default
+/// hook runs: a panic on any thread then leaves a readable crash log.
+pub fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("?");
+        log_at(ERROR, &format!("panic on thread '{name}': {info}"));
+        log_at(ERROR, &format!("backtrace:\n{}", std::backtrace::Backtrace::force_capture()));
+        default(info);
+    }));
 }
 
 /// The app-specific external storage (/sdcard/Android/data/<package>/files),

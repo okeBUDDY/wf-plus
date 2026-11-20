@@ -889,7 +889,8 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     display.renderer.set_sprite_cache(game.cx.settings.sprite_cache);
     display.renderer.analytic_shapes = game.cx.settings.analytic_shapes;
     game.cx.art.register_line_shapes(&mut display.renderer);
-    platform.start_audio(game.cx.sound.mixer());
+    let audio = platform.start_audio(game.cx.sound.mixer());
+    log::breadcrumb(&format!("audio {}", if audio { "started" } else { "unavailable" }));
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));
     let mut screenshot_taken = false;
     let frames = o.frames;
@@ -908,6 +909,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
         Ok(())
     })?;
     drop(display);
+    log::breadcrumb("display dropped");
     Ok(())
 }
 
@@ -915,14 +917,25 @@ fn run_windowed(o: &Options) -> Result<(), String> {
 /// message box and logcat.
 #[cfg(target_os = "android")]
 pub(crate) fn android_main() -> i32 {
+    platform::android::install_panic_hook();
     log::init_from_env();
-    match run_windowed(&options()) {
-        Ok(()) => 0,
-        Err(e) => {
+    log::breadcrumb(&format!("SDL_main: {}", app_info::version_line()));
+    // A panic must not unwind into SDL's C frames (that aborts with no
+    // message): it is caught here, after the hook logged it.
+    let result = std::panic::catch_unwind(|| run_windowed(&options()));
+    let code = match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(e)) => {
             platform::android::fatal(&format!("ERROR: {e}"));
             1
         }
-    }
+        Err(_) => {
+            log::error("SDL_main: the game panicked (see the panic above)");
+            2
+        }
+    };
+    log::breadcrumb(&format!("SDL_main returns {code}"));
+    code
 }
 
 fn main() {

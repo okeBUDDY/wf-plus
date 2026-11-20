@@ -102,11 +102,26 @@ pub fn add_border(list: &mut DrawList, layout: &Layout) {
 }
 
 /// The window's surface and the renderer.
+///
+/// Mobile windows lose their native surface when the app goes to the
+/// background, and on Android the Java thread releases it
+/// (surfaceDestroyed) without waiting for the game thread. So the surface
+/// is only touched in [`Display::present`] under [`Platform::lock_surface`]
+/// (SDL's activity mutex there), after checking the native window is still
+/// the one the surface was made for; it is dropped when the window is gone
+/// or changed, and made again (lazily, under the lock) when there is one.
+///
+/// [`Platform::lock_surface`]: platform::sdl::Platform::lock_surface
 pub struct Display {
     instance: wgpu::Instance,
-    /// None while the app is in the background (mobile): the window has no
-    /// surface then.
+    /// None while the window has no native surface, or after it was lost.
     surface: Option<wgpu::Surface<'static>>,
+    /// The native window `surface` was made for.
+    surface_window: usize,
+    /// The surface needs (re)configuring before the next acquire.
+    stale: bool,
+    /// The app is in the background: no surface until it is back.
+    background: bool,
     config: wgpu::SurfaceConfiguration,
     caps: wgpu::SurfaceCapabilities,
     pub renderer: gfx::gpu::Renderer,
@@ -118,8 +133,17 @@ pub struct Display {
 impl Display {
     pub fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack, cap: FpsCap) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(platform.display_handle()?)));
+        let lock = platform.lock_surface();
+        if lock.window == 0 {
+            return Err("the window has no native surface".into());
+        }
         let surface = create_surface(&instance, platform)?;
         let (adapter, device, queue) = gfx::gpu::create_device(&instance, Some(&surface))?;
+        // GPU errors are logged, never a panic (wgpu's default handler
+        // panics; a surface error while the app is backgrounded is not
+        // fatal).
+        device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| crate::log::error(&format!("wgpu: {e}"))));
+        let info = adapter.get_info();
         let caps = surface.get_capabilities(&adapter);
         // Blend in gamma space, as the original's Direct3D 7 did.
         let format = caps
@@ -141,79 +165,162 @@ impl Display {
             view_formats: vec![],
             color_space: Default::default(),
         };
-        surface.configure(&device, &config);
         let renderer = gfx::gpu::Renderer::new(device, queue, format, art);
         let scaler = gfx::scale::Scaler::new(&renderer);
-        Ok(Display { instance, surface: Some(surface), config, caps, renderer, render_scale: 1.0, scaler })
+        crate::log::breadcrumb(&format!(
+            "display: {} ({:?}), {:?}, {:?}, {}x{}, window {:#x}",
+            info.name, info.backend, format, config.present_mode, config.width, config.height, lock.window
+        ));
+        let mut display = Display {
+            instance,
+            surface: Some(surface),
+            surface_window: lock.window,
+            stale: true,
+            background: false,
+            config,
+            caps,
+            renderer,
+            render_scale: 1.0,
+            scaler,
+        };
+        if !display.configure() {
+            return Err("cannot configure the window surface".into());
+        }
+        Ok(display)
     }
 
-    /// Drops the window surface (the app is going to the background).
+    /// The app is going to the background: drops the surface and makes
+    /// none until [`Display::resume`].
     pub fn suspend(&mut self) {
-        self.surface = None;
+        // Taken so a surface still in use by the driver is released under
+        // the lock too.
+        self.background = true;
+        if self.surface.take().is_some() {
+            crate::log::breadcrumb("surface dropped (background)");
+        }
+    }
+
+    /// Back in the foreground: the next present makes a new surface once
+    /// the window has a native one.
+    pub fn resume(&mut self) {
+        self.background = false;
     }
 
     pub fn suspended(&self) -> bool {
-        self.surface.is_none()
-    }
-
-    /// Makes a new surface for the window (back in the foreground), at the
-    /// window's current size.
-    pub fn resume(&mut self, platform: &platform::sdl::Platform) -> Result<(), String> {
-        let surface = create_surface(&self.instance, platform)?;
-        let (w, h) = platform.drawable_size();
-        self.config.width = w.max(1);
-        self.config.height = h.max(1);
-        surface.configure(self.renderer.device(), &self.config);
-        self.surface = Some(surface);
-        Ok(())
+        self.background
     }
 
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
 
+    /// The window was resized: reconfigured at the next present.
     pub fn resize(&mut self, w: u32, h: u32) {
         self.config.width = w.max(1);
         self.config.height = h.max(1);
-        if let Some(surface) = &self.surface {
-            surface.configure(self.renderer.device(), &self.config);
-        }
+        self.stale = true;
     }
 
     /// Mailbox or Immediate uncapped (and under the limiter), Fifo for
-    /// VSync.
+    /// VSync (Android: Mailbox or Fifo). Applied at the next present.
     pub fn set_cap(&mut self, cap: FpsCap) {
         let mode = present_mode(&self.caps, cap);
         if mode != self.config.present_mode {
             self.config.present_mode = mode;
-            if let Some(surface) = &self.surface {
-                surface.configure(self.renderer.device(), &self.config);
-            }
+            self.stale = true;
         }
     }
 
-    pub fn present(&mut self, list: &DrawList) {
+    /// Configures the surface; false (and the surface dropped) on error.
+    /// Under the surface lock.
+    fn configure(&mut self) -> bool {
+        let Some(surface) = &self.surface else { return false };
+        let device = self.renderer.device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        surface.configure(device, &self.config);
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            crate::log::breadcrumb(&format!("surface configure failed, dropping it: {e}"));
+            self.surface = None;
+            return false;
+        }
+        self.stale = false;
+        true
+    }
+
+    /// Shows `list`, if the window has a surface to show it on. Every
+    /// surface operation is here, under the platform's surface lock.
+    pub fn present(&mut self, platform: &platform::sdl::Platform, list: &DrawList) {
+        if self.background {
+            return;
+        }
+        let lock = platform.lock_surface();
+        if lock.window == 0 {
+            if self.surface.take().is_some() {
+                crate::log::breadcrumb("native window gone: surface dropped");
+            }
+            return;
+        }
+        if self.surface.is_some() && self.surface_window != lock.window {
+            crate::log::breadcrumb(&format!("native window changed {:#x} -> {:#x}: surface dropped", self.surface_window, lock.window));
+            self.surface = None;
+        }
+        if self.surface.is_none() {
+            match create_surface(&self.instance, platform) {
+                Ok(s) => {
+                    let (w, h) = platform.drawable_size();
+                    (self.config.width, self.config.height) = (w.max(1), h.max(1));
+                    crate::log::breadcrumb(&format!("surface created for window {:#x}, {w}x{h}", lock.window));
+                    self.surface = Some(s);
+                    self.surface_window = lock.window;
+                    self.stale = true;
+                }
+                Err(e) => {
+                    crate::log::breadcrumb(&format!("cannot create the surface yet: {e}"));
+                    return;
+                }
+            }
+        }
+        if self.stale && !self.configure() {
+            return;
+        }
         let Some(surface) = &self.surface else { return };
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                surface.configure(self.renderer.device(), &self.config);
+            wgpu::CurrentSurfaceTexture::Success(f) => f,
+            wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                self.stale = true;
+                f
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                crate::log::breadcrumb("surface outdated: reconfiguring");
+                self.stale = true;
                 return;
             }
-            _ => return,
+            wgpu::CurrentSurfaceTexture::Lost => {
+                crate::log::breadcrumb("surface lost: dropped, made again next frame");
+                self.surface = None;
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                crate::log::breadcrumb("surface acquire: validation error, reconfiguring");
+                self.stale = true;
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let size = (self.config.width, self.config.height);
         self.scaler.render(&mut self.renderer, list, &view, size, self.render_scale);
         self.renderer.queue().present(frame);
+        // `lock` is released here, after the present.
     }
 }
 
-/// The window's surface.
+/// The window's surface. Called under the platform's surface lock, with a
+/// native window present (sdl3's window handle does not check for one).
 fn create_surface(instance: &wgpu::Instance, platform: &platform::sdl::Platform) -> Result<wgpu::Surface<'static>, String> {
     // SAFETY: the window outlives the surface: the Display is dropped
-    // before the Platform, and the surface is dropped (`suspend`) before
-    // a mobile window loses its native window.
+    // before the Platform, and on Android the surface is dropped as soon
+    // as the native window it was made for is gone (see Display).
     unsafe {
         instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&platform.window).map_err(|e| e.to_string())?)
@@ -284,38 +391,40 @@ pub fn run_windowed(
     let mut presented: Option<Instant> = None;
     let mut frame_ms = 0.0f32;
     display.render_scale = cfg.render_scale;
-    let mut background = false;
+    crate::log::breadcrumb("loop started");
     while game.running() {
         for event in platform.poll() {
             match event {
                 Event::Quit => game.quit(),
-                Event::Resized(w, h) => display.resize(w, h),
+                Event::Resized(w, h) => {
+                    crate::log::breadcrumb(&format!("resized {w}x{h}"));
+                    display.resize(w, h);
+                }
                 Event::Focus(active) => {
                     game.focus(active);
                     step.reset();
                 }
                 Event::Background => {
-                    background = true;
+                    crate::log::breadcrumb("background: game paused, audio paused, surface dropped");
                     game.background(true);
+                    platform.set_audio_paused(true);
                     display.suspend();
                 }
                 Event::Foreground => {
-                    background = false;
+                    crate::log::breadcrumb("foreground: surface made at the next present");
+                    display.resume();
+                    platform.set_audio_paused(false);
                     game.background(false);
                     step.reset();
                 }
             }
         }
-        // Back in the foreground: a new surface for the new native window
-        // (tried again each pass until the window has one).
-        if !background && display.suspended() {
-            if let Err(e) = display.resume(platform) {
-                crate::log::debug(&format!("the window surface is not back yet: {e}"));
-            }
-            step.reset();
+        if !game.running() {
+            break;
         }
         // In the background (mobile): no ticks, no frames. On Android the
-        // next poll blocks until the app comes back.
+        // next poll blocks until the app comes back. The surface itself is
+        // guarded in Display::present, whatever order the events come in.
         if display.suspended() {
             std::thread::sleep(std::time::Duration::from_millis(20));
             continue;
@@ -356,7 +465,7 @@ pub fn run_windowed(
         let layout = Layout::new(snaps.cur.arena, size);
         let border = game.wants_border();
         let frame = snaps.frame(step.alpha(), &layout, border);
-        display.present(frame);
+        display.present(platform, frame);
         on_frame(display, frame)?;
         let now = Instant::now();
         fps.frame(now);
@@ -376,6 +485,7 @@ pub fn run_windowed(
         }
         limiter.wait(cfg.fps_cap);
     }
+    crate::log::breadcrumb("loop ended");
     Ok(())
 }
 

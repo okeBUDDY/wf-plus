@@ -43,6 +43,15 @@ pub fn log(level: Level, msg: &str) {
     }
 }
 
+/// A lifecycle breadcrumb: always in logcat on Android (tag "wf", info),
+/// so a crash log shows the steps that led to it; debug level elsewhere.
+pub fn breadcrumb(msg: &str) {
+    #[cfg(target_os = "android")]
+    crate::platform::android::log_at(crate::platform::android::INFO, &format!("lifecycle: {msg}"));
+    #[cfg(not(target_os = "android"))]
+    debug(&format!("lifecycle: {msg}"));
+}
+
 pub fn error(msg: &str) {
     log(Level::Error, msg)
 }

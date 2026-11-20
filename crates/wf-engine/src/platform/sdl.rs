@@ -28,6 +28,15 @@ pub struct Platform {
     dropped: Vec<std::path::PathBuf>,
 }
 
+/// See [`Platform::lock_surface`].
+pub struct SurfaceLock {
+    /// The native window now: 0 when the window has none (an Android app
+    /// in the background); on desktops always 1.
+    pub window: usize,
+    #[cfg(target_os = "android")]
+    _lock: super::android::ActivityLock,
+}
+
 pub struct MixerCallback {
     mixer: Mixer,
     buffer: Vec<f32>,
@@ -150,6 +159,9 @@ impl Platform {
             sdl3::hint::set("SDL_TOUCH_MOUSE_EVENTS", "0");
             // The Back button is a key (Escape), not "finish the activity".
             sdl3::hint::set("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
+            // Relied on (SDL's default, set so it stays): while paused the
+            // event pump blocks and SDL pauses the audio devices.
+            sdl3::hint::set("SDL_ANDROID_BLOCK_ON_PAUSE", "1");
         }
         let sdl = sdl3::init().map_err(|e| e.to_string())?;
         let video = sdl.video().map_err(|e| e.to_string())?;
@@ -173,6 +185,8 @@ impl Platform {
             super::set_max_refresh(modes.iter().map(|m| m.refresh_rate).fold(current, f32::max));
         }
         note_display_size(&window);
+        let (pw, ph) = window.size_in_pixels();
+        crate::log::breadcrumb(&format!("platform: window {pw}x{ph}"));
         Ok(Platform {
             title: title.to_string(),
             _sdl: sdl,
@@ -207,6 +221,30 @@ impl Platform {
         }
     }
 
+    /// Locks the window's native surface against the OS for the time the
+    /// returned guard lives (Android: SDL's activity mutex, so the Java
+    /// thread cannot release the ANativeWindow meanwhile; elsewhere no
+    /// lock). Hold it around every use of a GPU surface, never across
+    /// `poll`.
+    pub fn lock_surface(&self) -> SurfaceLock {
+        #[cfg(target_os = "android")]
+        {
+            let lock = super::android::ActivityLock::new();
+            let window = super::android::native_window(&self.window);
+            SurfaceLock { window, _lock: lock }
+        }
+        #[cfg(not(target_os = "android"))]
+        SurfaceLock { window: 1 }
+    }
+
+    /// Pauses (true) or resumes the audio output.
+    pub fn set_audio_paused(&self, paused: bool) {
+        if let Some(stream) = &self.audio {
+            let ok = if paused { stream.pause().is_ok() } else { stream.resume().is_ok() };
+            crate::log::breadcrumb(&format!("audio {} ({})", if paused { "paused" } else { "resumed" }, if ok { "ok" } else { "failed" }));
+        }
+    }
+
     /// The window's size in pixels.
     pub fn drawable_size(&self) -> (u32, u32) {
         self.window.size_in_pixels()
@@ -217,10 +255,23 @@ impl Platform {
         let mut out = Vec::new();
         for event in self.events.poll_iter() {
             match event {
-                SdlEvent::Quit { .. } => out.push(Event::Quit),
                 SdlEvent::DropFile { filename, .. } => self.dropped.push(std::path::PathBuf::from(filename)),
-                SdlEvent::AppWillEnterBackground { .. } => out.push(Event::Background),
-                SdlEvent::AppDidEnterForeground { .. } => out.push(Event::Foreground),
+                SdlEvent::Quit { .. } => {
+                    crate::log::breadcrumb("SDL quit");
+                    out.push(Event::Quit);
+                }
+                SdlEvent::AppWillEnterBackground { .. } => {
+                    crate::log::breadcrumb("SDL will enter background");
+                    out.push(Event::Background);
+                }
+                SdlEvent::AppDidEnterBackground { .. } => crate::log::breadcrumb("SDL did enter background"),
+                SdlEvent::AppWillEnterForeground { .. } => crate::log::breadcrumb("SDL will enter foreground"),
+                SdlEvent::AppDidEnterForeground { .. } => {
+                    crate::log::breadcrumb("SDL did enter foreground");
+                    out.push(Event::Foreground);
+                }
+                SdlEvent::AppTerminating { .. } => crate::log::breadcrumb("SDL terminating"),
+                SdlEvent::AppLowMemory { .. } => crate::log::breadcrumb("SDL low memory"),
                 SdlEvent::Window { win_event, .. } => match win_event {
                     WindowEvent::DisplayChanged(_) => note_display_size(&self.window),
                     WindowEvent::FocusGained => out.push(Event::Focus(true)),

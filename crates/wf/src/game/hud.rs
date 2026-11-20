@@ -311,6 +311,11 @@ impl GameHud {
 
     /// DrawWarning (0x420500).
     fn draw_warning(&mut self, cx: &mut Cx) {
+        // Laid out on the original's 640 units, centred in a wider arena
+        // (display only).
+        let width = cx.hud_view().1;
+        let ([ox, oy], s) = overlay_fit(cx);
+        cx.draw.set_origin_scaled([ox, oy], s);
         warning_bands(cx, cx.app.frame_count, self.frame_open);
 
         let chart_color = alpha(self.chart_alpha, 200.0) | 0xff80;
@@ -347,11 +352,16 @@ impl GameHud {
         }
 
         // Above the input guide's strip when it shows (display only).
-        cx.draw.set_origin([0.0, -super::guide::lift(cx)]);
-        let t = Transform::translation(self.title_slide + 360.0, 404.0);
+        cx.draw.set_origin_scaled([ox, oy - super::guide::lift(cx)], s);
         self.title_pos.0 = self.title_slide as i32 + 360;
+        // The name slides in from 400 units right; a wider view's extra
+        // margin is added in proportion, so that it starts as far outside
+        // the view as in the original's 640 (display only).
+        let margin = (width - 640.0).max(0.0) * 0.5;
+        let shift = self.title_slide / 400.0 * margin;
+        let t = Transform::translation(self.title_slide + 360.0 + shift, 404.0);
         cx.draw.sprite(cx.art.shapes.title_line, &t, Argb(0xc8ff_c800), Blend::Normal);
-        let (px, py) = (self.title_pos.0 as f32, self.title_pos.1 as f32);
+        let (px, py) = (self.title_pos.0 as f32 + shift, self.title_pos.1 as f32);
         let c = Argb(0xc8ff_c800);
         cx.fonts.text.print(&mut cx.draw, px, py - 20.0, &self.texts[WARNING_NAME], None, c, -1, Blend::Normal);
         let english = cx.global.flags & FLAG_ENGLISH != 0;
@@ -571,9 +581,9 @@ impl GameHud {
 
     /// DrawNameEntry (0x41f830).
     fn draw_name_entry(&mut self, cx: &mut Cx) {
-        // Centred in a wider arena.
-        let (left, width) = cx.hud_view();
-        cx.draw.set_origin([left + width * 0.5 - 320.0, 0.0]);
+        // Centred in a wider arena, shrunk to fit a narrower one.
+        let (origin, s) = overlay_fit(cx);
+        cx.draw.set_origin_scaled(origin, s);
         let t = Transform::translation(320.0, 240.0);
         cx.draw.sprite(cx.art.shapes.backdrop, &t, Argb(alpha(self.back_alpha, 160.0)), Blend::Normal);
         // The bars, scrolling apart as the window opens.
@@ -585,13 +595,13 @@ impl GameHud {
         t.m[2][0] += 320.0;
         t.m[2][1] += 240.0;
         let strip = texels::font2_strip(2);
-        for k in band_copies(cx) {
-            texels::draw(cx, &strip, &along(&t, k), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx, &BAR_POINTS) {
+            texels::draw(cx, &strip, &along(&t, k, &BAR_POINTS), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
         }
         turned.m[2][0] += 320.0;
         turned.m[2][1] += 240.0;
-        for k in band_copies(cx) {
-            texels::draw(cx, &strip, &along(&turned, k), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx, &BAR_POINTS) {
+            texels::draw(cx, &strip, &along(&turned, k, &BAR_POINTS), &BAR_POINTS, &BAR_TEXELS, 0xc800_ff80);
         }
 
         if self.flags & FLAG_NAME_CURSOR != 0 {
@@ -674,15 +684,18 @@ impl GameHud {
         // Above the input guide's strip when it shows (display only).
         let lift = super::guide::lift(cx);
         t.translate(-(((cx.app.frame_count & 0x3f) * 2) as f32), 460.0 - lift);
-        for k in band_copies(cx) {
-            texels::draw(cx, &texels::font2_strip(0), &along(&t, k), &RESULT_BAR, &RESULT_BAR_TEXELS, 0xc800_ff80);
+        for k in band_copies(cx, &RESULT_BAR) {
+            texels::draw(cx, &texels::font2_strip(0), &along(&t, k, &RESULT_BAR), &RESULT_BAR, &RESULT_BAR_TEXELS, 0xc800_ff80);
         }
         let mut palette = [Argb(0); 10];
         palette[0] = Argb(alpha(self.result_alpha, 128.0) | 0xff_ffff);
         palette[1] = Argb(alpha(self.result_alpha, 200.0) | 0xffc800);
         let len = (self.result_length as i32).max(1);
         let y = 448 - self.result_height * self.result_shown as i32 / len;
-        cx.draw.set_origin([cx.hud_view().0, -lift]);
+        // From the bottom-left corner, shrunk to fit a narrower arena.
+        let (left, width) = cx.hud_view();
+        let s = (width / 640.0).min(1.0);
+        cx.draw.set_origin_scaled([left, 448.0 * (1.0 - s) - lift], s);
         cx.fonts.small_text.print(&mut cx.draw, 16.0, y as f32, &self.texts[RESULT_TEXT], Some(&palette), palette[0], self.result_shown as i32, Blend::Normal);
         cx.draw.set_origin([0.0; 2]);
     }
@@ -815,6 +828,17 @@ impl Task for GameHud {
     }
 }
 
+/// Where the HUD overlays laid out on the original's 640x480 (the warning,
+/// the name entry) go: centred in the view, and in a view narrower than
+/// 640 (an HD arena in a portrait window) shrunk to its width about the
+/// centre. The origin and scale for `DrawList::set_origin_scaled`.
+/// Display only.
+fn overlay_fit(cx: &Cx) -> ([f32; 2], f32) {
+    let (left, width) = cx.hud_view();
+    let s = (width / 640.0).min(1.0);
+    ([left + width * 0.5 - 320.0 * s, 240.0 * (1.0 - s)], s)
+}
+
 /// A HUD text's font.
 #[derive(Clone, Copy)]
 enum Font {
@@ -853,33 +877,44 @@ pub(crate) fn warning_bands(cx: &mut Cx, frame_count: u32, frame_open: f32) {
     let mut band = t;
     band.m[2][0] += 160.0;
     band.m[2][1] += 200.0;
-    for k in band_copies(cx) {
-        texels::draw(cx, &texels::ETC0_BAND, &along(&band, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+    for k in band_copies(cx, &BAND) {
+        texels::draw(cx, &texels::ETC0_BAND, &along(&band, k, &BAND), &BAND, &BAND_TEXELS, 0xc8ff_4000);
     }
     let mut t = super::background::rotate(&t, 0x200);
     t.translate(160.0, 200.0);
-    for k in band_copies(cx) {
-        texels::draw(cx, &texels::ETC0_BAND, &along(&t, k), &BAND, &BAND_TEXELS, 0xc8ff_4000);
+    for k in band_copies(cx, &BAND) {
+        texels::draw(cx, &texels::ETC0_BAND, &along(&t, k, &BAND), &BAND, &BAND_TEXELS, 0xc8ff_4000);
     }
 }
 
-/// The copies of a scrolling band (1024 units long, its strip repeating
-/// every 256) that cover the view: one across 640 units; in a wider view
-/// (an HD arena, or the window around a Classic one), more on each side
-/// along the band, end to end. (Copies 768 apart overlapped by a quarter
-/// band, drawn twice there: that stretch was brighter and more orange,
-/// and slid along with the band.)
-fn band_copies(cx: &Cx) -> std::ops::RangeInclusive<i32> {
-    let extra = (cx.hud_view().1 - 640.0).max(0.0);
-    let k = (extra / 600.0).ceil() as i32;
+/// The copies of a scrolling band (`quad`, its strip repeating every 128 or
+/// 256 texels, so a band's length is a whole number of repeats) that cover
+/// the view: one across 640 units; in a wider or taller view (an HD arena,
+/// or the window around a Classic one), more on each side along the band,
+/// end to end, enough for the window's diagonal whatever the band's angle.
+/// Display only. (Copies closer than a band's length overlapped, drawn
+/// twice there: brighter, and sliding along with the band; copies spaced
+/// by a longer band left gaps in the 768-unit bars.)
+fn band_copies(cx: &Cx, quad: &[[f32; 2]; 4]) -> std::ops::RangeInclusive<i32> {
+    let [_, _, w, h] = cx.window_view();
+    let w = w.max(cx.hud_view().1);
+    if w <= super::arena::W && h <= 480.0 {
+        // The original's 640x480: one band, as it drew.
+        return 0..=0;
+    }
+    let k = (w.hypot(h) / band_length(quad)).ceil() as i32;
     -k..=k
 }
 
-/// `t` moved `k` band lengths along its own x.
-fn along(t: &Transform, k: i32) -> Transform {
+fn band_length(quad: &[[f32; 2]; 4]) -> f32 {
+    quad[1][0] - quad[0][0]
+}
+
+/// `t` moved `k` lengths of the band `quad` along its own x.
+fn along(t: &Transform, k: i32, quad: &[[f32; 2]; 4]) -> Transform {
     let mut t = *t;
     if k != 0 {
-        let d = (BAND[1][0] - BAND[0][0]) * k as f32;
+        let d = band_length(quad) * k as f32;
         t.m[2][0] += t.m[0][0] * d;
         t.m[2][1] += t.m[0][1] * d;
     }

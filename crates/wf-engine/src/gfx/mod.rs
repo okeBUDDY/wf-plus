@@ -139,6 +139,9 @@ pub struct DrawList {
     /// Added to every transform's translation (a HUD block anchored to
     /// another edge of a wider arena).
     origin: [f32; 2],
+    /// Scales every transform about (0, 0) before the origin is added (a
+    /// HUD block shrunk to fit a narrower arena); 0 or 1: none.
+    scale: f32,
     /// The screen fade: this colour at its alpha over the whole finished
     /// frame (alpha 0: none).
     pub fade: Argb,
@@ -159,6 +162,7 @@ impl DrawList {
         self.sub = 0;
         self.pass = Pass::Arena;
         self.origin = [0.0; 2];
+        self.scale = 1.0;
         self.fade = Argb(0);
         self.menu = false;
     }
@@ -166,10 +170,24 @@ impl DrawList {
     /// Moves the draws that follow by `origin` (0, 0 to stop).
     pub fn set_origin(&mut self, origin: [f32; 2]) {
         self.origin = origin;
+        self.scale = 1.0;
+    }
+
+    /// Scales the draws that follow by `scale` about (0, 0), then moves
+    /// them by `origin` (`set_origin` ends the scale).
+    pub fn set_origin_scaled(&mut self, origin: [f32; 2], scale: f32) {
+        self.origin = origin;
+        self.scale = scale;
     }
 
     fn place(&self, t: &Transform) -> Transform {
         let mut t = *t;
+        if self.scale != 0.0 && self.scale != 1.0 {
+            for row in &mut t.m {
+                row[0] *= self.scale;
+                row[1] *= self.scale;
+            }
+        }
         if self.origin != [0.0; 2] {
             t.m[2][0] += self.origin[0];
             t.m[2][1] += self.origin[1];

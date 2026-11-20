@@ -670,7 +670,7 @@ impl Renderer {
                     compose: s.compose,
                     bitmap,
                     curves_per_px,
-                    cacheable: cacheable && bitmap.is_none() && s.flags & wf_art::sprite_flags::TRACED == 0 && !slug_only(art.name(s)),
+                    cacheable: cacheable && bitmap.is_none() && !slug_only(art.name(s)),
                 }
             })
             .collect();

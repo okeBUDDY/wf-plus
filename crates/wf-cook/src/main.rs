@@ -1,21 +1,22 @@
-//! `wf-cook <art dir> <font dir> <out file>`: cooks the art outside a build,
+//! `wf-cook <art dir> <bitmap dir> <out file>`: cooks the art outside a build,
 //! for inspecting the pack.
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 5 {
-        eprintln!("usage: wf-cook <art dir> <font dir> <bitmap dir> <out file>");
+    if args.len() != 4 {
+        eprintln!("usage: wf-cook <art dir> <bitmap dir> <out file>");
         std::process::exit(2);
     }
-    let config = wf_cook::Config::new(args[1].clone().into(), args[2].clone().into(), args[3].clone().into());
+    let config = wf_cook::Config::new(args[1].clone().into(), args[2].clone().into());
     match wf_cook::cook(&config) {
         Ok((blob, report)) => {
-            std::fs::write(&args[4], &blob).expect("write pack");
+            std::fs::write(&args[3], &blob).expect("write pack");
             println!(
-                "{} sprites ({} bitmaps, {} vector glyphs), {} layers, {} curves, {} bytes; skipped vectors {:?}",
+                "{} sprites ({} bitmaps, {} vector glyphs, {} blank glyphs), {} layers, {} curves, {} bytes; skipped vectors {:?}",
                 report.sprites,
                 report.bitmaps,
                 report.vector_glyphs,
+                report.blank_glyphs,
                 report.layers,
                 report.curves,
                 blob.len(),

@@ -3,6 +3,7 @@ name = "wf-engine"
 description = "The engine under the Warning Forever port: app loop, time, Slug renderer, assets, audio, input, config and the SDL3 platform."
 edition.workspace = true
 version.workspace = true
+publish.workspace = true
 
 [dependencies]
 wf-art.workspace = true

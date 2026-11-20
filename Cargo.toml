@@ -5,7 +5,10 @@ default-members = ["crates/wf"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+# Warning Forever+'s version (crates/wf/src/app_info.rs). No licence: see
+# the README's Licence section.
+version = "1.0.0"
+publish = false
 
 [workspace.dependencies]
 wf-art = { path = "crates/wf-art" }

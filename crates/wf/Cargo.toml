@@ -5,6 +5,7 @@ edition.workspace = true
 # Warning Forever+'s own version (see src/app_info.rs), based on the
 # original's 1.08.
 version = "1.0.0"
+publish.workspace = true
 build = "build.rs"
 
 # The Android entry point: the activity loads libwfplus.so (System.loadLibrary

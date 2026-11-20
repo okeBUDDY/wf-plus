@@ -1,11 +1,10 @@
-//! The art cooker. `cook()` reads the vector art and the font sheets and
+//! The art cooker. `cook()` reads the vector art and glyphs and
 //! returns a [`wf_art`] pack. The game's build script calls it, so the game
 //! only ever sees cooked data.
 
 pub mod geom;
 pub mod slug;
 pub mod svg;
-pub mod trace;
 pub mod turbulence;
 
 use std::path::{Path, PathBuf};
@@ -26,7 +25,8 @@ pub const SKIPPED: &[&str] = &["etc2_001_character", "add0_extra00", "enm0_extra
 /// first match wins. `{font}` is the grid name (`text`, `kana`, ...),
 /// `{sheet}` the font sheet (`font0`..`font2`), `{index}` the glyph in its
 /// grid (3 digits), `{x}`/`{y}` the cell's pixel position on the sheet.
-/// The SVG is in cell coordinates (the glyph's top-left corner at 0, 0). A glyph with no SVG is traced from the sheet's pixels.
+/// The SVG is in cell coordinates (the glyph's top-left corner at 0, 0). A
+/// glyph with no SVG is blank (the sheets' empty cells, such as the space).
 ///
 /// `{csv}` is the glyph's file in `Config::glyph_csv` (the cut glyphs'
 /// table, `fonts/glyphs.csv`: `file, sheet, ..., x, y, w, h`) with `.svg`
@@ -72,11 +72,9 @@ pub fn glyph_name(font: &str, index: usize) -> String {
 pub struct Config {
     /// The vector art: `<dir>/<sheet>/<sheet>_<id>.svg`.
     pub art_dir: PathBuf,
-    /// The directory holding font0.png .. font2.png.
-    pub font_dir: PathBuf,
     /// The cut original sprites (`sprites/sheets`), for [`BITMAPS`].
     pub bitmap_dir: PathBuf,
-    /// Vector glyphs, preferred over tracing the font sheets when present.
+    /// The vector glyphs.
     pub glyph_dir: PathBuf,
     /// File name patterns under `glyph_dir` (see [`GLYPH_PATTERNS`]).
     pub glyph_patterns: Vec<String>,
@@ -123,10 +121,10 @@ fn read_glyph_csv(path: &Path) -> std::collections::HashMap<(String, usize, usiz
 
 impl Config {
     /// The usual layout: glyphs under `<art_dir>/fonts`.
-    pub fn new(art_dir: PathBuf, font_dir: PathBuf, bitmap_dir: PathBuf) -> Self {
+    pub fn new(art_dir: PathBuf, bitmap_dir: PathBuf) -> Self {
         let glyph_dir = art_dir.join("fonts");
         let glyph_csv = art_dir.join("../fonts/glyphs.csv");
-        Config { art_dir, font_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect(), glyph_csv, shapes: &[] }
+        Config { art_dir, bitmap_dir, glyph_dir, glyph_patterns: GLYPH_PATTERNS.iter().map(|s| s.to_string()).collect(), glyph_csv, shapes: &[] }
     }
 
     /// The vector glyph for the cell at (`x`, `y`) of `grid`, if there is
@@ -157,8 +155,10 @@ pub struct Report {
     pub curves: usize,
     pub bitmaps: usize,
     pub skipped: Vec<String>,
-    /// Glyphs cooked from vector SVGs (the rest are traced).
+    /// Glyphs cooked from vector SVGs.
     pub vector_glyphs: usize,
+    /// Glyphs with no SVG, cooked blank.
+    pub blank_glyphs: usize,
     /// Directories whose contents decide the output (for rerun-if-changed).
     pub dirs: Vec<PathBuf>,
     /// Inputs that were skipped or replaced, for the build to print.
@@ -371,75 +371,30 @@ impl Cooker {
         self.report.bitmaps += 1;
     }
 
-    fn cook_font(&mut self, config: &Config, csv: &std::collections::HashMap<(String, usize, usize), String>, grid: &FontGrid, bitmap: &trace::Bitmap) -> Result<(), Error> {
+    fn cook_font(&mut self, config: &Config, csv: &std::collections::HashMap<(String, usize, usize), String>, grid: &FontGrid) {
         for index in 0..grid.count {
-            let col = index % grid.columns;
-            let row = index / grid.columns;
-            let rect = trace::Rect { x: grid.u + col * grid.width, y: grid.v + row * grid.height, w: grid.width, h: grid.height };
-            if rect.x + rect.w > bitmap.width || rect.y + rect.h > bitmap.height {
-                break;
-            }
-            if let Some(path) = config.glyph_svg(csv, grid, index, rect.x, rect.y) {
+            let (x, y) = (grid.u + index % grid.columns * grid.width, grid.v + index / grid.columns * grid.height);
+            let art = config.glyph_svg(csv, grid, index, x, y).and_then(|path| {
                 self.report.inputs.push(path.clone());
-                // A glyph SVG that cannot be read or parsed falls back to the
-                // traced glyph, with a warning, like a missing one.
-                let art = std::fs::read_to_string(&path)
+                // A glyph SVG that cannot be read or parsed is cooked blank,
+                // with a warning.
+                std::fs::read_to_string(&path)
                     .map_err(|e| e.to_string())
-                    .and_then(|text| svg::parse(&text).map_err(|e| e.to_string()));
-                let mut art = match art {
-                    Ok(art) => art,
-                    Err(e) => {
-                        self.report.warnings.push(format!("{}: {e}; traced instead", path.display()));
-                        self.trace_glyph(grid, index, bitmap, &rect);
-                        continue;
-                    }
-                };
+                    .and_then(|text| svg::parse(&text).map_err(|e| e.to_string()))
+                    .map_err(|e| self.report.warnings.push(format!("{}: {e}; blank instead", path.display())))
+                    .ok()
+            });
+            let Some(mut art) = art else {
                 // Glyphs are placed by their top-left corner.
-                art.origin = Vec2::new(0.0, 0.0);
-                art.width = grid.width as f32;
-                art.height = grid.height as f32;
-                self.cook_svg(glyph_name(grid.name, index), art);
-                self.report.vector_glyphs += 1;
+                self.add_sprite(glyph_name(grid.name, index), Vec::new(), [grid.width as f32, grid.height as f32], Vec2::new(0.0, 0.0), compose::OVER, 0);
+                self.report.blank_glyphs += 1;
                 continue;
-            }
-            self.trace_glyph(grid, index, bitmap, &rect);
-        }
-        Ok(())
-    }
-
-    fn trace_glyph(&mut self, grid: &FontGrid, index: usize, bitmap: &trace::Bitmap, rect: &trace::Rect) {
-        let rect = *rect;
-        {
-            // Keep every alpha the glyph has, unless it is antialiased with
-            // more than 16 (font1), which is rounded to 16 steps.
-            let mut alphas: Vec<u8> = Vec::new();
-            for y in 0..rect.h {
-                for x in 0..rect.w {
-                    let a = bitmap.rgba[((rect.y + y) * bitmap.width + rect.x + x) * 4 + 3];
-                    if !alphas.contains(&a) {
-                        alphas.push(a);
-                    }
-                }
-            }
-            let levels = if alphas.len() > 17 { 16 } else { 256 };
-            let mut layers = Vec::new();
-            for traced in trace::trace(bitmap, &rect, levels) {
-                self.report.curves += traced.curves.len();
-                let g = slug::add_layer(&mut self.w, &traced.curves);
-                let mut layer = slug::gpu_layer(&g);
-                layer.paint = paint::SOLID;
-                layer.color = bits4(traced.color);
-                layers.push(layer);
-            }
-            // Glyphs are placed by their top-left corner.
-            self.add_sprite(
-                glyph_name(grid.name, index),
-                layers,
-                [grid.width as f32, grid.height as f32],
-                Vec2::new(0.0, 0.0),
-                compose::OVER,
-                sprite_flags::TRACED,
-            );
+            };
+            art.origin = Vec2::new(0.0, 0.0);
+            art.width = grid.width as f32;
+            art.height = grid.height as f32;
+            self.cook_svg(glyph_name(grid.name, index), art);
+            self.report.vector_glyphs += 1;
         }
     }
 }
@@ -493,10 +448,7 @@ pub fn cook(config: &Config) -> Result<(Vec<u8>, Report), Error> {
         c.report.inputs.push(config.glyph_csv.clone());
     }
     for grid in FONTS {
-        let path = config.font_dir.join(format!("{}.png", grid.sheet));
-        c.report.inputs.push(path.clone());
-        let (width, height, rgba) = read_png(&path)?;
-        c.cook_font(config, &csv, grid, &trace::Bitmap { width, height, rgba: &rgba })?;
+        c.cook_font(config, &csv, grid);
     }
     for (name, file, origin) in BITMAPS {
         let path = config.bitmap_dir.join(file);
@@ -521,7 +473,7 @@ mod tests {
         std::fs::write(dir.join("font0_48_96.svg"), "<svg/>").unwrap();
         std::fs::create_dir_all(dir.join("strips")).unwrap();
         std::fs::write(dir.join("strips/font2_strip2.svg"), "<svg/>").unwrap();
-        let mut config = Config::new(PathBuf::new(), PathBuf::new(), PathBuf::new());
+        let mut config = Config::new(PathBuf::new(), PathBuf::new());
         config.glyph_dir = dir.clone();
         let csv: std::collections::HashMap<_, _> = [(("font2".to_string(), 0, 32), "strips/font2_strip2".to_string())].into();
         let strip = FONTS.iter().find(|g| g.name == "strip").unwrap();

@@ -1,6 +1,6 @@
 //! The cooked art pack.
 //!
-//! `wf-cook` turns the vector art (and the traced fonts) into one blob at build
+//! `wf-cook` turns the vector art and glyphs into one blob at build
 //! time. The blob has two halves:
 //!
 //! * the **GPU half**: four texture images whose bytes are uploaded as they
@@ -122,8 +122,6 @@ const _: () = assert!(std::mem::size_of::<GpuLayer>() == (LAYER_TEXELS as usize)
 pub mod sprite_flags {
     /// The art was drawn additively by the original game (data-blend).
     pub const ADDITIVE_ART: u32 = 0x1;
-    /// The art was traced from a bitmap by the cooker (fonts), not hand drawn.
-    pub const TRACED: u32 = 0x2;
     /// The sprite is a bitmap in the atlas (`Sprite::bitmap`), not Slug
     /// layers; `bounds` is its quad, one atlas texel per local unit.
     pub const BITMAP: u32 = 0x4;

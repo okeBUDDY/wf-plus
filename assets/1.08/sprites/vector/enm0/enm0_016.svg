@@ -1,0 +1,4 @@
+<svg data-note="outline rebuild; nose sides as straight lines (tools/handbuild_enm0_noses.py)" xmlns="http://www.w3.org/2000/svg" width="24" height="48" viewBox="0 0 24 48" data-origin="12 40">
+<path fill="#ffffff" fill-opacity="0.267" fill-rule="nonzero" d="M1 29 L8 1 L16 1 L23 29 L23 29.5 L23 32.5 L23 32.707 L22 33.707 L22 45.707 L20.707 47 L16.293 47 L15 45.707 L15 45 L7.293 45 L1 38.707 L1 35.5 L1 29.5 Z"/>
+<path fill="#ffffff" fill-opacity="1.000" fill-rule="nonzero" d="M1 29 L8 1 L16 1 L23 29 L23 29.5 L23 32.707 L22 33.707 L22 45.707 L20.707 47 L16.293 47 L15 45.707 L15 45 L7.293 45 L1 38.707 L1 35.5 L1 29.5 Z M2 35 L15 35 L15 33.293 L16.293 32 L20.707 32 L21.5 32.793 L22 32.293 L22 29.5 L22 29 L15.25 2 L8.75 2 L2 29 L2 29.5 L2.103 29.5 L2 29.653 Z M21 45.293 L21 33.707 L20.293 33 L16.707 33 L16 33.707 L16 45.293 L16.707 46 L20.293 46 Z M7.707 44 L15 44 L15 36 L2 36 L2 38.293 Z"/>
+</svg>

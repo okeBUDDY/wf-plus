@@ -132,14 +132,23 @@ the original game's files, whose licence allows public redistribution only
 with the author's permission. `--with-data` adds data.bin and the original
 readmes, for a build of your own.
 
-Building needs the vector art and the font sheets, which `crates/wf/build.rs`
-cooks into the executable. By default they come from the project folder next
-to this repository (`../software/warning-forever/1.08`). Overrides:
+`android/` is the Gradle project for Android (arm64-v8a and x86_64,
+Android 7 and later); it builds the same crate as `libwfplus.so` through
+cargo-ndk. `gradle assembleRelease` makes the APK to sideload, signed with
+the key that `-PWF_SIGNING=signing.properties` names (`storeFile`,
+`storePassword`, `keyAlias`, `keyPassword`; kept outside the repository, and
+the same key for every release so that updates install over each other).
+`-PWF_DATA=path/to/data.bin` bundles data.bin and the readmes, for a build
+of your own.
+
+Building needs the art, which `crates/wf/build.rs` cooks into the
+executable. It is in [`assets/1.08`](assets/1.08): the vector art redrawn
+from version 1.08's sprites and fonts, and the one original image the build
+still reads, the title character (see its README). Overrides:
 
 | Variable | What |
 |---|---|
 | `WF_ART_DIR` | The vector art, `<sheet>/<sheet>_<id>.svg`. |
-| `WF_FONT_DIR` | `font0.png` .. `font2.png`, traced when a glyph has no SVG. |
 | `WF_BITMAP_DIR` | The cut sprites, for the art that stays a bitmap (the title character). |
 | `WF_GLYPH_DIR`, `WF_GLYPH_PATTERNS`, `WF_GLYPH_CSV` | Where the vector glyph SVGs are and how they are named (`;`-separated patterns using `{font}`, `{index}`, `{sheet}`, `{x}`, `{y}`, `{csv}`). |
 
@@ -204,7 +213,7 @@ title menu, like the right button, it moves to EXIT).
 | Crate | |
 |---|---|
 | `crates/wf-art` | The cooked art format: a GPU half (texture images uploaded as they are) and a CPU half (the sprite table). |
-| `crates/wf-cook` | The build-time cooker: SVG art to Slug curves and bands, vector or traced glyphs, the bitmap atlas, the baked feTurbulence lattice. |
+| `crates/wf-cook` | The build-time cooker: SVG art to Slug curves and bands, the vector glyphs, the bitmap atlas, the baked feTurbulence lattice. |
 | `crates/wf-engine` | The engine: app loop, time, renderer, layout, input, audio mixer, config, asset registry, platform (SDL3). |
 | `crates/wf` | The game: deterministic state that emits a draw list each tick. |
 
@@ -269,8 +278,8 @@ points plus unit normals, and the shader offsets them by half a pixel under
 the instance's transform, so lines stay one pixel wide at any scale, as
 Direct3D 7's did. Shapes whose points come from game logic (lasers, the game
 over chart, the options' bars) are rebuilt on the CPU into a small dynamic
-region of the textures, only when their points change. Glyphs come from vector SVGs
-when present, else from exact traces of the font sheets. The title character
+region of the textures, only when their points change. Glyphs come from vector SVGs;
+a glyph with none (the font sheets' empty cells) is blank. The title character
 stays the original pixels in a bitmap atlas, drawn with sharp-bilinear
 sampling.
 
@@ -303,9 +312,22 @@ thin quads. Both are on by default; `sprite_cache = off` or
 
 ## Known gaps
 
-* Vector glyphs depend on the glyph SVG set; missing or unreadable ones are
-  traced from the font sheets, with a build warning.
+* Vector glyphs depend on the glyph SVG set; a missing one is blank, and
+  an unreadable one is blank with a build warning.
 * The kana glyphs (the Japanese boss names, BOSS NAME in the options) did
   not vectorize well and are still a work in progress, at low priority.
 * As in 1.08, a game over whose score does not rank fades straight to the
   title, and `best.rec` is never written.
+
+## Licence
+
+There is no licence for this repository. Warning Forever+ is a port of the
+code and art of Warning Forever (© Hikoza T. Ohkubo, Hikware), made from an
+unofficial decompilation, so it is not ours to license: all rights stay with
+their respective owners. The art in [`assets/1.08`](assets/1.08) is redrawn
+from, or copied out of, version 1.08.
+
+The third-party software the builds contain (SDL3, wgpu and the other Rust
+crates) is under its own licences, collected in
+[`licenses/THIRD-PARTY-LICENSES.txt`](licenses/THIRD-PARTY-LICENSES.txt)
+(`scripts/licenses.sh` regenerates it) and shipped with every build.

@@ -38,6 +38,16 @@ def minSdk = 24
 def repoRoot = rootProject.projectDir.parentFile
 def rustLibs = layout.buildDirectory.dir('rust/jniLibs')
 def wfAssets = layout.buildDirectory.dir('generated/wfAssets')
+// The release key, kept outside the repository: a properties file
+// (storeFile, relative to the file, storePassword, keyAlias, keyPassword)
+// named by -PWF_SIGNING=... or WF_SIGNING. Without it the release APK is
+// left unsigned.
+def signingFile = (project.findProperty('WF_SIGNING') ?: System.getenv('WF_SIGNING'))?.with { file(it) }
+def signing = new Properties()
+if (signingFile != null) {
+    if (!signingFile.isFile()) throw new GradleException("WF_SIGNING: there is no ${signingFile}")
+    signingFile.withInputStream { signing.load(it) }
+}
 
 android {
     // The Java package of WarningForeverActivity; the applicationId (the
@@ -56,8 +66,19 @@ android {
         resValue 'string', 'app_name', appName
         ndk { abiFilters(*abis) }
     }
+    signingConfigs {
+        if (signingFile != null) {
+            release {
+                storeFile new File(signingFile.parentFile, signing.getProperty('storeFile'))
+                storePassword signing.getProperty('storePassword')
+                keyAlias signing.getProperty('keyAlias')
+                keyPassword signing.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (signingFile != null) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -130,4 +151,11 @@ def bundleData = tasks.register('bundleWfData') {
     }
 }
 
-tasks.named('preBuild') { dependsOn cargoNdk, bundleData }
+// The third-party licence notices (licenses/, see scripts/licenses.sh) go
+// into every APK's assets.
+def bundleLicenses = tasks.register('bundleLicenses', Copy) {
+    from(new File(repoRoot, 'licenses/THIRD-PARTY-LICENSES.txt'))
+    into(wfAssets)
+}
+
+tasks.named('preBuild') { dependsOn cargoNdk, bundleData, bundleLicenses }

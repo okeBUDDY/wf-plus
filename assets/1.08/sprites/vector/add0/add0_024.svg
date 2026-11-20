@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="-3 -3 30 30" data-origin="12 12" data-blend="additive" data-ramp="radial 12 12 15" data-stops="0.0000:#fefefe 0.5000:#f0f0f0 0.5667:#e1e1e1 0.6000:#cfcfcf 0.7667:#252626 0.8000:#0f0f0f 0.8333:#030303 1.0000:#000000" data-note="max error 13 of 255">
+<defs><radialGradient id="ramp" gradientUnits="userSpaceOnUse" cx="12" cy="12" r="15"><stop offset="0.0000" stop-color="#fefefe"/><stop offset="0.5000" stop-color="#f0f0f0"/><stop offset="0.5667" stop-color="#e1e1e1"/><stop offset="0.6000" stop-color="#cfcfcf"/><stop offset="0.7667" stop-color="#252626"/><stop offset="0.8000" stop-color="#0f0f0f"/><stop offset="0.8333" stop-color="#030303"/><stop offset="1.0000" stop-color="#000000"/></radialGradient></defs>
+<path fill="url(#ramp)" d="M-3 -3 L27 -3 L27 27 L-3 27 Z"/>
+</svg>

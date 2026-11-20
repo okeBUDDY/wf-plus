@@ -1,12 +1,11 @@
 //! Cooks the art into the GPU and CPU halves at build time (see wf-art).
 //!
 //! Inputs: `WF_ART_DIR` (the vector art, one directory per sheet) and
-//! `WF_FONT_DIR` (font0.png .. font2.png). Both default to the project's
-//! shared folder next to this repository. `WF_BITMAP_DIR` holds the cut
-//! original sprites for art that is still drawn as a bitmap. Vector glyphs
-//! under `WF_GLYPH_DIR` (default `<art dir>/fonts`, file names from
-//! `WF_GLYPH_PATTERNS`, see `wf_cook::GLYPH_PATTERNS`) replace the traced
-//! glyphs of the font sheets one by one.
+//! `WF_BITMAP_DIR` (the cut original sprites for art that is still drawn
+//! as a bitmap). Both default to the copies in `assets/1.08` (see its
+//! README). The glyphs are vector too, under `WF_GLYPH_DIR` (default
+//! `<art dir>/fonts`, file names from `WF_GLYPH_PATTERNS`, see
+//! `wf_cook::GLYPH_PATTERNS`); a glyph with none is blank.
 
 use std::path::PathBuf;
 
@@ -75,13 +74,13 @@ fn main() {
     }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     embed_icon(&manifest);
-    let game = manifest.join("../../../software/warning-forever/1.08");
+    let game = manifest.join("../../assets/1.08");
     let dir = |var: &str, default: PathBuf| {
         println!("cargo:rerun-if-env-changed={var}");
         std::env::var_os(var).map(PathBuf::from).unwrap_or(default)
     };
     let art_dir = dir("WF_ART_DIR", game.join("sprites/vector"));
-    let mut config = wf_cook::Config::new(art_dir.clone(), dir("WF_FONT_DIR", game.join("data")), dir("WF_BITMAP_DIR", game.join("sprites/sheets")));
+    let mut config = wf_cook::Config::new(art_dir.clone(), dir("WF_BITMAP_DIR", game.join("sprites/sheets")));
     config.glyph_dir = dir("WF_GLYPH_DIR", art_dir.join("fonts"));
     config.glyph_csv = dir("WF_GLYPH_CSV", art_dir.join("../fonts/glyphs.csv"));
     println!("cargo:rerun-if-env-changed=WF_GLYPH_PATTERNS");
@@ -107,9 +106,10 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("art.wfa");
     std::fs::write(&out, &blob).expect("write the art pack");
     println!(
-        "cargo:warning=art: {} sprites ({} vector glyphs), {} layers, {} curves, {} KiB",
+        "cargo:warning=art: {} sprites ({} vector glyphs, {} blank), {} layers, {} curves, {} KiB",
         report.sprites,
         report.vector_glyphs,
+        report.blank_glyphs,
         report.layers,
         report.curves,
         blob.len() / 1024

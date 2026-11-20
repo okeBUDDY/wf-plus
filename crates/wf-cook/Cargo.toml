@@ -1,8 +1,9 @@
 [package]
 name = "wf-cook"
-description = "Build-time art cooker: SVG art and font sheets -> Slug curve/band data."
+description = "Build-time art cooker: SVG art and glyphs -> Slug curve/band data."
 edition.workspace = true
 version.workspace = true
+publish.workspace = true
 
 [dependencies]
 wf-art.workspace = true

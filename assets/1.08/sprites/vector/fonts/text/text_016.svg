@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-origin="0 0" data-char="U+0030" data-advance="16" data-note="hand-placed 1 px strokes through the pixel centres with mitred joins (tools/font_strokes.py)">
+<path fill="#ffffff" d="M1 15 L1 14.293 L1 1 L14.293 1 L15 1 L15 1.707 L15 15 L1.707 15 Z M2 13.293 L13.293 2 L2 2 Z M2.707 14 L14 14 L14 2.707 Z"/>
+</svg>

@@ -900,35 +900,11 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     let shot = o.screenshot.clone();
     let counter = std::cell::Cell::new(0u32);
     #[cfg(target_os = "android")]
-    let mut black_check = Some(std::time::Instant::now());
+    let mut black_check = BlackCheck::new();
     wf_engine::app::run_windowed(&mut game, &mut platform, &mut display, display_cfg, &mut input, |display, frame| {
         counter.set(counter.get() + 1);
-        // Android, once, 5 s in: the title always shows something by then,
-        // so a frame with no lit pixel means the GPU draws nothing (a
-        // driver problem) rather than a hang; reported instead of a black
-        // screen with no word.
         #[cfg(target_os = "android")]
-        if black_check.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(5)) {
-            black_check = None;
-            use wgpu::TextureFormat as F;
-            // The readback reads 4-byte texels.
-            let format = display.renderer.format();
-            if matches!(format, F::Rgba8Unorm | F::Rgba8UnormSrgb | F::Bgra8Unorm | F::Bgra8UnormSrgb) {
-                let (w, h) = display.size();
-                let rgba = display.renderer.render_to_rgba(frame, w, h);
-                let lit = rgba.chunks_exact(4).filter(|p| p[0] | p[1] | p[2] != 0).count();
-                log::breadcrumb(&format!("frame check: {lit} of {} pixels lit", rgba.len() / 4));
-                if lit == 0 {
-                    platform::android::fatal(&format!(
-                        "The GPU drew an all-black frame ({w}x{h}, {} frames in).\nLast step: {}\n\nPlease send the logcat (tag wf).",
-                        counter.get(),
-                        log::last_breadcrumb()
-                    ));
-                }
-            } else {
-                log::breadcrumb(&format!("frame check skipped ({format:?})"));
-            }
-        }
+        black_check.frame(display, frame, counter.get());
         if let (Some(path), false) = (&shot, screenshot_taken)
             && counter.get() >= frames
         {
@@ -942,6 +918,57 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     drop(display);
     log::breadcrumb("display dropped");
     Ok(())
+}
+
+/// Android: tells the user when the GPU draws nothing at all (a driver
+/// problem) instead of leaving a silent black screen. The game shows black
+/// frames on its own (fades, the moment before the splash, a pause), so one
+/// frame proves nothing: frames are read back at [`BlackCheck::AT`] after
+/// the start, and only if none of them has a lit pixel is it reported.
+/// Done for good once one is lit.
+#[cfg(target_os = "android")]
+struct BlackCheck {
+    start: std::time::Instant,
+    /// The next sample in `AT`; `AT.len()` once done.
+    next: usize,
+}
+
+#[cfg(target_os = "android")]
+impl BlackCheck {
+    const AT: [std::time::Duration; 3] =
+        [std::time::Duration::from_secs(5), std::time::Duration::from_secs(7), std::time::Duration::from_secs(9)];
+
+    fn new() -> Self {
+        BlackCheck { start: std::time::Instant::now(), next: 0 }
+    }
+
+    fn frame(&mut self, display: &mut wf_engine::app::Display, frame: &gfx::DrawList, frames: u32) {
+        use wgpu::TextureFormat as F;
+        if self.next >= Self::AT.len() || self.start.elapsed() < Self::AT[self.next] {
+            return;
+        }
+        // The readback reads 4-byte texels.
+        let format = display.renderer.format();
+        if !matches!(format, F::Rgba8Unorm | F::Rgba8UnormSrgb | F::Bgra8Unorm | F::Bgra8UnormSrgb) {
+            log::breadcrumb(&format!("frame check skipped ({format:?})"));
+            self.next = Self::AT.len();
+            return;
+        }
+        let (w, h) = display.size();
+        let rgba = display.renderer.render_to_rgba(frame, w, h);
+        let lit = rgba.chunks_exact(4).filter(|p| p[0] | p[1] | p[2] != 0).count();
+        log::breadcrumb(&format!("frame check {}/{}: {lit} of {} pixels lit", self.next + 1, Self::AT.len(), rgba.len() / 4));
+        if lit > 0 {
+            self.next = Self::AT.len();
+            return;
+        }
+        self.next += 1;
+        if self.next == Self::AT.len() {
+            platform::android::fatal(&format!(
+                "The GPU drew only black frames ({w}x{h}; {frames} frames, checked at 5, 7 and 9 s).\n\nPlease send the logcat (tag wf)."
+            ));
+        }
+    }
 }
 
 /// SDL_main on Android (see android.rs): the window only, errors shown in a

@@ -14,6 +14,23 @@ plugins {
     id 'com.android.application'
 }
 
+// The app's name and version come from crates/wf/src/app_info.rs, the
+// one place the game keeps its identity (NAME, VERSION).
+def appInfoFile = new File(rootProject.projectDir.parentFile, 'crates/wf/src/app_info.rs')
+def appInfoText = appInfoFile.text
+def appInfo = { String pattern ->
+    def m = appInfoText =~ pattern
+    if (!m.find()) throw new GradleException("${appInfoFile}: no match for ${pattern}")
+    m.group(1)
+}
+def appName = appInfo(/pub const NAME: &str = "([^"]*)";/)
+def appVersion = appInfo(/pub const VERSION: \[u16; 3\] = \[([^\]]*)\];/).split(',').collect { it.trim() as int }
+// Warning Forever+'s own version, major.minor.patch: 1.0.0 -> "1.0.0" and
+// 10000 (major * 10000 + minor * 100 + patch; minor and patch under 100).
+if (appVersion[1] > 99 || appVersion[2] > 99) throw new GradleException("version ${appVersion.join('.')}: minor and patch must be under 100")
+def appVersionName = appVersion.join('.')
+def appVersionCode = appVersion[0] * 10000 + appVersion[1] * 100 + appVersion[2]
+
 def abis = ['arm64-v8a', 'x86_64']
 def minSdk = 24
 def repoRoot = rootProject.projectDir.parentFile
@@ -21,17 +38,20 @@ def rustLibs = layout.buildDirectory.dir('rust/jniLibs')
 def wfAssets = layout.buildDirectory.dir('generated/wfAssets')
 
 android {
+    // The Java package of WarningForeverActivity; the applicationId (the
+    // store identity) is the wf.applicationId property, gradle.properties.
     namespace = 'io.github.okebuddy.wfplus'
     compileSdk = 35
     buildToolsVersion = '35.0.1'
     ndkVersion = '27.3.13750724'
 
     defaultConfig {
-        applicationId 'io.github.okebuddy.wfplus'
+        applicationId project.property('wf.applicationId')
         minSdkVersion minSdk
         targetSdkVersion 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode appVersionCode
+        versionName appVersionName
+        resValue 'string', 'app_name', appName
         ndk { abiFilters(*abis) }
     }
     buildTypes {

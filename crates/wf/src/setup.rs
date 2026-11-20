@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use crate::art::Art;
 use crate::data_import;
 use crate::game::background::BackgroundGrid;
+use crate::game::fn_title::PLUS_VIOLET;
 use crate::game::text::Fonts;
 use crate::gfx::{Argb, Blend, DrawList, Primitive, SpriteId, Transform};
 use wf_engine::input::{Action, ActionState};
@@ -48,9 +49,6 @@ const DIM_AMBER: Argb = Argb(0xff90_7800);
 const RED: Argb = Argb(0xffff_4040);
 /// "WARNING FOREVER" as the title screen's subtitle draws it.
 const TITLE_AMBER: Argb = Argb(0xffff_d000);
-/// The "+": the arena border's violet ([`wf_engine::app::ARENA_BORDER`]),
-/// opaque.
-const PLUS_VIOLET: Argb = Argb(0xff00_0000 | (wf_engine::app::ARENA_BORDER & 0xff_ffff));
 
 
 /// The screen's two buttons: the download page, and the file picker.

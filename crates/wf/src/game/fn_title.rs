@@ -32,6 +32,9 @@ const MENU_EXIT: i16 = 3;
 const MENU_ITEM_COUNT: i16 = 4;
 
 const TITLE: &[u8] = b"WARNING   FOREVER"; // 0x45dbbc
+/// The "+" after the whole title: the arena border's violet
+/// ([`wf_engine::app::ARENA_BORDER`]), opaque.
+pub const PLUS_VIOLET: Argb = Argb(0xff00_0000 | (wf_engine::app::ARENA_BORDER & 0xff_ffff));
 const MENU_ITEMS: [&str; 4] = ["GAME_START", "  REPLAY", "  OPTION", "   EXIT"]; // 0x45dbd0
 const SKIP_KEYS: u16 = input::SHOT | input::SLOW | input::WEAPON_SELECT;
 
@@ -253,6 +256,13 @@ impl Stage for FnTitle {
             }
         }
         actor::draw_all_moved(cx, &moved);
+        // Warning Forever+: a violet "+" after the subtitle once the whole
+        // title is shown, following it as it moves. Display only.
+        if cx.obj_texts.first().is_some_and(|t| t.text.len() == TITLE.len()) {
+            let sub = cx.actors.get(self.subtitle);
+            let (x, y) = (sub.x() + TITLE.len() as f32 * 16.0, sub.y());
+            cx.fonts.text.print(&mut cx.draw, x, y, b"+", None, PLUS_VIOLET, -1, Blend::Normal);
+        }
     }
 
     fn is_menu(&self) -> bool {

@@ -6,6 +6,11 @@ edition.workspace = true
 version = "1.0.8"
 build = "build.rs"
 
+# `wfplus` (wf+.exe in the Windows zip, see scripts/build-windows.sh).
+[[bin]]
+name = "wfplus"
+path = "src/main.rs"
+
 [dependencies]
 wf-art.workspace = true
 wf-engine.workspace = true
@@ -24,8 +29,6 @@ raw-window-handle = "0.6"
 [build-dependencies]
 wf-cook.workspace = true
 wf-art.workspace = true
-
-# The exe's icon resource. Cargo matches a build dependency's cfg against
-# the host, so Windows builds embed it (see build.rs); others never fetch it.
-[target.'cfg(target_os = "windows")'.build-dependencies]
+# The exe's version resource, icon and manifest: build.rs uses it when
+# the target is Windows (a build dependency's cfg would match the host).
 winresource = "0.1.34"

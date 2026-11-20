@@ -16,8 +16,8 @@ pub const COPYRIGHT: &str = "\u{a9} 2003-2012 Hikoza.T.Ohkubo";
 pub const UPDATER: &str = "okeBUDDY";
 /// The Windows version resource's Comments.
 pub const COMMENTS: &str = "Updated by okeBUDDY";
-pub const ORIGINAL_FILENAME: &str = "wf.exe";
-pub const INTERNAL_NAME: &str = "wf";
+pub const ORIGINAL_FILENAME: &str = "wf+.exe";
+pub const INTERNAL_NAME: &str = "wf+";
 /// The resource language: US English.
 pub const LANGUAGE: u16 = 0x0409;
 

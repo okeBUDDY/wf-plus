@@ -20,31 +20,43 @@ mod app_info {
     include!("src/app_info.rs");
 }
 
-#[cfg(target_os = "windows")]
 mod windows_resource {
     use super::app_info;
     include!("windows_resource.rs");
 }
 
 /// Embeds the version resource, the icon (assets/icon/wf.ico) and the
-/// manifest when building for Windows on Windows (winresource needs the
-/// Windows resource compiler).
-#[cfg(target_os = "windows")]
+/// manifest when the target is Windows, on any host: a cross build
+/// (x86_64-pc-windows-gnu from Linux) uses MinGW's
+/// x86_64-w64-mingw32-windres (`WINDRES` overrides it).
 fn embed_icon(manifest: &std::path::Path) {
+    let env = |var: &str| std::env::var(var).unwrap_or_default();
+    if env("CARGO_CFG_TARGET_OS") != "windows" {
+        return;
+    }
     let ico = manifest.join("../../assets/icon/wf.ico");
     println!("cargo:rerun-if-changed={}", ico.display());
     println!("cargo:rerun-if-changed=src/app_info.rs");
     println!("cargo:rerun-if-changed=windows_resource.rs");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let res = windows_resource::windows_resource(&ico.to_string_lossy());
-        if let Err(e) = res.compile() {
-            println!("cargo:warning=windows resource: {e}");
+    println!("cargo:rerun-if-env-changed=WINDRES");
+    let mut res = windows_resource::windows_resource(&ico.to_string_lossy());
+    let prefix = match env("CARGO_CFG_TARGET_ARCH").as_str() {
+        "x86_64" => "x86_64-w64-mingw32-",
+        "x86" => "i686-w64-mingw32-",
+        _ => "",
+    };
+    if env("HOST") != env("TARGET") && env("CARGO_CFG_TARGET_ENV") == "gnu" && !prefix.is_empty() {
+        if std::env::var_os("WINDRES").is_none() {
+            res.set_windres_path(&format!("{prefix}windres"));
+        }
+        if std::env::var_os("AR").is_none() {
+            res.set_ar_path(&format!("{prefix}ar"));
         }
     }
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=windows resource: {e}");
+    }
 }
-
-#[cfg(not(target_os = "windows"))]
-fn embed_icon(_manifest: &std::path::Path) {}
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

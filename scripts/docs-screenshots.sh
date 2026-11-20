@@ -6,7 +6,7 @@
 set -eu
 DATA=${1:-${WF_DATA:-data.bin}}
 REC_DIR=${2:-recordings}
-WF=$(realpath "${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wf}")
+WF=$(realpath "${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wfplus}")
 DATA=$(realpath "$DATA")
 OUT=$(realpath "$(dirname "$0")/../docs")
 WORK=$(mktemp -d)

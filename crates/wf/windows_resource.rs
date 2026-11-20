@@ -1,8 +1,8 @@
 // The Windows version resource, icon and manifest, from src/app_info.rs.
-// Included by build.rs (Windows hosts) and usable by a check tool that
+// Included by build.rs (Windows targets) and usable by a check tool that
 // writes and compiles the .rc elsewhere.
 
-/// The resource for `wf.exe`; `ico` is the icon file.
+/// The resource for `wf+.exe`; `ico` is the icon file.
 pub fn windows_resource(ico: &str) -> winresource::WindowsResource {
     use app_info::*;
     let mut res = winresource::WindowsResource::new();

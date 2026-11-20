@@ -72,11 +72,16 @@ After GAME START the title asks for the arena; the choice is remembered.
 
 ```
 cargo build --release
-target/release/wf --data path/to/data.bin
+target/release/wfplus --data path/to/data.bin
 ```
 
 SDL3 is built from source (`sdl3` crate, static), which needs CMake and a C
 compiler; on Linux also the X11/Wayland/PulseAudio development headers.
+
+The executable is `wfplus` (`wf+.exe` on Windows). `scripts/build-windows.sh`
+cross-builds the Windows release from Linux (rustup target
+`x86_64-pc-windows-gnu`, mingw-w64): a static `wf+.exe` with its icon,
+version resource and manifest, zipped with data.bin and the original readmes.
 
 Building needs the vector art and the font sheets, which `crates/wf/build.rs`
 cooks into the executable. By default they come from the project folder next
@@ -99,6 +104,7 @@ Options:
 | `--fullscreen`, `--borderless`, `--windowed` | Window mode. |
 | `--render-scale K` | Render at K times the window's pixels, then stretch. |
 | `--show-fps` | Show the frame rate. |
+| `--caps desktop\|android` | Show the options as on another platform (Android omits WINDOW MODE and RESOLUTION). |
 | `--bench SECONDS` | With `--headless`: measure the uncapped frame rate offscreen. |
 | `--replay rec/<file>.rec` | Play a replay (relative to the home folder). |
 | `--headless` | No window and no audio device: run frames as fast as possible. |

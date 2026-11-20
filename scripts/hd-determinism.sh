@@ -9,7 +9,7 @@
 # Needs a release build (cargo build --release -p wf) and python3.
 set -u
 DATA=${1:-${WF_DATA:-data.bin}}
-WF=${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wf}
+WF=${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wfplus}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 fail=0

@@ -10,7 +10,7 @@
 set -u
 REC_DIR=${1:-recordings}
 DATA=${2:-${WF_DATA:-data.bin}}
-WF=${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wf}
+WF=${WF_BIN:-${CARGO_TARGET_DIR:-target}/release/wfplus}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 fail=0

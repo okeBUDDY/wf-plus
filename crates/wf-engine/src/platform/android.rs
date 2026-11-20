@@ -154,7 +154,42 @@ static REFRESH: AtomicU8 = AtomicU8::new(0);
 /// 0 auto, 1 Vulkan, 2 GL.
 static BACKEND: AtomicU8 = AtomicU8::new(0);
 static SAFE: AtomicBool = AtomicBool::new(false);
-static FIRST_FRAME: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// wf-plus.ini `android.status_overlay = off`: never show the steps.
+static OVERLAY_OFF: AtomicBool = AtomicBool::new(false);
+/// The activity is paused (onPause .. onResume), from Java.
+static PAUSED: AtomicBool = AtomicBool::new(false);
+/// When the activity last resumed.
+static RESUMED_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// The activity's onPause (true) and onResume (false). The game thread
+/// cannot report this itself: with SDL_ANDROID_BLOCK_ON_PAUSE it is
+/// blocked in the event pump until the resume.
+pub fn set_activity_paused(paused: bool) {
+    PAUSED.store(paused, Ordering::Relaxed);
+    if !paused && let Ok(mut t) = RESUMED_AT.lock() {
+        *t = Some(std::time::Instant::now());
+    }
+}
+
+/// Paused, or resumed less than `grace` ago (the watchdog waits then).
+pub fn paused_or_resuming(grace: std::time::Duration) -> bool {
+    PAUSED.load(Ordering::Relaxed) || RESUMED_AT.lock().ok().and_then(|t| *t).is_some_and(|t| t.elapsed() < grace)
+}
+
+/// Shows `header` and the game thread's steps on screen (unless
+/// android.status_overlay = off); taken away by [`status_tick`] once
+/// frames have flowed for 10 s, or by a tap on it.
+pub fn show_status(header: &str) {
+    if !OVERLAY_OFF.load(Ordering::Relaxed) {
+        crate::log::show_status(&status_path(), header);
+    }
+}
+
+/// The activity's close bar was tapped.
+pub fn dismiss_status() {
+    crate::log::breadcrumb("status overlay closed (tap)");
+    crate::log::hide_status();
+}
 
 /// The activity's intent extras (codes as in the statics above).
 pub fn set_intent_overrides(backend: i32, refresh: i32) {
@@ -217,6 +252,8 @@ pub fn launch() {
         },
         r => r,
     };
+    let overlay_off = matches!(ini.get("android.status_overlay").map(str::to_ascii_lowercase).as_deref(), Some("off" | "false" | "0"));
+    OVERLAY_OFF.store(overlay_off, Ordering::Relaxed);
     BACKEND.store(backend, Ordering::Relaxed);
     REFRESH.store(refresh, Ordering::Relaxed);
     SAFE.store(safe, Ordering::Relaxed);
@@ -232,34 +269,30 @@ pub fn launch() {
         },
         dir.join("wf-log.txt").display()
     ));
+    // A status file from an earlier process (one killed while showing it)
+    // must not outlive it: hide_status only knows this process's.
+    crate::log::hide_status();
+    let _ = std::fs::remove_file(status_path());
     if safe {
-        crate::log::show_status(
-            &status_path(),
+        show_status(
             &format!(
                 "WARNING FOREVER+ SAFE MODE: the last start showed no frame.\nRenderer backend {backend_name}, refresh-rate requests {refresh_name}.\nThe next start is normal again. Steps (also in {}):",
                 dir.join("wf-log.txt").display()
             ),
         );
-    } else {
-        crate::log::hide_status();
     }
 }
 
 /// The first frame is on screen: the launch worked.
 pub fn first_frame() {
     let _ = std::fs::remove_file(storage().join("wf-launch-pending"));
-    if let Ok(mut f) = FIRST_FRAME.lock() {
-        f.get_or_insert_with(std::time::Instant::now);
-    }
 }
 
-/// Called every half second (the watchdog): takes the on-screen steps
-/// (safe mode, or a slow start the watchdog reported) away 10 s after the
-/// first frame.
-pub fn status_tick() {
-    static DONE: AtomicBool = AtomicBool::new(false);
-    let shown = FIRST_FRAME.lock().ok().and_then(|f| *f);
-    if shown.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(10)) && !DONE.swap(true, Ordering::Relaxed) {
+/// Called every half second by the watchdog with the time frames have
+/// been flowing without a break: takes the on-screen steps away once that
+/// reaches 10 s (every time they are shown, not just once).
+pub fn status_tick(flowing: Option<std::time::Duration>) {
+    if flowing.is_some_and(|d| d >= std::time::Duration::from_secs(10)) {
         crate::log::hide_status();
     }
 }

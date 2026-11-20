@@ -55,3 +55,24 @@ pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nat
 ) -> i32 {
     platform::android::refresh_state() as i32
 }
+
+/// WarningForeverActivity.nativeSetPaused: onPause (true) and onResume
+/// (false), for the watchdog.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nativeSetPaused(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    paused: u8,
+) {
+    platform::android::set_activity_paused(paused != 0);
+}
+
+/// WarningForeverActivity.nativeDismissStatus: the overlay's close bar was
+/// tapped.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_okebuddy_wfplus_WarningForeverActivity_nativeDismissStatus(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+) {
+    platform::android::dismiss_status();
+}

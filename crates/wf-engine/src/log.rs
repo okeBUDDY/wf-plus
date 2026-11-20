@@ -107,6 +107,11 @@ pub fn hide_status() {
     });
 }
 
+/// The status file is being kept.
+pub fn status_shown() -> bool {
+    with_crumbs(|c| c.status.is_some()).unwrap_or(false)
+}
+
 fn steps_text(c: &Crumbs) -> String {
     let mut s = String::new();
     for (t, msg) in &c.recent {

@@ -16,6 +16,7 @@ import android.view.Surface;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -68,10 +69,19 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
     /** 0 not decided yet, 1 ask for the top refresh rate, 2 do not. */
     private static native int nativeRefreshState();
 
+    /** onPause (true) / onResume (false), for the native watchdog. */
+    private static native void nativeSetPaused(boolean paused);
+
+    /** The overlay's close bar was tapped. */
+    private static native void nativeDismissStatus();
+
+    /** When this activity was created: an older status file is stale. */
+    private long createdAt;
+
     /** How often the status file is polled. */
     private static final long STATUS_POLL_MS = 500;
 
-    private ScrollView statusView;
+    private LinearLayout statusView;
     private TextView statusText;
     private String statusShown;
     private final Runnable pollStatus = new Runnable() {
@@ -124,6 +134,14 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
         } catch (Throwable t) {
             Log.w(TAG, "intent overrides: " + t);
         }
+        // A status file left by an earlier process is stale (the native
+        // side writes a new one in safe mode, after this).
+        createdAt = System.currentTimeMillis();
+        try {
+            statusFile().delete();
+        } catch (Throwable t) {
+            Log.w(TAG, "status: " + t);
+        }
         ui.postDelayed(pollStatus, STATUS_POLL_MS);
         try {
             displayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
@@ -149,6 +167,26 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             displayManager = null;
         }
         super.onDestroy();
+    }
+
+    @Override
+    protected void onPause() {
+        try {
+            nativeSetPaused(true);
+        } catch (Throwable t) {
+            Log.w(TAG, "pause: " + t);
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        try {
+            nativeSetPaused(false);
+        } catch (Throwable t) {
+            Log.w(TAG, "resume: " + t);
+        }
     }
 
     @Override
@@ -277,7 +315,8 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
         String text = null;
         try {
             File f = statusFile();
-            if (f.isFile()) {
+            // Older than this activity: left by an earlier process.
+            if (f.isFile() && f.lastModified() >= createdAt - 2000) {
                 byte[] bytes = new byte[(int) Math.min(f.length(), 64 * 1024)];
                 try (FileInputStream in = new FileInputStream(f)) {
                     int n = 0;
@@ -306,15 +345,31 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
             }
             if (statusView == null) {
                 ViewGroup root = (ViewGroup) getWindow().getDecorView();
+                // A close bar on top (its tap closes the overlay), then the
+                // text, selectable. The overlay covers only its own height
+                // at the top; touches anywhere else reach the game.
+                TextView close = new TextView(this);
+                close.setText("\u2715  Tap here to close (android.status_overlay = off in wf-plus.ini turns this off)");
+                close.setTextSize(13);
+                close.setTextColor(Color.WHITE);
+                close.setBackgroundColor(Color.argb(230, 96, 0, 0));
+                close.setPadding(24, 20, 24, 20);
+                close.setOnClickListener(v -> dismissStatus());
                 statusText = new TextView(this);
                 statusText.setTextIsSelectable(true);
                 statusText.setTypeface(Typeface.MONOSPACE);
                 statusText.setTextSize(12);
                 statusText.setTextColor(Color.rgb(255, 255, 160));
                 statusText.setPadding(24, 16, 24, 16);
-                statusView = new ScrollView(this);
+                ScrollView scroll = new ScrollView(this);
+                scroll.addView(statusText);
+                statusView = new LinearLayout(this);
+                statusView.setOrientation(LinearLayout.VERTICAL);
                 statusView.setBackgroundColor(Color.argb(200, 0, 0, 48));
-                statusView.addView(statusText);
+                statusView.addView(close, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                statusView.addView(scroll, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
                 FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
                 root.addView(statusView, lp);
@@ -326,5 +381,22 @@ public class WarningForeverActivity extends SDLActivity implements DisplayManage
         } catch (Throwable t) {
             Log.w(TAG, "status: " + t);
         }
+    }
+
+    /** Closes the overlay: the native side stops keeping the file (it
+     *  shows it again only for a new report); the file is removed here too
+     *  in case the native side is not reachable. */
+    private void dismissStatus() {
+        try {
+            nativeDismissStatus();
+        } catch (Throwable t) {
+            Log.w(TAG, "status: " + t);
+        }
+        try {
+            statusFile().delete();
+        } catch (Throwable t) {
+            Log.w(TAG, "status: " + t);
+        }
+        updateStatus();
     }
 }

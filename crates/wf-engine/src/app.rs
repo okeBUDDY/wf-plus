@@ -485,6 +485,8 @@ pub struct Watchdog {
 #[cfg(target_os = "android")]
 impl Watchdog {
     pub const STALL: std::time::Duration = std::time::Duration::from_secs(15);
+    /// No report this soon after a resume.
+    pub const RESUME_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
     pub fn start() -> Self {
         use std::sync::atomic::Ordering;
@@ -493,12 +495,24 @@ impl Watchdog {
         let spawned = std::thread::Builder::new().name("wf-watchdog".into()).spawn(move || {
             let mut seen = PRESENTED.load(Ordering::Relaxed);
             let mut since = Instant::now();
+            // Frames flowing without a half-second gap since then.
+            let mut flowing: Option<Instant> = None;
             let mut told = false;
             while !flag.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                crate::platform::android::status_tick();
                 let now = PRESENTED.load(Ordering::Relaxed);
-                if now != seen || BACKGROUND.load(Ordering::Relaxed) {
+                if now != seen {
+                    flowing.get_or_insert_with(Instant::now);
+                } else {
+                    flowing = None;
+                }
+                if crate::log::status_shown() {
+                    crate::platform::android::status_tick(flowing.map(|t| t.elapsed()));
+                }
+                // Never while paused or in the background, nor in the first
+                // seconds after a resume.
+                let away = BACKGROUND.load(Ordering::Relaxed) || crate::platform::android::paused_or_resuming(Self::RESUME_GRACE);
+                if now != seen || away {
                     (seen, since) = (now, Instant::now());
                     continue;
                 }
@@ -512,8 +526,8 @@ impl Watchdog {
                             Self::STALL.as_secs(),
                             crate::platform::android::status_path().with_file_name("wf-log.txt").display()
                         );
-                        crate::log::show_status(&crate::platform::android::status_path(), &header);
-                        crate::platform::android::fatal(&format!("{header}\n{steps}\nThe same text stays on screen, selectable."));
+                        crate::platform::android::show_status(&header);
+                        crate::platform::android::fatal(&format!("{header}\n{steps}"));
                     }
                     since = Instant::now();
                 }

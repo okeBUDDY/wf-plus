@@ -13,8 +13,8 @@ struct View {
     time: f32,
     // Device pixels per logical pixel.
     px: f32,
-    _p1: f32,
-    _p2: f32,
+    // The logical point at the target's top left corner.
+    origin: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -560,7 +560,11 @@ struct Crossings {
 // One straight stroke edge (p1 to p3, relative to the sample) on both rays,
 // as `coverage` does for a curve whose control point is the midpoint.
 fn cross_edge(c: ptr<function, Crossings>, p1: vec2<f32>, p3: vec2<f32>, ppe: vec2<f32>) {
-    let p2 = (p1 + p3) * 0.5;
+    cross_curve(c, p1, (p1 + p3) * 0.5, p3, ppe);
+}
+
+// One curve (relative to the sample) on both rays.
+fn cross_curve(c: ptr<function, Crossings>, p1: vec2<f32>, p2: vec2<f32>, p3: vec2<f32>, ppe: vec2<f32>) {
     let hcode = root_code(p1.y, p2.y, p3.y);
     if (hcode != 0u) {
         let r = solve(p1, p2, p3) * ppe.x;
@@ -653,5 +657,135 @@ fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let cov = crossings_coverage(total);
+    return vec4<f32>(in.tint.rgb * in.tint.a * cov, in.tint.a * cov);
+}
+
+// Fill shapes (gfx/fills.rs): one instance per triangle, rasterized grown
+// by a pixel and a quarter. The coverage sums the crossings of all the
+// shape's triangles' edges, as Slug does for the cooked outline; the
+// lowest-numbered triangle whose triangle grown by three quarters of a
+// pixel holds the pixel draws it. The triangles (local points) are in the
+// curve texture's fill row, two texels each.
+struct FillIn {
+    @location(0) m0: vec4<f32>,
+    @location(1) m1: vec2<f32>,
+    @location(2) tint: vec4<f32>,
+    @location(3) tris: vec4<u32>,  // this triangle, the shape's first, count
+};
+
+struct FillOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(2) @interpolate(flat) m0: vec4<f32>,
+    @location(3) @interpolate(flat) m1: vec2<f32>,
+    @location(4) @interpolate(flat) tint: vec4<f32>,
+    @location(5) @interpolate(flat) tris: vec4<u32>,
+};
+
+// Triangle `t`'s points under the transform (logical pixels).
+fn fill_screen(t: u32, m0: vec4<f32>, m1: vec2<f32>) -> array<vec2<f32>, 3> {
+    let a = textureLoad(curve_tex, tex2d(2u * t, CURVE_W), 0);
+    let c = textureLoad(curve_tex, tex2d(2u * t + 1u, CURVE_W), 0);
+    return array<vec2<f32>, 3>(
+        a.x * m0.xy + a.y * m0.zw + m1,
+        a.z * m0.xy + a.w * m0.zw + m1,
+        c.x * m0.xy + c.y * m0.zw + m1,
+    );
+}
+
+// The outward unit normal of edge p -> q of a triangle of orientation `o`.
+fn out_normal(p: vec2<f32>, q: vec2<f32>, o: f32) -> vec2<f32> {
+    let e = q - p;
+    return vec2<f32>(e.y, -e.x) * (o / max(length(e), 1e-12));
+}
+
+fn orientation(s: array<vec2<f32>, 3>) -> f32 {
+    let area = (s[1].x - s[0].x) * (s[2].y - s[0].y) - (s[1].y - s[0].y) * (s[2].x - s[0].x);
+    return select(-1.0, 1.0, area > 0.0);
+}
+
+// Whether target pixel `p` is inside triangle `s0` (logical pixels) grown
+// by `r` target pixels. Every fragment of a pixel runs it on the same
+// numbers (the pixel's exact centre, not an interpolated point), so the
+// triangles agree on which one owns the pixel.
+fn in_grown(p: vec2<f32>, s0: array<vec2<f32>, 3>, r: f32) -> bool {
+    let s = array<vec2<f32>, 3>((s0[0] - view.origin) * view.px, (s0[1] - view.origin) * view.px, (s0[2] - view.origin) * view.px);
+    let o = orientation(s);
+    return dot(p - s[0], out_normal(s[0], s[1], o)) <= r
+        && dot(p - s[1], out_normal(s[1], s[2], o)) <= r
+        && dot(p - s[2], out_normal(s[2], s[0], o)) <= r;
+}
+
+@vertex
+fn vs_fill(@builtin(vertex_index) vi: u32, inst: FillIn) -> FillOut {
+    var s = fill_screen(inst.tris.x, inst.m0, inst.m1);
+    let o = orientation(s);
+    let i = vi % 3u;
+    let prev = s[(i + 2u) % 3u];
+    let v = s[i];
+    let next = s[(i + 1u) % 3u];
+    let n1 = out_normal(prev, v, o);
+    let n2 = out_normal(v, next, o);
+    // The corner where both edges, moved out by a pixel and a quarter, meet.
+    let r = 1.25 / max(view.px, 1e-6);
+    let screen = v + (n1 + n2) * (r / max(1.0 + dot(n1, n2), 1e-4));
+    // Back to local units.
+    let d = screen - inst.m1;
+    let det = inst.m0.x * inst.m0.w - inst.m0.z * inst.m0.y;
+    let local = vec2<f32>(inst.m0.w * d.x - inst.m0.z * d.y, inst.m0.x * d.y - inst.m0.y * d.x) / det;
+    var out: FillOut;
+    out.pos = vec4<f32>(screen * view.scale + view.offset, 0.5, 1.0);
+    out.local = local;
+    out.m0 = inst.m0;
+    out.m1 = inst.m1;
+    out.tint = inst.tint;
+    out.tris = inst.tris;
+    return out;
+}
+
+@fragment
+fn fs_fill(in: FillOut) -> @location(0) vec4<f32> {
+    let rc = in.local;
+    let ppe = 1.0 / max(fwidth(rc), vec2<f32>(1.0 / 65536.0));
+    let r = 0.75;
+    let own = in.tris.x;
+    let first = in.tris.y;
+    let count = in.tris.z;
+    var drawn = in_grown(in.pos.xy, fill_screen(own, in.m0, in.m1), r);
+    for (var t = first; t < own; t++) {
+        if (in_grown(in.pos.xy, fill_screen(t, in.m0, in.m1), r)) {
+            drawn = false;
+        }
+    }
+    var c = Crossings(0.0, 0.0, 0.0, 0.0);
+    for (var t = first; t < first + count; t++) {
+        let a = textureLoad(curve_tex, tex2d(2u * t, CURVE_W), 0);
+        let b = textureLoad(curve_tex, tex2d(2u * t + 1u, CURVE_W), 0);
+        // The control points as the cooker makes them (the midpoints, in
+        // local units), so that a sample on a shared edge counts as in Slug.
+        let p0 = a.xy - rc;
+        let p1 = a.zw - rc;
+        let p2 = b.xy - rc;
+        // An edge two triangles share (once each way) cancels: skipped, as
+        // a sample right on it could count one way and not the other.
+        let skip = u32(b.z);
+        if ((skip & 1u) == 0u) {
+            cross_curve(&c, p0, (a.xy + a.zw) * 0.5 - rc, p1, ppe);
+        }
+        if ((skip & 2u) == 0u) {
+            cross_curve(&c, p1, (a.zw + b.xy) * 0.5 - rc, p2, ppe);
+        }
+        if ((skip & 4u) == 0u) {
+            cross_curve(&c, p2, (b.xy + a.xy) * 0.5 - rc, p0, ppe);
+        }
+    }
+    if (count_visits) {
+        // Edge and ownership tests, counted apart (blue).
+        return vec4<f32>(0.0, 0.0, f32(3u * count + own - first + 1u) / 64.0, 0.0);
+    }
+    if (!drawn) {
+        return vec4<f32>(0.0);
+    }
+    let cov = crossings_coverage(c);
     return vec4<f32>(in.tint.rgb * in.tint.a * cov, in.tint.a * cov);
 }

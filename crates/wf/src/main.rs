@@ -51,8 +51,8 @@ struct Options {
     perf_overlay: bool,
     /// The sprite cache on or off (`gfx.sprite_cache`; the config's otherwise).
     sprite_cache: Option<bool>,
-    /// Line shapes as analytic quads (`gfx.analytic_lines`).
-    analytic_lines: Option<bool>,
+    /// Line shapes and small fills drawn analytically (`gfx.analytic_shapes`).
+    analytic_shapes: Option<bool>,
     /// Render target pixels per window pixel.
     render_scale: Option<f32>,
     /// The arena of new games (else the last choice).
@@ -99,7 +99,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wfplus [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--perf-overlay] [--render-scale K] [--arena classic|hd]\n          [--sprite-cache on|off] [--analytic-lines on|off] [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wfplus [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--perf-overlay] [--render-scale K] [--arena classic|hd]\n          [--sprite-cache on|off] [--analytic-shapes on|off] [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else ./data.bin, else next to the executable.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
     );
@@ -118,7 +118,7 @@ fn options() -> Options {
         show_fps: false,
         perf_overlay: false,
         sprite_cache: None,
-        analytic_lines: None,
+        analytic_shapes: None,
         render_scale: None,
         bench: None,
         arena: None,
@@ -161,8 +161,8 @@ fn options() -> Options {
                     _ => usage(),
                 })
             }
-            "--analytic-lines" => {
-                o.analytic_lines = Some(match value().as_str() {
+            "--analytic-shapes" => {
+                o.analytic_shapes = Some(match value().as_str() {
                     "on" => true,
                     "off" => false,
                     _ => usage(),
@@ -373,7 +373,7 @@ fn run_headless(o: &Options) -> Result<(), String> {
     let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
     let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &game.cx.art.pack);
     renderer.set_sprite_cache(o.sprite_cache.unwrap_or(game.cx.settings.sprite_cache));
-    renderer.lines_enabled = o.analytic_lines.unwrap_or(game.cx.settings.analytic_lines);
+    renderer.analytic_shapes = o.analytic_shapes.unwrap_or(game.cx.settings.analytic_shapes);
     game.cx.art.register_line_shapes(&mut renderer);
     if let Some(path) = &o.perf {
         return perf(o, &mut game, &mut renderer, &mut input, size, path);
@@ -432,10 +432,10 @@ fn perf(
     let mut counter = gfx::gpu::Renderer::new_counting(device, queue, &game.cx.art.pack);
     game.cx.art.register_line_shapes(&mut counter);
     let cache_on = renderer.cache.enabled;
-    let lines_on = renderer.lines_enabled;
+    let analytic_on = renderer.analytic_shapes;
     let mut csv = String::from(
         "visits_m,frame,update_us,draw_us,build_us,dynamic_us,upload_us,submit_us,gpu_us,draws,instances,draw_calls,pipelines,upload_bytes,dynamic_rebuilt,quad_mpx,layer_mpx,curve_mpx,noise_mpx,\
-         cached_mpx,est_on_m,est_off_m,visits_off_m,fetches_m,atlas_mpx,atlas_curve_m,gpu_off_us,ts_on_us,ts_off_us,hits,rasterized,deferred,pages,line_mpx,edges_m,top_slug\n",
+         cached_mpx,est_on_m,est_off_m,visits_off_m,fetches_m,atlas_mpx,atlas_curve_m,gpu_off_us,ts_on_us,ts_off_us,hits,rasterized,deferred,pages,analytic_mpx,tests_m,top_slug\n",
     );
     let mut rows: Vec<Row> = Vec::new();
     // Render every `every`-th frame from `from` on (the GPU of a headless
@@ -472,11 +472,11 @@ fn perf(
         let list = &game.cx.draw;
         // A: the cache and the analytic lines off.
         renderer.cache.enabled = false;
-        renderer.lines_enabled = false;
+        renderer.analytic_shapes = false;
         let (wall_off, ts_off) = timed(renderer, list);
         let off = renderer.stats;
         counter.cache.enabled = false;
-        counter.lines_enabled = false;
+        counter.analytic_shapes = false;
         let (visits_off, _, _) = counter.count_visits(list, size);
         if off.curve_px > busiest.0 {
             let mut v: Vec<(u32, (u32, f64))> = renderer.by_sprite.iter().map(|(&k, &v)| (k, v)).collect();
@@ -486,8 +486,8 @@ fn perf(
         // B: the cache on (as set), settled.
         renderer.cache.enabled = cache_on;
         counter.cache.enabled = cache_on;
-        renderer.lines_enabled = lines_on;
-        counter.lines_enabled = lines_on;
+        renderer.analytic_shapes = analytic_on;
+        counter.analytic_shapes = analytic_on;
         let (mut wall, mut ts) = timed(renderer, list);
         let first = renderer.stats;
         for _ in 0..settle {
@@ -559,7 +559,7 @@ fn perf(
             first.cache.rasterized,
             first.cache.deferred,
             s.cache.pages,
-            s.line_px / 1e6,
+            s.analytic_px / 1e6,
             r.edges,
             top_slug,
         );
@@ -651,7 +651,7 @@ fn perf(
             let mut only = busiest_list.clone();
             only.draws.retain(|d| match d {
                 gfx::Draw::Sprite { sprite, .. } => sprite.0 == *id,
-                gfx::Draw::Shape { primitive, .. } => *id == if lines_on && primitive.is_line() { u32::MAX - 1 } else { u32::MAX },
+                gfx::Draw::Shape { primitive, .. } => *id == if analytic_on && primitive.is_line() { u32::MAX - 1 } else { u32::MAX },
             });
             only.fade = gfx::Argb(0);
             let (measured, _, _) = counter.count_visits(&only, size);
@@ -705,7 +705,7 @@ struct Row {
 impl Row {
     /// Estimated fragment work: curve visits plus the cache's texel fetches.
     fn est_on(&self) -> f64 {
-        self.on.curve_px + self.on.cached_px + self.on.line_edges
+        self.on.curve_px + self.on.cached_px + self.on.analytic_tests
     }
     fn est_off(&self) -> f64 {
         self.off.curve_px
@@ -750,8 +750,8 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     if let Some(on) = o.sprite_cache {
         game.cx.settings.sprite_cache = on;
     }
-    if let Some(on) = o.analytic_lines {
-        game.cx.settings.analytic_lines = on;
+    if let Some(on) = o.analytic_shapes {
+        game.cx.settings.analytic_shapes = on;
     }
     if let Some(k) = o.render_scale {
         display_cfg.render_scale = k;
@@ -764,7 +764,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
     }
     let mut display = wf_engine::app::Display::new(&platform, &game.cx.art.pack, display_cfg.fps_cap)?;
     display.renderer.set_sprite_cache(game.cx.settings.sprite_cache);
-    display.renderer.lines_enabled = game.cx.settings.analytic_lines;
+    display.renderer.analytic_shapes = game.cx.settings.analytic_shapes;
     game.cx.art.register_line_shapes(&mut display.renderer);
     platform.start_audio(game.cx.sound.mixer());
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::from_config(&cfg));

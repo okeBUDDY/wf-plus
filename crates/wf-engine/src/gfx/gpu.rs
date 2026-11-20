@@ -23,7 +23,9 @@ struct ViewUniform {
     time: f32,
     /// Device pixels per logical pixel (the line quads' margin).
     px: f32,
-    pad: [f32; 2],
+    /// The logical point at the target's top left corner (the fills'
+    /// ownership tests work in target pixels).
+    origin: [f32; 2],
 }
 
 /// A segment of a line shape (`gfx::lines`): its own vertex buffer.
@@ -36,6 +38,18 @@ struct LineInstance {
     m1: [f32; 2],
     flags: u32,
     tint: [f32; 4],
+}
+
+/// A triangle of a fill shape (`gfx::fills`): its own vertex buffer.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FillInstance {
+    m0: [f32; 4],
+    m1: [f32; 2],
+    tint: [f32; 4],
+    /// This triangle, the shape's first one (indices into the fill row of
+    /// the curve texture, two texels each) and the shape's count.
+    tris: [u32; 4],
 }
 
 #[repr(C)]
@@ -56,6 +70,8 @@ enum BatchKind {
     Cached(u16),
     /// Line segments (`gfx::lines`), from the line instances.
     Lines,
+    /// Fill triangles (`gfx::fills`), from the fill instances.
+    Fills,
 }
 
 struct Batch {
@@ -91,10 +107,12 @@ pub struct RenderStats {
     pub noise_px: f64,
     /// Pixels drawn from the sprite cache (one texel fetch each).
     pub cached_px: f64,
-    /// Pixels of the line segments' quads (inside the window) and their
-    /// edge tests (four a rectangle, up to three rectangles a pixel).
-    pub line_px: f64,
-    pub line_edges: f64,
+    /// Pixels of the analytic shapes: the line segments' quads (inside the
+    /// window) and the fills' dilated triangles; their edge tests (four a
+    /// line rectangle, up to three rectangles a pixel; three a fill
+    /// triangle of the shape, plus one a lower triangle for the ownership).
+    pub analytic_px: f64,
+    pub analytic_tests: f64,
     /// `curve_px` as it would be with the cache off (every sprite in Slug).
     pub nocache_curve_px: f64,
     /// Rasterizing new cache entries: texels written and the estimated
@@ -216,12 +234,19 @@ pub struct Renderer {
     /// The cooked line shapes' segments, by sprite (registered by the game,
     /// which has their points).
     line_sprites: HashMap<u32, Vec<super::lines::Segment>>,
-    /// Draw line shapes with `fs_line` (else as Slug strokes).
-    pub lines_enabled: bool,
+    /// Draw line shapes with `fs_line` and fills of up to `FILL_MAX_TRIS`
+    /// triangles with `fs_fill` (else with Slug).
+    pub analytic_shapes: bool,
     line_instances: Vec<LineInstance>,
     line_buffer: wgpu::Buffer,
     line_capacity: usize,
     plain_stroke: Vec<bool>,
+    fill_pipelines: [wgpu::RenderPipeline; 2],
+    fill_instances: Vec<FillInstance>,
+    fill_buffer: wgpu::Buffer,
+    fill_capacity: usize,
+    /// This frame's fill triangles (local points), two texels each.
+    fill_texels: Vec<[f32; 4]>,
     /// Slug into a cache page: replaces the texels, never counts.
     atlas_pipeline: wgpu::RenderPipeline,
     /// The Slug bind group with the page's pixel space as the view.
@@ -263,6 +288,12 @@ const RING: usize = 3;
 const DYN_CURVE_ROWS: u32 = 1;
 const DYN_BAND_ROWS: u32 = 2;
 const DYN_LAYER_ROWS: u32 = 1;
+/// The fill triangles of a frame, in the curve texture's row after the
+/// dynamic region: two texels each.
+const FILL_ROWS: u32 = 1;
+const FILL_TRIS: usize = (FILL_ROWS * CURVE_TEX_WIDTH / 2) as usize;
+/// Fill shapes of more triangles go to Slug (each pixel tests them all).
+const FILL_MAX_TRIS: usize = 16;
 
 /// The line width of strokes in pixels of the 640x480 screen (D3D7's
 /// one-pixel lines), whatever the transform.
@@ -392,7 +423,7 @@ impl Renderer {
     fn build(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat, art: &Pack, counting: bool) -> Self {
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         let (curve_tex, curve_row) =
-            upload(&device, &queue, "slug curves", &art.curves, wgpu::TextureFormat::Rgba32Float, DYN_CURVE_ROWS);
+            upload(&device, &queue, "slug curves", &art.curves, wgpu::TextureFormat::Rgba32Float, DYN_CURVE_ROWS + FILL_ROWS);
         let (band_tex, band_row) =
             upload(&device, &queue, "slug bands", &art.bands, wgpu::TextureFormat::Rg32Uint, DYN_BAND_ROWS);
         let (layer_tex, layer_row) =
@@ -423,9 +454,10 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // The curves are read by vs_fill too (the fill triangles).
         let tex_entry = |binding: u32, sample_type: wgpu::TextureSampleType| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: if binding == 1 { wgpu::ShaderStages::VERTEX_FRAGMENT } else { wgpu::ShaderStages::FRAGMENT },
             ty: wgpu::BindingType::Texture {
                 sample_type,
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -479,7 +511,7 @@ impl Renderer {
         let page_layout = cache::page_layout(&device);
         let cache = SpriteCache::new(&device, page_layout.clone());
         let p = cache.page_size() as f32;
-        let atlas_view = ViewUniform { scale: [2.0 / p, -2.0 / p], offset: [-1.0, 1.0], time: 0.0, px: 1.0, pad: [0.0; 2] };
+        let atlas_view = ViewUniform { scale: [2.0 / p, -2.0 / p], offset: [-1.0, 1.0], time: 0.0, px: 1.0, origin: [0.0; 2] };
         let atlas_view_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprite cache view"),
             size: std::mem::size_of::<ViewUniform>() as u64,
@@ -516,13 +548,13 @@ impl Renderer {
                         BatchKind::Bitmaps => "vs_bitmap",
                         BatchKind::Sprites => "vs_main",
                         BatchKind::Cached(_) => "vs_cached",
-                        BatchKind::Lines => unreachable!("lines have their own pipelines"),
+                        BatchKind::Lines | BatchKind::Fills => unreachable!("analytic shapes have their own pipelines"),
                     },
                     match kind {
                         BatchKind::Bitmaps => "fs_bitmap",
                         BatchKind::Sprites => "fs_main",
                         BatchKind::Cached(_) => "fs_cached",
-                        BatchKind::Lines => unreachable!("lines have their own pipelines"),
+                        BatchKind::Lines | BatchKind::Fills => unreachable!("analytic shapes have their own pipelines"),
                     },
                     wgpu::PrimitiveTopology::TriangleStrip,
                     wgpu::VertexBufferLayout {
@@ -539,6 +571,7 @@ impl Renderer {
                     BatchKind::Sprites => "sprites",
                     BatchKind::Cached(_) => "cached sprites",
                     BatchKind::Lines => "lines",
+                    BatchKind::Fills => "fills",
                 }),
                 layout: Some(if matches!(kind, BatchKind::Cached(_)) { &cached_layout } else { &pipeline_layout }),
                 vertex: wgpu::VertexState {
@@ -570,26 +603,30 @@ impl Renderer {
         let cached_pipelines = [make(Blend::Normal, BatchKind::Cached(0)), make(Blend::Additive, BatchKind::Cached(0))];
         let atlas_pipeline = make_with(None, BatchKind::Sprites, true);
         let line_attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x2, 4 => Uint32, 5 => Float32x4];
-        let make_line = |blend: Blend| {
+        let fill_attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2, 2 => Float32x4, 3 => Uint32x4];
+        let make_analytic = |blend: Blend, fill: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("lines"),
+                label: Some(if fill { "fills" } else { "lines" }),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_line"),
+                    entry_point: Some(if fill { "vs_fill" } else { "vs_line" }),
                     compilation_options: Default::default(),
                     buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<LineInstance>() as u64,
+                        array_stride: if fill { std::mem::size_of::<FillInstance>() } else { std::mem::size_of::<LineInstance>() } as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &line_attrs,
+                        attributes: if fill { &fill_attrs } else { &line_attrs },
                     })],
                 },
-                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                primitive: wgpu::PrimitiveState {
+                    topology: if fill { wgpu::PrimitiveTopology::TriangleList } else { wgpu::PrimitiveTopology::TriangleStrip },
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_line"),
+                    entry_point: Some(if fill { "fs_fill" } else { "fs_line" }),
                     compilation_options: options.clone(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -601,7 +638,8 @@ impl Renderer {
                 cache: None,
             })
         };
-        let line_pipelines = [make_line(Blend::Normal), make_line(Blend::Additive)];
+        let line_pipelines = [make_analytic(Blend::Normal, false), make_analytic(Blend::Additive, false)];
+        let fill_pipelines = [make_analytic(Blend::Normal, true), make_analytic(Blend::Additive, true)];
         let costs = pack_layer_costs(art);
         let sprites = art
             .sprites
@@ -625,6 +663,8 @@ impl Renderer {
         let timer = GpuTimer::new(&device, &queue);
         let line_capacity = 256;
         let line_buffer = Self::buffer(&device, "line instances", RING * line_capacity * std::mem::size_of::<LineInstance>());
+        let fill_capacity = 64;
+        let fill_buffer = Self::buffer(&device, "fill instances", RING * fill_capacity * std::mem::size_of::<FillInstance>());
         // Which sprites are one plain stroke layer (white, solid): those a
         // registered line shape may draw with `fs_line`.
         let plain_stroke: Vec<bool> = art
@@ -653,10 +693,15 @@ impl Renderer {
             line_pipelines,
             line_sprites: HashMap::new(),
             plain_stroke,
-            lines_enabled: true,
+            analytic_shapes: true,
             line_instances: Vec::new(),
             line_buffer,
             line_capacity,
+            fill_pipelines,
+            fill_instances: Vec::new(),
+            fill_buffer,
+            fill_capacity,
+            fill_texels: Vec::new(),
             atlas_pipeline,
             atlas_bind_group,
             cache,
@@ -826,14 +871,45 @@ impl Renderer {
             });
             if self.collect {
                 let px = line_area(s, m, layout, size);
-                self.stats.line_px += px;
-                self.stats.line_edges += px * 4.0 * (1 + s.nbr_a.is_some() as u32 + s.nbr_b.is_some() as u32) as f64;
+                self.stats.analytic_px += px;
+                self.stats.analytic_tests += px * 4.0 * (1 + s.nbr_a.is_some() as u32 + s.nbr_b.is_some() as u32) as f64;
             }
         }
         let end = self.line_instances.len() as u32;
         if end > start {
             self.push_batch(BatchKind::Lines, blend, pass, start, end);
         }
+    }
+
+    /// Queues the fill triangles `tris` (oriented as Slug's) under `m`,
+    /// `color`: one instance each, sharing the shape's triangles in the
+    /// fill row. False (nothing queued) when the row is full.
+    #[allow(clippy::too_many_arguments)]
+    fn push_fill(&mut self, tris: &[[[f32; 2]; 3]], m: &[[f32; 3]; 3], color: super::Argb, blend: Blend, pass: Pass, layout: &super::Layout, size: (u32, u32)) -> bool {
+        let first = self.fill_texels.len() / 2;
+        if first + tris.len() > FILL_TRIS {
+            return false;
+        }
+        let row = (self.dynamic.curve_row + DYN_CURVE_ROWS) * CURVE_TEX_WIDTH / 2;
+        let start = self.fill_instances.len() as u32;
+        let shared = super::fills::shared_edges(tris);
+        for (i, t) in tris.iter().enumerate() {
+            self.fill_texels.push([t[0][0], t[0][1], t[1][0], t[1][1]]);
+            self.fill_texels.push([t[2][0], t[2][1], shared[i] as f32, 0.0]);
+            self.fill_instances.push(FillInstance {
+                m0: [m[0][0], m[0][1], m[1][0], m[1][1]],
+                m1: [m[2][0], m[2][1]],
+                tint: color.to_f32(),
+                tris: [row + (first + i) as u32, row + first as u32, tris.len() as u32, 0],
+            });
+            if self.collect {
+                let px = super::fills::area(t, m, layout, size);
+                self.stats.analytic_px += px;
+                self.stats.analytic_tests += px * (3 * tris.len() + i + 1) as f64;
+            }
+        }
+        self.push_batch(BatchKind::Fills, blend, pass, start, self.fill_instances.len() as u32);
+        true
     }
 
     /// Whether sprite `id` is drawn from the cache when it is on.
@@ -881,10 +957,22 @@ impl Renderer {
     /// of them are already there (their points did not change).
     fn build_dynamic(&mut self, list: &DrawList) {
         let mut wanted: Vec<(u64, Primitive, &[[f32; 2]], i32)> = Vec::new();
+        // The fills the frame draws analytically (as the render loop
+        // decides: in order, while the fill row has room).
+        let mut fill_tris = 0;
         for draw in &list.draws {
             if let Draw::Shape { primitive, points, transform, .. } = draw {
-                if self.lines_enabled && primitive.is_line() && !self.collect {
+                if self.analytic_shapes && primitive.is_line() && !self.collect {
                     continue;
+                }
+                if self.analytic_shapes && !primitive.is_line() && scale_bucket(transform).is_some() {
+                    let n = super::fills::triangles(*primitive, points).len();
+                    if n <= FILL_MAX_TRIS && fill_tris + n <= FILL_TRIS {
+                        fill_tris += n;
+                        if !self.collect {
+                            continue;
+                        }
+                    }
                 }
                 let Some(bucket) = scale_bucket(transform) else {
                     continue;
@@ -1081,6 +1169,8 @@ impl Renderer {
         self.batches.clear();
         self.raster_jobs.clear();
         self.line_instances.clear();
+        self.fill_instances.clear();
+        self.fill_texels.clear();
         self.raster_budget = RASTER_BUDGET;
         self.cache.begin_frame();
         if let Some(t) = &mut self.timer {
@@ -1094,7 +1184,7 @@ impl Renderer {
                     let Some(&info) = self.sprites.get(sprite.0 as usize) else {
                         continue;
                     };
-                    if self.lines_enabled
+                    if self.analytic_shapes
                         && clip.is_none()
                         && let Some(segs) = self.line_sprites.get(&sprite.0)
                     {
@@ -1189,7 +1279,7 @@ impl Renderer {
                     });
                     self.push_batch(BatchKind::Sprites, *blend, *pass, i, i + 1);
                 }
-                Draw::Shape { primitive, points, transform, color, blend, pass, .. } if self.lines_enabled && primitive.is_line() => {
+                Draw::Shape { primitive, points, transform, color, blend, pass, .. } if self.analytic_shapes && primitive.is_line() => {
                     if self.collect {
                         // The Slug cost it replaces (its layer when built).
                         if let Some(bucket) = scale_bucket(transform)
@@ -1202,6 +1292,22 @@ impl Renderer {
                     }
                     let segs = super::lines::segments(*primitive, points);
                     self.push_lines(&segs, &transform.m, *color, *blend, *pass, &layout, size);
+                }
+                Draw::Shape { primitive, points, transform, color, blend, pass, .. }
+                    if self.analytic_shapes
+                        && scale_bucket(transform).is_some()
+                        && let tris = super::fills::triangles(*primitive, points)
+                        && tris.len() <= FILL_MAX_TRIS
+                        && self.fill_texels.len() / 2 + tris.len() <= FILL_TRIS =>
+                {
+                    if self.collect {
+                        if let Some(&(layer, b)) = self.dynamic.built.get(&shape_key(*primitive, points, 0)) {
+                            let c = estimate(&self.costs, &transform.m, &layout, size, b, layer, 1);
+                            self.stats.nocache_curve_px += c.curve;
+                        }
+                        self.by_sprite.entry(u32::MAX - 1).or_default().0 += 1;
+                    }
+                    self.push_fill(&tris, &transform.m, *color, *blend, *pass, &layout, size);
                 }
                 Draw::Shape { primitive, points, transform, color, blend, pass, .. } => {
                     let m = &transform.m;
@@ -1261,6 +1367,27 @@ impl Renderer {
         if !self.line_instances.is_empty() {
             self.queue.write_buffer(&self.line_buffer, line_offset, bytemuck::cast_slice(&self.line_instances));
         }
+        if self.fill_instances.len() > self.fill_capacity {
+            self.fill_capacity = self.fill_instances.len().next_power_of_two();
+            self.fill_buffer = Self::buffer(&self.device, "fill instances", RING * self.fill_capacity * std::mem::size_of::<FillInstance>());
+        }
+        let fill_offset = (self.ring_slot * self.fill_capacity * std::mem::size_of::<FillInstance>()) as u64;
+        if !self.fill_instances.is_empty() {
+            self.queue.write_buffer(&self.fill_buffer, fill_offset, bytemuck::cast_slice(&self.fill_instances));
+            // Only the texels used: a part of the fill row.
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.dynamic.curves,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: self.dynamic.curve_row + DYN_CURVE_ROWS, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&self.fill_texels),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+                wgpu::Extent3d { width: self.fill_texels.len() as u32, height: 1, depth_or_array_layers: 1 },
+            );
+            self.stats.upload_bytes += (self.fill_texels.len() * 16) as u64;
+        }
         // Logical -> clip over the whole window (the visible rect).
         let [x0, y0, w, h] = layout.visible;
         let view = ViewUniform {
@@ -1268,7 +1395,7 @@ impl Renderer {
             offset: [-1.0 - x0 * 2.0 / w, 1.0 + y0 * 2.0 / h],
             time: self.time,
             px: k,
-            pad: [0.0; 2],
+            origin: [x0, y0],
         };
         self.queue.write_buffer(&self.view_buffer, 0, bytemuck::bytes_of(&view));
         let fading = list.fade.0 >> 24 != 0 && !self.counting;
@@ -1366,6 +1493,11 @@ impl Renderer {
                         pass.set_pipeline(&self.line_pipelines[blend_index(batch.blend)]);
                         pass.set_vertex_buffer(0, self.line_buffer.slice(line_offset..));
                         pass.draw(0..4, batch.start..batch.end);
+                    }
+                    BatchKind::Fills => {
+                        pass.set_pipeline(&self.fill_pipelines[blend_index(batch.blend)]);
+                        pass.set_vertex_buffer(0, self.fill_buffer.slice(fill_offset..));
+                        pass.draw(0..3, batch.start..batch.end);
                     }
                     BatchKind::Cached(page) => {
                         pass.set_pipeline(&self.cached_pipelines[blend_index(batch.blend)]);

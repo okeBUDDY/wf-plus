@@ -460,13 +460,13 @@ mod coverage_tests {
         println!("worst: {} max {} mean {:.3}", worst.2, worst.0, worst.1);
     }
 
-    /// The analytic line quads draw the line shapes as Slug does: the
+    /// The analytic shapes draw the line and fill shapes as Slug does: the
     /// cooked ones (the hexagon turned, scaled and faded as on the warning
     /// screen, the cursors, the grid's lines) and runtime-built strips and
     /// lists (the aim cone's sides, a polyline with sharp turns and one
-    /// whose segments cross), normal and additive, lines on against off.
+    /// whose segments cross) and fills, normal and additive, on against off.
     #[test]
-    fn analytic_lines_match_slug() {
+    fn analytic_shapes_match_slug() {
         let art = crate::art::Art::load();
         let Some(mut r) = renderer(&art) else { return };
         let (w, h) = (1280u32, 720u32);
@@ -498,12 +498,30 @@ mod coverage_tests {
         list.shape(crate::gfx::Primitive::LineStrip, &t, &crossing, Argb(0xa040_ff40), Blend::Normal);
         t.translate(150.0, 0.0);
         list.shape(crate::gfx::Primitive::LineList, &t, &pairs, Argb(0xffff_ffff), Blend::Additive);
+        // Fills: the aim cone (long, mostly off screen), the radar's chart
+        // (a fan around its centre), a strip folding over itself, a list,
+        // and one mirrored.
+        let wedge = [[100.7391, -1038.1383], [0.0, 0.0], [-100.73834, -1038.1383]];
+        let radar = [[0.0, 0.0], [0.0, -50.0], [44.275555, -25.5625], [12.773876, 7.375], [0.0, 50.0], [-32.475956, 18.75], [-6.928204, -4.0], [0.0, -50.0]];
+        let fold = [[0.0, 0.0], [40.0, 0.0], [0.0, 30.0], [50.0, 35.0], [-10.0, 10.0], [20.0, 60.0]];
+        let list3 = [[0.0, 0.0], [30.0, 5.0], [10.0, 40.0], [35.0, 20.0], [70.0, 0.0], [60.0, 45.0]];
+        list.shape(crate::gfx::Primitive::TriangleStrip, &Transform::translation(420.3, 470.6), &wedge, Argb(0x5000_ff00), Blend::Normal);
+        list.shape(crate::gfx::Primitive::TriangleFan, &Transform::translation(520.0, 400.0), &radar, Argb(0x80ff_8000), Blend::Normal);
+        let mut t = Transform::translation(0.0, 0.0);
+        t.rotate_z(0.7);
+        t.translate(600.2, 330.7);
+        list.shape(crate::gfx::Primitive::TriangleFan, &t, &radar, Argb(0xffff_ffff), Blend::Additive);
+        list.shape(crate::gfx::Primitive::TriangleStrip, &Transform::translation(30.5, 250.25), &fold, Argb(0xc040_80ff), Blend::Normal);
+        let mut t = Transform::IDENTITY;
+        t.scale(-1.3, 0.8);
+        t.translate(200.0, 250.0);
+        list.shape(crate::gfx::Primitive::TriangleList, &t, &list3, Argb(0xffff_c040), Blend::Normal);
         r.collect = true;
-        r.lines_enabled = false;
+        r.analytic_shapes = false;
         let slug = r.render_to_rgba(&list, w, h);
-        r.lines_enabled = true;
+        r.analytic_shapes = true;
         let lines = r.render_to_rgba(&list, w, h);
-        assert!(r.stats.line_px > 0.0, "no line quads drawn");
+        assert!(r.stats.analytic_px > 0.0, "no analytic shapes drawn");
         let (mut max, mut sum, mut far) = (0u8, 0u64, 0usize);
         for (a, b) in slug.iter().zip(&lines) {
             let d = a.abs_diff(*b);
@@ -516,8 +534,8 @@ mod coverage_tests {
             std::fs::write(std::path::Path::new(&dir).join("lines_slug.rgba"), &slug).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("lines_quads.rgba"), &lines).unwrap();
         }
-        println!("lines vs Slug: max {max} mean {mean:.4}, {far} channels off by more than 8");
-        assert!(far < 64 && mean < 0.02, "the line quads differ from Slug: max {max} mean {mean:.4}, {far} channels > 8");
+        println!("analytic shapes vs Slug: max {max} mean {mean:.4}, {far} channels off by more than 8");
+        assert!(far < 64 && mean < 0.02, "the analytic shapes differ from Slug: max {max} mean {mean:.4}, {far} channels > 8");
     }
 
     /// Not a check: renders every sprite and glyph, white-tinted over black,

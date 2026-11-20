@@ -50,8 +50,8 @@ pub struct Settings {
     pub frame_ms: f32,
     /// Draw the heavy sprites from the sprite cache (`gfx.sprite_cache`).
     pub sprite_cache: bool,
-    /// Draw line shapes as analytic quads, not with Slug (`gfx.analytic_lines`).
-    pub analytic_lines: bool,
+    /// Draw the line shapes and small fills analytically, not with Slug (`gfx.analytic_shapes`).
+    pub analytic_shapes: bool,
     /// When the input guide shows (`ui.input_guide`).
     pub input_guide: super::guide::Policy,
     /// The device the guide names, when forced (`--guide`, screenshots).
@@ -80,7 +80,7 @@ impl Default for Settings {
             gpu_ms: None,
             frame_ms: 0.0,
             sprite_cache: true,
-            analytic_lines: true,
+            analytic_shapes: true,
             input_guide: Default::default(),
             guide_device: None,
             caps: wf_engine::platform::capabilities(),
@@ -109,7 +109,7 @@ impl Settings {
         s.input_guide = c.get("ui.input_guide").and_then(super::guide::Policy::parse).unwrap_or_default();
         s.perf_overlay = c.get_bool("ui.perf_overlay", s.perf_overlay);
         s.sprite_cache = c.get_bool("gfx.sprite_cache", s.sprite_cache);
-        s.analytic_lines = c.get_bool("gfx.analytic_lines", s.analytic_lines);
+        s.analytic_shapes = c.get_bool("gfx.analytic_shapes", s.analytic_shapes);
         let b = Bindings::from_config(c);
         s.mouse_steering = b.mouse_steering;
         s.dead_zone = b.dead_zone;
@@ -131,7 +131,7 @@ impl Settings {
         c.set("ui.hide_names", self.hide_names);
         c.set("ui.perf_overlay", if self.perf_overlay { "on" } else { "off" });
         c.set("gfx.sprite_cache", if self.sprite_cache { "on" } else { "off" });
-        c.set("gfx.analytic_lines", if self.analytic_lines { "on" } else { "off" });
+        c.set("gfx.analytic_shapes", if self.analytic_shapes { "on" } else { "off" });
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
         }

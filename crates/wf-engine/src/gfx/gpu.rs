@@ -80,8 +80,18 @@ struct LayerCost {
     noise: bool,
 }
 
-fn layer_cost(l: &GpuLayer, band: impl Fn(u32) -> u32) -> LayerCost {
-    let mean = |first: u32, n: u32| if n == 0 { 0.0 } else { (first..first + n).map(&band).sum::<u32>() as f32 / n as f32 };
+/// `bands` is the number of band texels: a layer whose bands do not fit in
+/// them is not a shape layer (the layer image also holds the noise
+/// lattices, whose texels are not band counts) and costs nothing. Without
+/// that check their f32 bits were read as band counts in the billions, and
+/// summing them took over a minute at start-up (minutes on a phone: the
+/// Android black screen).
+fn layer_cost(l: &GpuLayer, bands: u32, band: impl Fn(u32) -> u32) -> LayerCost {
+    let end = l.band_base as u64 + l.hbands as u64 + l.vbands as u64;
+    if end > bands as u64 {
+        return LayerCost::default();
+    }
+    let mean = |first: u32, n: u32| if n == 0 { 0.0 } else { (first..first + n).map(|i| band(i) as u64).sum::<u64>() as f32 / n as f32 };
     LayerCost {
         bbox: l.bbox.map(f32::from_bits),
         curves: mean(l.band_base, l.hbands) + mean(l.band_base + l.hbands, l.vbands),
@@ -421,7 +431,8 @@ impl Renderer {
             let o = i as usize * 8;
             art.bands.data.get(o..o + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         };
-        let costs = art.layers.iter().map(|l| layer_cost(l, band_count)).collect();
+        let band_texels = (art.bands.data.len() / 8) as u32;
+        let costs = art.layers.iter().map(|l| layer_cost(l, band_texels, band_count)).collect();
         let instance_capacity = 1024;
         let instance_buffer = Self::buffer(&device, "instances", RING * instance_capacity * std::mem::size_of::<Instance>());
         let fade = super::fade::FadePass::new(&device, format);
@@ -536,8 +547,8 @@ impl Renderer {
             layer.paint = paint::SOLID | flags;
             layer.color = [1.0f32; 4].map(f32::to_bits);
             let base = dy.band_row * BAND_TEX_WIDTH;
-            new_costs.push((dy.layer_row * layers_per_row + layers.len() as u32, layer_cost(&layer, |i| {
-                bands.get((i - base) as usize).map_or(0, |b: &[u32; 2]| b[0])
+            new_costs.push((dy.layer_row * layers_per_row + layers.len() as u32, layer_cost(&layer, base + bands.len() as u32, |i| {
+                bands.get(i.wrapping_sub(base) as usize).map_or(0, |b: &[u32; 2]| b[0])
             })));
             dy.built.insert(key, (dy.layer_row * layers_per_row + layers.len() as u32, g.bbox));
             layers.push(layer);

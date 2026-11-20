@@ -1,6 +1,10 @@
+<img src="docs/wfplus-title-transparent.png" width="512" alt="Warning Forever+">
+
 # Warning Forever+ (Warning Forever Plus)
 
 A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust.
+
+This port was completed using generative AI (Claude Opus 5.5).
 
 > [!WARNING]
 > **Disclaimer:** there is no official release of Warning Forever or Warning Forever+ on any
@@ -301,5 +305,7 @@ thin quads. Both are on by default; `sprite_cache = off` or
 
 * Vector glyphs depend on the glyph SVG set; missing or unreadable ones are
   traced from the font sheets, with a build warning.
+* The kana glyphs (the Japanese boss names, BOSS NAME in the options) did
+  not vectorize well and are still a work in progress, at low priority.
 * As in 1.08, a game over whose score does not rank fades straight to the
   title, and `best.rec` is never written.

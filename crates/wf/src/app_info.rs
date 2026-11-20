@@ -4,18 +4,28 @@
 
 /// The product's name.
 pub const NAME: &str = "Warning Forever+";
-/// The original's version, which the port carries.
-pub const VERSION: [u16; 4] = [1, 0, 8, 0];
-pub const VERSION_TEXT: &str = "1.0.8.0";
+/// Warning Forever+'s own version (semantic: major.minor.patch), not the
+/// original's: every release is based on the original's last version,
+/// [`BASED_ON`]. Shown with the name, never alone.
+pub const VERSION: [u16; 3] = [1, 0, 0];
+pub const VERSION_TEXT: &str = "1.0.0";
+/// The version of Warning Forever this is a port of (its data.bin).
+pub const BASED_ON: &str = "1.08";
+/// The full version line: "Warning Forever+ 1.0.0 (based on Warning
+/// Forever 1.08)".
+pub fn version_line() -> String {
+    format!("{NAME} {VERSION_TEXT} (based on Warning Forever {BASED_ON})")
+}
 /// The original's maker (its readme's "Hikware").
 pub const COMPANY: &str = "Hikware";
 /// The original's own credit line.
 pub const AUTHOR: &str = "Hikoza.T.Ohkubo";
 pub const COPYRIGHT: &str = "\u{a9} 2003-2012 Hikoza.T.Ohkubo";
-/// Who updated the port.
-pub const UPDATER: &str = "okeBUDDY";
+/// Who made Warning Forever+.
+pub const UPDATER: &str = "okeBUDDY and Claude Opus 5.5";
 /// The Windows version resource's Comments.
-pub const COMMENTS: &str = "Updated by okeBUDDY";
+/// (A literal: keep its "1.08" in step with [`BASED_ON`]; a test checks.)
+pub const COMMENTS: &str = "Warning Forever+ by okeBUDDY and Claude Opus 5.5 (based on Warning Forever 1.08)";
 pub const ORIGINAL_FILENAME: &str = "wf+.exe";
 pub const INTERNAL_NAME: &str = "wf+";
 /// The resource language: US English.
@@ -25,7 +35,7 @@ pub const LANGUAGE: u16 = 0x0409;
 /// elevation, Windows 10/11. No XML declaration: winresource writes each
 /// line padded with spaces, and a declaration must start the document.
 pub const WINDOWS_MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
-<assemblyIdentity type="win32" name="okeBUDDY.WarningForeverPlus" version="1.0.8.0"/>
+<assemblyIdentity type="win32" name="okeBUDDY.WarningForeverPlus" version="1.0.0.0"/>
 <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
 <security>
 <requestedPrivileges>
@@ -47,7 +57,7 @@ pub const WINDOWS_MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com
 </assembly>
 "#;
 
-/// The version as the Windows resource packs it.
+/// The version as the Windows resource packs it (major.minor.patch.0).
 pub const fn version_u64() -> u64 {
-    (VERSION[0] as u64) << 48 | (VERSION[1] as u64) << 32 | (VERSION[2] as u64) << 16 | VERSION[3] as u64
+    (VERSION[0] as u64) << 48 | (VERSION[1] as u64) << 32 | (VERSION[2] as u64) << 16
 }

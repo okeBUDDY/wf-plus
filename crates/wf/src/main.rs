@@ -104,7 +104,7 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wfplus [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--perf-overlay] [--render-scale K] [--arena classic|hd]\n          [--sprite-cache on|off] [--analytic-shapes on|off] [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
+        "usage: wfplus [--version] [--data <data.bin>] [--home <dir>] [--size WxH] [--frames N --screenshot out.png]\n          [--fps-cap off|vsync|N] [--fullscreen|--borderless|--windowed] [--show-fps] [--perf-overlay] [--render-scale K] [--arena classic|hd]\n          [--sprite-cache on|off] [--analytic-shapes on|off] [--guide keyboard|gamepad|mouse|touch] [--caps desktop|android]\n          [--headless [--bench SECONDS] [--perf out.csv] --script FRAME[-LAST]:KEY,...] [--replay rec/<file>.rec] [--hash-log out.txt] [--viewer]\n\
          data.bin also comes from WF_DATA, else data.bin in the working directory, --home, next to the executable or in\n\
          Downloads, else wf108.zip (read in place) there; with none, a window asks for the download.\n\
          The settings, scores and replays are kept in --home (WF_HOME, default: the current directory)."
@@ -145,6 +145,10 @@ fn options() -> Options {
             "--headless" => o.headless = true,
             "--home" => o.home = value().into(),
             "--viewer" => o.viewer = true,
+            "--version" => {
+                println!("{}", app_info::version_line());
+                std::process::exit(0);
+            }
             "--replay" => o.replay = Some(value()),
             "--hash-log" => o.hash_log = Some(value().into()),
             "--frames" => o.frames = value().parse().unwrap_or_else(|_| usage()),
@@ -898,7 +902,13 @@ mod tests {
     fn app_version_is_the_crate_version() {
         let v = super::app_info::VERSION;
         assert_eq!(env!("CARGO_PKG_VERSION"), format!("{}.{}.{}", v[0], v[1], v[2]));
-        assert_eq!(super::app_info::VERSION_TEXT, format!("{}.{}.{}.{}", v[0], v[1], v[2], v[3]));
+        assert_eq!(super::app_info::VERSION_TEXT, env!("CARGO_PKG_VERSION"));
+        // The manifest's assemblyIdentity: the four-part form.
+        let identity = format!("version=\"{}.0\"", super::app_info::VERSION_TEXT);
+        assert!(super::app_info::WINDOWS_MANIFEST.contains(&identity), "{identity}");
+        assert_eq!(super::app_info::version_line(), "Warning Forever+ 1.0.0 (based on Warning Forever 1.08)");
+        let based_on = format!("(based on Warning Forever {})", super::app_info::BASED_ON);
+        assert!(super::app_info::COMMENTS.ends_with(&based_on), "{}", super::app_info::COMMENTS);
     }
 
     #[test]

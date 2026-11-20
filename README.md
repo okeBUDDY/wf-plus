@@ -9,6 +9,11 @@ A port of Warning Forever 1.08 (Hikoza T. Ohkubo, 2005) to Rust.
 > [wf-decomp](https://github.com/okeBUDDY/wf-decomp) and
 > [wf-plus](https://github.com/okeBUDDY/wf-plus) repositories on GitHub.
 
+Warning Forever+ has its own version numbers, separate from the original's:
+semantic versions starting at 1.0.0, always shown with the name, as in
+"Warning Forever+ 1.0.0 (based on Warning Forever 1.08)". Every release is
+based on 1.08, the original's last version.
+
 Version 1.08 is the last release: the original developer ended development and support of the
 game after it. The game is still [freely available to download from the official
 website](https://www.hikware.com/Prod/index.html#wf). This repository does not contain the game;

@@ -2,8 +2,9 @@
 name = "wf"
 description = "Warning Forever, ported to Rust."
 edition.workspace = true
-# The original's version (see src/app_info.rs).
-version = "1.0.8"
+# Warning Forever+'s own version (see src/app_info.rs), based on the
+# original's 1.08.
+version = "1.0.0"
 build = "build.rs"
 
 # `wfplus` (wf+.exe in the Windows zip, see scripts/build-windows.sh).

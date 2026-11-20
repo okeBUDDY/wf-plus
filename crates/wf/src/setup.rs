@@ -52,8 +52,6 @@ const TITLE_AMBER: Argb = Argb(0xffff_d000);
 /// opaque.
 const PLUS_VIOLET: Argb = Argb(0xff00_0000 | (wf_engine::app::ARENA_BORDER & 0xff_ffff));
 
-/// Phones have no drop and no Downloads folder to search; the text says so.
-const MOBILE: bool = cfg!(any(target_os = "android", target_os = "ios"));
 
 /// The screen's two buttons: the download page, and the file picker.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -106,6 +104,9 @@ pub struct Setup {
     selected: Button,
     /// The file picker was asked for (the loop opens it).
     pick: bool,
+    /// A phone or tablet: no drop, no Downloads folder to search, no keys;
+    /// the text says so.
+    mobile: bool,
     /// Last tick's mouse buttons, keys (Return, Up, Down), confirm and
     /// touch, for presses.
     held: (u32, [bool; 3], bool, bool),
@@ -115,7 +116,7 @@ pub struct Setup {
 }
 
 impl Setup {
-    pub fn new(art: &Art, dest: PathBuf, dirs: Vec<PathBuf>) -> Self {
+    pub fn new(art: &Art, dest: PathBuf, dirs: Vec<PathBuf>, mobile: bool) -> Self {
         Setup {
             fonts: Fonts::load(art),
             draw: DrawList::new(),
@@ -133,6 +134,7 @@ impl Setup {
             ticks: 0,
             selected: Button::Download,
             pick: false,
+            mobile,
             held: (0, [false; 3], false, false),
             rejected: Vec::new(),
         }
@@ -184,7 +186,7 @@ impl Setup {
     }
 
     fn button(&mut self, button: Button, hover: bool) {
-        let lit = hover || (self.selected == button && (self.ticks / 30).is_multiple_of(2)) || MOBILE;
+        let lit = hover || (self.selected == button && (self.ticks / 30).is_multiple_of(2)) || self.mobile;
         let color = if lit { AMBER } else { DIM_AMBER };
         self.centred(true, button.y(), button.label(), color);
         let w = button.label().len() as f32 * 16.0;
@@ -205,7 +207,7 @@ impl Setup {
         self.centred(false, 152.0, "THIS NEEDS THE GAME DATA OF WARNING FOREVER 1.08,", WHITE);
         self.centred(false, 168.0, "A FREE DOWNLOAD FROM THE OFFICIAL WEBSITE:", WHITE);
         self.button(Button::Download, hover == Some(Button::Download));
-        if MOBILE {
+        if self.mobile {
             self.centred(false, 248.0, "TAP IT TO DOWNLOAD WF108.ZIP THERE,", WHITE);
             self.centred(false, 264.0, "THEN CHOOSE THE DOWNLOADED FILE:", WHITE);
         } else {
@@ -213,7 +215,7 @@ impl Setup {
             self.centred(false, 264.0, "THIS WINDOW OR CHOOSE IT:", WHITE);
         }
         self.button(Button::Choose, hover == Some(Button::Choose));
-        if !MOBILE {
+        if !self.mobile {
             self.centred(false, 344.0, "A WF108.ZIP NEXT TO THE GAME OR IN DOWNLOADS", GREY);
             self.centred(false, 360.0, "IS FOUND BY ITSELF.", GREY);
         }
@@ -222,7 +224,7 @@ impl Setup {
         } else if wf_engine::platform::sdl::Platform::file_dialog_open() {
             self.centred(false, 392.0, "WAITING FOR THE FILE DIALOG", GREY);
         }
-        if !MOBILE {
+        if !self.mobile {
             self.centred(false, 440.0, "ENTER: OPEN   UP/DOWN: SELECT   ESC: QUIT", GREY);
         }
     }

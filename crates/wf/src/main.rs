@@ -379,6 +379,11 @@ fn script_input(o: &Options, frame: u32) -> RawInput {
     raw
 }
 
+/// The setup screen's phone layout: on Android, or as `--caps android`.
+fn mobile(o: &Options) -> bool {
+    cfg!(any(target_os = "android", target_os = "ios")) || o.caps == Some(platform::Capabilities::MOBILE)
+}
+
 /// Headless with no game data: a screenshot of the setup screen.
 fn setup_shot(o: &Options, path: &std::path::Path) -> Result<(), String> {
     let art = art::Art::load();
@@ -387,7 +392,7 @@ fn setup_shot(o: &Options, path: &std::path::Path) -> Result<(), String> {
     let (_adapter, device, queue) = gfx::gpu::create_device(&instance, None)?;
     let mut renderer = gfx::gpu::Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, &art.pack);
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::default());
-    let mut screen = setup::Setup::new(&art, o.home.join("data.bin"), data_dirs(&o.home));
+    let mut screen = setup::Setup::new(&art, o.home.join("data.bin"), data_dirs(&o.home), mobile(o));
     let mut snaps = wf_engine::app::run_ticks(&mut screen, &mut input, o.frames, |f| script_input(o, f));
     let layout = gfx::Layout::new(snaps.cur.arena, size);
     let frame = snaps.frame(1.0, &layout, false);
@@ -790,7 +795,7 @@ fn run_setup(o: &Options, art: &art::Art) -> Result<Option<(setup::Found, platfo
     }
     let mut display = wf_engine::app::Display::new(&platform, &art.pack, cfg.fps_cap)?;
     let mut input = wf_engine::input::InputSystem::new(wf_engine::input::Bindings::default());
-    let mut screen = setup::Setup::new(art, o.home.join("data.bin"), data_dirs(&o.home));
+    let mut screen = setup::Setup::new(art, o.home.join("data.bin"), data_dirs(&o.home), mobile(o));
     wf_engine::app::run_windowed(&mut screen, &mut platform, &mut display, cfg, &mut input, |_, _| Ok(()))?;
     Ok(screen.found.take().map(|found| (found, platform, display)))
 }

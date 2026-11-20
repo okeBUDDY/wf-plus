@@ -11,6 +11,8 @@ const FILE_VERSION: i32 = 0x67;
 const RECORD_SIZE: usize = std::mem::size_of::<GameRules>() + ENTRIES * std::mem::size_of::<ScoreEntry>();
 
 /// "1ST" .. "8TH" (0x45de80).
+/// A name in streamer mode: as wide as the name field.
+pub const MASK: &[u8; 3] = b"***";
 pub const RANK_NAMES: [&str; ENTRIES] = ["1ST", "2ND", "3RD", "4TH", "5TH", "6TH", "7TH", "8TH"];
 
 #[derive(Clone, Debug)]
@@ -100,8 +102,9 @@ impl ScoreTable {
     }
 
     /// Format (0x4210c0): the table as text, "@@1"/"@@0" around the last
-    /// inserted rank; returns it and its visible length.
-    pub fn format(&self) -> (Vec<u8>, i32) {
+    /// inserted rank; returns it and its visible length. `hide_names`
+    /// (streamer mode) shows every entered name as "***" (display only).
+    pub fn format(&self, hide_names: bool) -> (Vec<u8>, i32) {
         let mut text = if self.arenas.is_some() {
             b"   NAME SCORE      STG DEAD TIME     ARENA\n\n\n".to_vec()
         } else {
@@ -109,7 +112,10 @@ impl ScoreTable {
         };
         for (i, e) in self.entries.iter().enumerate() {
             let (begin, end) = if i as i32 == self.rank { ("@@1", "@@0") } else { ("", "") };
-            let n: Vec<u8> = e.name.iter().copied().take_while(|&c| c != 0).take(3).collect();
+            let mut n: Vec<u8> = e.name.iter().copied().take_while(|&c| c != 0).take(3).collect();
+            if hide_names && n != b"---" {
+                n = MASK.to_vec();
+            }
             text.extend_from_slice(format!("{begin}{} ", RANK_NAMES[i]).as_bytes());
             text.extend_from_slice(&n);
             text.extend(std::iter::repeat_n(b' ', 3 - n.len()));
@@ -302,11 +308,35 @@ mod tests {
         assert_eq!(t.rank(), 3);
         assert_eq!(t.entries[3].score, 55000);
         assert_eq!(t.entries[4].score, 50000);
-        let (text, len) = t.format();
+        let (text, len) = t.format(false);
         let s = String::from_utf8(text.clone()).unwrap();
         assert!(s.contains("@@14TH ABC 0000055000   4   2  01:02:05@@0"));
         assert_eq!(len as usize, text.len() - 6);
         assert_eq!(t.find_rank(&ScoreEntry { score: 1, ..e }), -1);
+    }
+
+    #[test]
+    fn hidden_names_show_no_initials() {
+        for hd in [false, true] {
+            let mut t = ScoreTable { arenas: hd.then_some([[0; 2]; ENTRIES]), ..Default::default() };
+            t.reset();
+            for (i, n) in ["ABC", "XYZ", "Q", "K9!"].iter().enumerate() {
+                t.insert(&ScoreEntry { score: 900_000 - i as u32 * 1000, time: 60, stage: 3, deaths: 0, name: name(n) }, -1);
+            }
+            let shown = String::from_utf8(t.format(false).0).unwrap();
+            assert!(shown.contains("1ST ABC 0000900000"), "{shown}");
+            let (text, len) = t.format(true);
+            let hidden = String::from_utf8(text.clone()).unwrap();
+            for n in ["ABC", "XYZ", "Q ", "K9!"] {
+                assert!(!hidden.contains(n), "{n} in {hidden}");
+            }
+            // The same layout: only the names differ.
+            assert_eq!(text.len(), shown.len());
+            assert_eq!(len, t.format(false).1);
+            assert!(hidden.contains("1ST *** 0000900000"), "{hidden}");
+            assert!(hidden.contains("4TH *** 0000897000"), "{hidden}");
+            assert!(hidden.contains("5TH --- "), "placeholders stay: {hidden}");
+        }
     }
 
     #[test]

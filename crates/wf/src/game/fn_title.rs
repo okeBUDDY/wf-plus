@@ -425,7 +425,7 @@ impl FnTitle {
     /// The score text of the chosen arena mode's table.
     fn show_scores(&mut self, cx: &mut Cx) {
         cx.select_scores(cx.arena_choice);
-        let (scores, len) = cx.scores.format();
+        let (scores, len) = cx.scores.format(cx.settings.hide_names);
         self.scores = scores;
         self.scores_length = len as i16;
         self.scores_shown = self.scores_shown.min(self.scores_length);

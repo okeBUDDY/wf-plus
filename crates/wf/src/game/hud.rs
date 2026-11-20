@@ -535,6 +535,12 @@ impl GameHud {
                 if self.enter_name(cx) {
                     self.flags &= !FLAG_NAME_CURSOR;
                     cx.global.entry.name = self.name;
+                    // Streamer mode: the confirmed name is masked as it
+                    // fades out (display only).
+                    if cx.settings.hide_names {
+                        let n = self.texts[2].len().min(NAME_LENGTH as usize);
+                        self.texts[2][..n].copy_from_slice(&super::score_table::MASK[..n]);
+                    }
                     let entry = cx.global.entry;
                     cx.scores.arena = cx.arena.size_u16();
                     cx.scores.insert(&entry, -1);

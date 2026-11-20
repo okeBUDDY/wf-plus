@@ -40,6 +40,7 @@ pub enum Item {
     RenderScale,
     FpsCap,
     ShowFps,
+    HideNames,
     ShotKey,
     SlowKey,
     WeaponKey,
@@ -114,6 +115,7 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     // The presets, MAX (the panel's top refresh rate), CUSTOM.
     formatted(FpsCap::PRESETS.len() as i16 + 2, "FPS CAP         : "),
     formatted(2, "SHOW FPS        : "),
+    formatted(2, "HIDE NAMES      : "),
     button(Kind::Key, 0, "SHOT      (KEY) : "),
     button(Kind::Key, 1, "SLOW MOVE (KEY) : "),
     button(Kind::Key, 3, "WEAPON    (KEY) : "),
@@ -142,7 +144,7 @@ const TABS: [(&str, &[Item]); 5] = {
     use Item::*;
     [
         ("GAME", &[GameMode, StartTime, TimerMode, Ships, Extend, Pause, DefaultArena, Exit]),
-        ("DISPLAY", &[WindowMode, Resolution, RenderScale, FpsCap, ShowFps, BossName, Exit]),
+        ("DISPLAY", &[WindowMode, Resolution, RenderScale, FpsCap, ShowFps, HideNames, BossName, Exit]),
         ("AUDIO", &[BgmVolume, SeVolume, BgmMode, Exit]),
         (
             "CONTROLS",
@@ -498,7 +500,7 @@ impl FnOption {
                 },
                 None => format!("CUSTOM ({})", s.fps_custom),
             },
-            x if x == Item::ShowFps as usize || x == Item::MouseSteering as usize => on_off(value != 0),
+            x if x == Item::ShowFps as usize || x == Item::HideNames as usize || x == Item::MouseSteering as usize => on_off(value != 0),
             x if (Item::MouseLeft as usize..=Item::MouseRight as usize).contains(&x) => settings::MOUSE_ACTIONS[v].0.into(),
             x if x == Item::DeadZone as usize => format!("{}%", (settings::DEAD_ZONES[v] * 100.0).round() as i32),
             x if x == Item::TouchScale as usize => format!("{}X", settings::TOUCH_SCALES[v]),
@@ -529,6 +531,7 @@ impl FnOption {
             (Item::RenderScale, settings::nearest(&settings::RENDER_SCALES, s.display.render_scale)),
             (Item::FpsCap, s.fps_index()),
             (Item::ShowFps, s.display.show_fps as usize),
+            (Item::HideNames, s.hide_names as usize),
             (Item::MouseLeft, s.mouse[0] as usize),
             (Item::MouseMiddle, s.mouse[1] as usize),
             (Item::MouseRight, s.mouse[2] as usize),
@@ -560,6 +563,10 @@ impl FnOption {
             x if x == Item::RenderScale as usize => s.display.render_scale = settings::RENDER_SCALES[v],
             x if x == Item::FpsCap as usize => s.set_fps_index(v),
             x if x == Item::ShowFps as usize => s.display.show_fps = v != 0,
+            x if x == Item::HideNames as usize => {
+                s.hide_names = v != 0;
+                return;
+            }
             x if (Item::MouseLeft as usize..=Item::MouseRight as usize).contains(&x) => {
                 s.mouse[x - Item::MouseLeft as usize] = v as u8;
                 s.input_dirty = true;
@@ -1076,7 +1083,7 @@ mod tests {
     fn mobile_omits_the_window_rows() {
         let display = |caps: &Capabilities| build_tabs(caps).into_iter().find(|(n, _)| *n == "DISPLAY").unwrap().1;
         assert_eq!(display(&Capabilities::DESKTOP), TABS[1].1);
-        assert_eq!(display(&Capabilities::MOBILE), [Item::RenderScale, Item::FpsCap, Item::ShowFps, Item::BossName, Item::Exit]);
+        assert_eq!(display(&Capabilities::MOBILE), [Item::RenderScale, Item::FpsCap, Item::ShowFps, Item::HideNames, Item::BossName, Item::Exit]);
         // No tab is left empty, so all five stay; the other tabs are as on a desktop.
         let tabs = build_tabs(&Capabilities::MOBILE);
         assert_eq!(tabs.len(), 5);

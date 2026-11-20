@@ -49,6 +49,9 @@ pub struct Settings {
     /// What the platform lets the options change (`--caps` simulates
     /// another platform's).
     pub caps: Capabilities,
+    /// Streamer mode (`ui.hide_names`): the players' initials are shown
+    /// as "***" (display only; the scores keep them).
+    pub hide_names: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +69,7 @@ impl Default for Settings {
             input_guide: Default::default(),
             guide_device: None,
             caps: wf_engine::platform::capabilities(),
+            hide_names: false,
         }
     }
 }
@@ -86,6 +90,7 @@ impl Settings {
         let mut s = Settings { display: DisplayConfig::from_config(c), ..Default::default() };
         s.caps.mask(&mut s.display);
         s.fps_custom = c.get_or("display.fps_custom", s.fps_custom).clamp(1.0, 1000.0);
+        s.hide_names = c.get_bool("ui.hide_names", false);
         s.input_guide = c.get("ui.input_guide").and_then(super::guide::Policy::parse).unwrap_or_default();
         let b = Bindings::from_config(c);
         s.mouse_steering = b.mouse_steering;
@@ -105,6 +110,7 @@ impl Settings {
         self.display.store(c);
         c.set("display.fps_custom", self.fps_custom);
         c.set("ui.input_guide", self.input_guide.name());
+        c.set("ui.hide_names", self.hide_names);
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
         }

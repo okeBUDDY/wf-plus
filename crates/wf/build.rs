@@ -65,8 +65,10 @@ fn main() {
         println!("cargo:rustc-link-arg=-lc++_static");
         println!("cargo:rustc-link-arg=-lc++abi");
         // SDL's JNI_OnLoad registers its natives with SDLActivity; rustc's
-        // version script would hide it in libmain.so, so export it.
+        // version script would hide it in libwfplus.so, so export it.
         println!("cargo:rustc-cdylib-link-arg=-Wl,--undefined=JNI_OnLoad");
+        // The loader names it by its file; give it the same soname.
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libwfplus.so");
         let script = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("jni.ver");
         std::fs::write(&script, "{ global: JNI_OnLoad; };\n").expect("write the JNI version script");
         println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={}", script.display());

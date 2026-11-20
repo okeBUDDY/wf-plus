@@ -4,4 +4,6 @@
 /app/build/
 /local.properties
 data.bin
+readme.txt
+readme_j.txt
 *.so

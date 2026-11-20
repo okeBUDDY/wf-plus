@@ -1,9 +1,10 @@
 // Warning Forever for Android.
 //
 // The native code is the Rust crate `wf` (crates/wf), built by cargo-ndk as
-// libmain.so with SDL3 linked in statically; the cooked art is inside it.
-// data.bin (the original game's data, not redistributable) is bundled from
-// outside the repository: pass -PWF_DATA=/path/to/data.bin or set WF_DATA.
+// libwfplus.so with SDL3 linked in statically; the cooked art is inside it.
+// data.bin (the original game's data, not redistributable) and the original
+// readme.txt and readme_j.txt beside it are bundled from outside the
+// repository: pass -PWF_DATA=/path/to/data.bin or set WF_DATA.
 //
 //   ./gradlew assembleDebug -PWF_DATA=/path/to/data.bin   (or gradle, 8.9+)
 //
@@ -66,7 +67,7 @@ android {
     }
     packagingOptions {
         // cargo-ndk already strips the release libraries.
-        jniLibs { keepDebugSymbols += ['**/libmain.so'] }
+        jniLibs { keepDebugSymbols += ['**/libwfplus.so'] }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -75,7 +76,7 @@ android {
     lint { abortOnError = false }
 }
 
-// libmain.so for each ABI, through cargo-ndk. SDL3 is built from source by
+// libwfplus.so for each ABI, through cargo-ndk. SDL3 is built from source by
 // sdl3-sys with CMake, which needs the NDK's toolchain file.
 def cargoNdk = tasks.register('cargoNdk', Exec) {
     def ndkDir = android.ndkDirectory
@@ -90,26 +91,38 @@ def cargoNdk = tasks.register('cargoNdk', Exec) {
     if (profile == 'release') cmd += ['--release']
     commandLine cmd
     onlyIf { !project.hasProperty('skipCargo') }
+    // Only this build's libraries: a renamed or removed one must not linger.
+    doFirst { project.delete(rustLibs) }
 }
 
-// data.bin into the APK's assets, from outside the repository. The build
-// fails when WF_DATA is not given.
+// data.bin, readme.txt and readme_j.txt into the APK's assets, from
+// outside the repository: data.bin from WF_DATA, the readmes from the same
+// folder. Copied byte for byte (readme_j.txt is Shift-JIS). The build fails
+// when WF_DATA is not given or a file is missing.
+def bundledFiles = ['data.bin', 'readme.txt', 'readme_j.txt']
 def bundleData = tasks.register('bundleWfData') {
     def src = project.findProperty('WF_DATA') ?: System.getenv('WF_DATA')
     def srcFile = src ? file(src) : null
-    def out = wfAssets.get().file('data.bin').asFile
-    if (srcFile?.isFile()) inputs.file(srcFile)
-    outputs.file(out)
+    // name in the assets -> where it comes from
+    def sources = srcFile == null ? [:] : bundledFiles.collectEntries { name ->
+        [(name): name == 'data.bin' ? srcFile : new File(srcFile.parentFile, name)]
+    }
+    sources.values().each { if (it.isFile()) inputs.file(it) }
+    bundledFiles.each { outputs.file(wfAssets.get().file(it).asFile) }
     outputs.upToDateWhen { srcFile != null }
     doLast {
         if (srcFile == null) {
             throw new GradleException(
                 "WF_DATA is not set. data.bin is the original game's data and is not in the repository: " +
-                'pass -PWF_DATA=/path/to/data.bin or set the WF_DATA environment variable.')
+                'pass -PWF_DATA=/path/to/data.bin or set the WF_DATA environment variable ' +
+                '(readme.txt and readme_j.txt are taken from the same folder).')
         }
-        if (!srcFile.isFile()) throw new GradleException("WF_DATA: there is no file at ${srcFile}")
-        out.parentFile.mkdirs()
-        java.nio.file.Files.copy(srcFile.toPath(), out.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        sources.each { name, f ->
+            if (!f.isFile()) throw new GradleException("WF_DATA: there is no ${name} at ${f}")
+            def out = wfAssets.get().file(name).asFile
+            out.parentFile.mkdirs()
+            java.nio.file.Files.copy(f.toPath(), out.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 }
 

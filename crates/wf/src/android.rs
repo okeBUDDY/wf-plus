@@ -1,4 +1,4 @@
-//! The Android entry point. SDLActivity loads libmain.so (SDL3 is linked
+//! The Android entry point. WarningForeverActivity loads libwfplus.so (SDL3 is linked
 //! into it statically) and calls `SDL_main` on its SDL thread. The game is
 //! the same code as the desktop binary, built as a module of this library.
 //! On other targets this library is empty.

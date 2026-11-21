@@ -15,6 +15,8 @@ This port was completed using generative AI (Claude Opus 5.5).
 
 **Contents**
 
+- [Overview](#overview)
+  - [Screenshots](#screenshots)
 - [The game data](#the-game-data)
 - [Arena modes](#arena-modes)
 - [Build and run](#build-and-run)
@@ -25,6 +27,8 @@ This port was completed using generative AI (Claude Opus 5.5).
 - [Verification](#verification)
 - [Known gaps](#known-gaps)
 - [Licence](#licence)
+
+## Overview
 
 Warning Forever+ has its own version numbers, separate from the original's:
 semantic versions starting at 1.0.0, always shown with the name, as in
@@ -55,6 +59,8 @@ the fragment shader. The art stays sharp at any resolution or aspect, with no
 upscaling. The heaviest sprites are rasterized once per scale into a cache and
 reused, and the title character is still the original pixels (see
 [Rendering](#rendering)).
+
+### Screenshots
 
 | | |
 |---|---|

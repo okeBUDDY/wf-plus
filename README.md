@@ -13,6 +13,19 @@ This port was completed using generative AI (Claude Opus 5.5).
 > [wf-decomp](https://github.com/okeBUDDY/wf-decomp) and
 > [wf-plus](https://github.com/okeBUDDY/wf-plus) repositories on GitHub.
 
+**Contents**
+
+- [The game data](#the-game-data)
+- [Arena modes](#arena-modes)
+- [Build and run](#build-and-run)
+- [Controls](#controls)
+- [Architecture and seams](#architecture-and-seams)
+  - [Bit-exact simulation](#bit-exact-simulation)
+  - [Rendering](#rendering)
+- [Verification](#verification)
+- [Known gaps](#known-gaps)
+- [Licence](#licence)
+
 Warning Forever+ has its own version numbers, separate from the original's:
 semantic versions starting at 1.0.0, always shown with the name, as in
 "Warning Forever+ 1.0.0 (based on Warning Forever 1.08)". Every release is

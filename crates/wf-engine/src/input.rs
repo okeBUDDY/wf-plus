@@ -175,6 +175,8 @@ impl Bindings {
 #[derive(Clone, Debug, Default)]
 pub struct ActionState {
     held: u32,
+    /// The actions held by touch alone (no other source holds them).
+    touch_only: u32,
     /// The move vector, -1..1 each way, y down: digital directions give
     /// ±1, sticks their deflection past the dead zone.
     pub axis: [f32; 2],
@@ -203,6 +205,17 @@ impl ActionState {
     pub fn held(&self, a: Action) -> bool {
         self.held & a.bit() != 0
     }
+
+    /// Holds `a` as a finger would (tests and scripted input).
+    pub fn hold_by_touch(&mut self, a: Action) {
+        self.held |= a.bit();
+        self.touch_only |= a.bit();
+    }
+
+    /// Held, and only by a finger: the game may read the finger otherwise.
+    pub fn held_by_touch_only(&self, a: Action) -> bool {
+        self.touch_only & a.bit() != 0
+    }
 }
 
 /// Turns devices into actions.
@@ -228,11 +241,18 @@ impl InputSystem {
             Source::Mouse(m) => raw.mouse.buttons & (1 << m) != 0,
             Source::Touch => self.bindings.touch && !raw.fingers.is_empty(),
         };
+        let (mut touch, mut other) = (0, 0);
         for (src, action) in &self.bindings.binds {
             if source_held(src) {
-                s.held |= action.bit();
+                if *src == Source::Touch {
+                    touch |= action.bit();
+                } else {
+                    other |= action.bit();
+                }
             }
         }
+        s.held = touch | other;
+        s.touch_only = touch & !other;
         // The digital directions, then the sticks.
         let mut axis = [0.0f32; 2];
         if s.held(Action::Left) {
@@ -336,7 +356,11 @@ mod tests {
         let mut raw = RawInput { window: (1280, 720), ..Default::default() };
         raw.fingers.push(Finger { id: 7, pos: [0.5, 0.5] });
         let s = sys.update(&raw, &layout());
-        assert!(s.touching && s.held(Action::SHOT));
+        assert!(s.touching && s.held(Action::SHOT) && s.held_by_touch_only(Action::SHOT));
+        raw.keys[Key::Z as usize] = true;
+        assert!(!sys.update(&raw, &layout()).held_by_touch_only(Action::SHOT));
+        raw.keys[Key::Z as usize] = false;
+        sys.update(&raw, &layout());
         raw.fingers[0].pos = [0.5 + 15.0 / 1280.0, 0.5];
         let s = sys.update(&raw, &layout());
         assert!((s.drag[0] - 10.0).abs() < 1e-3, "{:?}", s.drag);

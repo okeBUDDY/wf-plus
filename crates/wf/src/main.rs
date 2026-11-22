@@ -314,6 +314,8 @@ impl wf_engine::app::Game for WfGame {
         // the window is active; otherwise their buttons and presses hold.
         if self.active() {
             self.cx.input.steer.ship = self.ship();
+            self.cx.input.steer.aim = self.cx.settings.touch_aim;
+            self.cx.input.steer.fire_button = game::guide::fire_button(&self.cx);
             self.cx.input.poll(actions);
             self.cx.ui.update(actions);
             // A forced guide device (screenshots) is the one the menus show.

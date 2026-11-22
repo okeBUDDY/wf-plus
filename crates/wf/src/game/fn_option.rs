@@ -51,6 +51,7 @@ pub enum Item {
     MouseSteering,
     DeadZone,
     TouchScale,
+    TouchAim,
     Exit,
 }
 pub const ITEMS: usize = Item::Exit as usize + 1;
@@ -127,6 +128,7 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(2, "MOUSE STEERING  : "),
     formatted(settings::DEAD_ZONES.len() as i16, "PAD DEADZONE    : "),
     formatted(settings::TOUCH_SCALES.len() as i16, "TOUCH SPEED     : "),
+    formatted(settings::TOUCH_AIMS.len() as i16, "TOUCH AIM       : "),
     OptionItem { kind: Kind::Action, count: 0, column: 0, param: 0, text: "EXIT" },
 ];
 /// The initial cursor widths (0x45da50's `width` fields).
@@ -151,7 +153,7 @@ const TABS: [(&str, &[Item]); 5] = {
             "CONTROLS",
             &[
                 ShotKey, SlowKey, WeaponKey, PauseKey, ShotButton, SlowButton, WeaponButton, PauseButton, MouseLeft, MouseMiddle,
-                MouseRight, MouseSteering, DeadZone, TouchScale, Exit,
+                MouseRight, MouseSteering, DeadZone, TouchScale, TouchAim, Exit,
             ],
         ),
         ("RECORDS", &[StageReplay, ScoreReset, Exit]),
@@ -510,6 +512,7 @@ impl FnOption {
             x if (Item::MouseLeft as usize..=Item::MouseRight as usize).contains(&x) => settings::MOUSE_ACTIONS[v].0.into(),
             x if x == Item::DeadZone as usize => format!("{}%", (settings::DEAD_ZONES[v] * 100.0).round() as i32),
             x if x == Item::TouchScale as usize => format!("{}X", settings::TOUCH_SCALES[v]),
+            x if x == Item::TouchAim as usize => settings::TOUCH_AIMS[v].0.into(),
             _ => String::new(),
         }
     }
@@ -559,6 +562,7 @@ impl FnOption {
             (Item::MouseSteering, s.mouse_steering as usize),
             (Item::DeadZone, settings::nearest(&settings::DEAD_ZONES, s.dead_zone)),
             (Item::TouchScale, settings::nearest(&settings::TOUCH_SCALES, s.touch_scale)),
+            (Item::TouchAim, s.touch_aim as usize),
         ];
         for (item, value) in v {
             cx.options.values[item as usize] = value as i16;
@@ -609,6 +613,10 @@ impl FnOption {
             x if x == Item::TouchScale as usize => {
                 s.touch_scale = settings::TOUCH_SCALES[v];
                 s.input_dirty = true;
+                return;
+            }
+            x if x == Item::TouchAim as usize => {
+                s.touch_aim = v as u8;
                 return;
             }
             _ => return,

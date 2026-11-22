@@ -207,10 +207,16 @@ last one used picks the prompts.
 * Gamepad (SDL_Gamepad, hot-plugged): left stick or d-pad, with a dead zone;
   buttons are triggers. A gamepad touchpad drags the ship.
 * Touch: drag anywhere to move the ship relative to the finger; a finger
-  down shoots. A second finger anywhere moves slowly while it is held, and a
-  quick tap of it selects the weapon. Android's Back (the button or the
-  gesture) goes back to the title from a game, the arena choice or the
-  options, and quits from the title's menu.
+  down shoots, and a quick tap of a second finger anywhere selects the
+  weapon. Android's Back (the button or the gesture) goes back to the title
+  from a game, the arena choice or the options, and quits from the title's
+  menu. The laser's cone turns only while the shot is up, so OPTIONS >
+  CONTROLS > TOUCH AIM picks how a finger stops shooting to aim: 2ND FINGER
+  (the default; a second finger held holds the shot, and the steering
+  finger's double-tap-and-hold is the slow move), FIRE BUTTON (a button in
+  the bottom right corner turns the shot off and on; a second finger held is
+  the slow move) or SLOW DRAG (a slow, careful drag holds the shot; a second
+  finger held is the slow move).
 
 The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS,
 RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel

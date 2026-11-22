@@ -156,8 +156,38 @@ pub fn fps_text(s: &super::settings::Settings) -> String {
     }
 }
 
+/// The FIRE button of the FIRE BUTTON touch aim ([x0, y0, x1, y1] in
+/// arena units): in a game played by touch, the HUD's bottom right corner.
+pub fn fire_button(cx: &Cx) -> Option<[f32; 4]> {
+    if cx.settings.touch_aim != 0 || cx.draw.menu || device(cx) != Device::Touch || cx.game.player.is_none() {
+        return None;
+    }
+    let (left, width) = cx.hud_view();
+    let (right, bottom) = (left + width - 8.0, cx.arena.height - 24.0);
+    Some([right - 88.0, bottom - 40.0, right, bottom])
+}
+
+/// Draws the FIRE button: lit while the touch shot is on.
+fn draw_fire_button(cx: &mut Cx) {
+    let Some([x0, y0, x1, y1]) = cx.input.steer.fire_button else { return };
+    let on = !cx.input.steer.fire_off;
+    let quad = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+    let fill = if on { 0x6000_a040 } else { 0x6040_4040 };
+    cx.draw.shape(Primitive::TriangleStrip, &Transform::IDENTITY, &quad, Argb(fill), Blend::Normal);
+    let label: &[u8] = if on { b"FIRE ON" } else { b"FIRE OFF" };
+    let w = 8.0 * label.len() as f32;
+    let (x, y) = (x0 + (x1 - x0 - w) * 0.5, y0 + (y1 - y0 - 8.0) * 0.5);
+    cx.fonts.small_text.print(&mut cx.draw, x, y, label, None, Argb(if on { 0xe0ff_ffff } else { 0xa0ff_ffff }), -1, Blend::Normal);
+    cx.hud.boxes.push(("fire", [x0, y0, x1, y1]));
+}
+
 /// Draws the guide and the FPS counter (after the frame's other draws).
 pub fn draw(cx: &mut Cx) {
+    if cx.input.steer.fire_button.is_some() {
+        cx.draw.set_pass(Pass::Overlay);
+        draw_fire_button(cx);
+        cx.draw.set_pass(Pass::Arena);
+    }
     let fps = (cx.settings.display.show_fps || cx.settings.perf_overlay).then(|| fps_text(&cx.settings));
     let guide = cx.guide.filter(|_| shown(cx)).map(|g| text(cx, g));
     if fps.is_none() && guide.is_none() {

@@ -49,28 +49,77 @@ pub struct Steer {
     wheel: Option<f32>,
     wheel_turn: f32,
     wheel_wait: u32,
+    /// How touch aims (`settings::TOUCH_AIMS`), set by the game each tick.
+    pub aim: u8,
+    /// The FIRE button (arena units), when it is on screen.
+    pub fire_button: Option<[f32; 4]>,
+    /// The FIRE button turned the touch shot off.
+    pub fire_off: bool,
+    /// The finger that went down on the FIRE button (ignored otherwise).
+    button_finger: Option<u64>,
+    /// The fingers down last tick (a new one is a touch down).
+    last_ids: [u64; 4],
+    last_count: usize,
+    /// The steering finger's ticks down, travel and place (for its taps).
+    touch: (u32, f32, [f32; 2]),
+    /// After a tap of the steering finger: the ticks left for the next
+    /// touch to make it a double tap, and where it was. The steering
+    /// finger is then a double-tap-and-hold (the slow move of the 2ND
+    /// FINGER aim).
+    tap_window: u32,
+    tap_at: [f32; 2],
+    double_hold: bool,
+    /// The steering finger's speed (arena units a tick, smoothed).
+    speed: f32,
 }
 
-/// A second finger held this long (ticks) is the slow move; lifted sooner,
-/// having stayed put, it is a tap: the weapon select.
+/// A second finger held this long (ticks) is the slow move (or the aim);
+/// lifted sooner, having stayed put, it is a tap: the weapon select.
 const SECOND_HOLD: u32 = 8;
 /// After the wheel selects the weapon, it rests this many ticks (a
 /// trackpad's scroll goes on long after the fingers lift).
 const WHEEL_WAIT: u32 = 15;
+/// A double tap: a tap (down at most `TAP_TICKS`, sliding less than
+/// `TAP_TRAVEL`), then a touch within `DOUBLE_TAP` ticks of lifting and
+/// `DOUBLE_TAP_REACH` arena units of it. Lifting a steering finger to put
+/// it down elsewhere is none: it was down long, or slid.
+const TAP_TICKS: u32 = 10;
+const TAP_TRAVEL: f32 = 12.0;
+const DOUBLE_TAP: u32 = 15;
+const DOUBLE_TAP_REACH: f32 = 48.0;
+/// The SLOW DRAG aim: a steering finger moving this fast (arena units a
+/// tick, smoothed) is aiming, not shooting.
+const AIM_SPEED: [f32; 2] = [0.4, 3.0];
 
-/// In play, the triggers that touch and the mouse have no button for. A
-/// second finger, anywhere, held: the slow move (while held); tapped: the
-/// weapon select. A turn of the wheel either way: the weapon select. The
-/// first finger steers and shoots as before.
-fn play_extras(a: &ActionState, steer: &mut Steer) -> u16 {
+/// In play, the triggers that touch and the mouse have no button for, and
+/// the touch aim. `b` is the pad's bits so far; returns them changed.
+///
+/// - A turn of the wheel either way: the weapon select.
+/// - A second finger, anywhere, tapped: the weapon select; held: the slow
+///   move, or with the 2ND FINGER aim the shot held up (the cone turns as
+///   the ship moves), the slow move then being the steering finger's
+///   double-tap-and-hold.
+/// - FIRE BUTTON aim: a finger down on the button turns the touch shot off
+///   or on. SLOW DRAG aim: the steering finger moving slowly holds it up.
+///
+/// The shot is held up only where a finger alone holds it.
+fn play_extras(a: &ActionState, steer: &mut Steer, mut b: u16) -> u16 {
     let total = a.raw.mouse.wheel;
     let turned = steer.wheel.map_or(0.0, |w| (total - w).abs());
     steer.wheel = Some(total);
-    if steer.ship.is_none() {
-        (steer.second, steer.wheel_turn, steer.wheel_wait) = (None, 0.0, 0);
-        return 0;
+    let fingers: Vec<(u64, [f32; 2])> = if a.touching { a.raw.fingers.iter().zip(&a.touches).map(|(f, &p)| (f.id, p)).collect() } else { Vec::new() };
+    let (last_ids, last_count) = (steer.last_ids, steer.last_count);
+    let is_new = |id: u64| !last_ids[..last_count].contains(&id);
+    let new_ids: Vec<(u64, [f32; 2])> = fingers.iter().copied().filter(|&(id, _)| is_new(id)).collect();
+    steer.last_count = fingers.len().min(4);
+    for (i, (id, _)) in fingers.iter().take(4).enumerate() {
+        steer.last_ids[i] = *id;
     }
-    let mut b = 0;
+    if steer.ship.is_none() {
+        (steer.second, steer.wheel_turn, steer.wheel_wait, steer.button_finger, steer.double_hold, steer.speed) = (None, 0.0, 0, None, false, 0.0);
+        (steer.tap_window, steer.touch) = (0, (0, 0.0, [0.0; 2]));
+        return b;
+    }
     if steer.wheel_wait > 0 {
         steer.wheel_wait -= 1;
         steer.wheel_turn = 0.0;
@@ -81,13 +130,67 @@ fn play_extras(a: &ActionState, steer: &mut Steer) -> u16 {
             (steer.wheel_turn, steer.wheel_wait) = (0.0, WHEEL_WAIT);
         }
     }
-    let other = a.raw.fingers.iter().zip(&a.touches).find(|(f, _)| a.touching && Some(f.id) != a.primary).map(|(f, &p)| (f.id, p));
+    let shot_by_touch = a.held_by_touch_only(Action::SHOT);
+    // The FIRE button: a finger landing on it.
+    if steer.aim == 0 {
+        if let Some(r) = steer.fire_button
+            && let Some(&(id, _)) = new_ids.iter().find(|(_, p)| p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3])
+        {
+            steer.fire_off = !steer.fire_off;
+            steer.button_finger = Some(id);
+        }
+    } else {
+        steer.fire_off = false;
+    }
+    if steer.button_finger.is_some_and(|id| !fingers.iter().any(|f| f.0 == id)) {
+        steer.button_finger = None;
+    }
+    let playing: Vec<(u64, [f32; 2])> = fingers.iter().copied().filter(|f| Some(f.0) != steer.button_finger).collect();
+    // The steering finger (the first down, past one on the button), its
+    // double tap and its speed.
+    let primary_id = if a.primary.is_some() && a.primary == steer.button_finger { playing.first().map(|f| f.0) } else { a.primary };
+    let primary = playing.iter().find(|f| Some(f.0) == primary_id);
+    match primary {
+        Some(&(id, p)) if is_new(id) => {
+            let near = (p[0] - steer.tap_at[0]).abs() + (p[1] - steer.tap_at[1]).abs() < DOUBLE_TAP_REACH;
+            steer.double_hold = steer.tap_window > 0 && near;
+            steer.tap_window = 0;
+            steer.touch = (1, 0.0, p);
+        }
+        Some(&(_, p)) => {
+            let (ticks, travel, last) = steer.touch;
+            steer.touch = (ticks + 1, travel + (p[0] - last[0]).abs() + (p[1] - last[1]).abs(), p);
+        }
+        None => {
+            // The steering finger lifted: a tap opens the double tap window.
+            let (ticks, travel, at) = steer.touch;
+            if ticks > 0 {
+                (steer.tap_window, steer.tap_at) = if ticks <= TAP_TICKS && travel < TAP_TRAVEL { (DOUBLE_TAP, at) } else { (0, at) };
+            } else {
+                steer.tap_window = steer.tap_window.saturating_sub(1);
+            }
+            steer.touch = (0, 0.0, at);
+        }
+    }
+    if primary.is_none() {
+        steer.double_hold = false;
+        steer.speed = 0.0;
+    } else {
+        let d = (a.drag[0] * a.drag[0] + a.drag[1] * a.drag[1]).sqrt();
+        steer.speed += (d - steer.speed) * 0.25;
+    }
+    let mut hold_shot = false;
+    let other = playing.iter().copied().find(|f| Some(f.0) != primary_id);
     match (steer.second, other) {
         (Some((id, ticks, travel, last)), Some((now, p))) if now == id => {
             let moved = (p[0] - last[0]).abs() + (p[1] - last[1]).abs();
             steer.second = Some((id, ticks + 1, travel + moved, p));
             if ticks + 1 >= SECOND_HOLD {
-                b |= SLOW;
+                if steer.aim == 1 {
+                    hold_shot = true;
+                } else {
+                    b |= SLOW;
+                }
             }
         }
         (last, now) => {
@@ -95,12 +198,28 @@ fn play_extras(a: &ActionState, steer: &mut Steer) -> u16 {
             if let Some((id, ticks, travel, _)) = last
                 && ticks < SECOND_HOLD
                 && travel < 12.0
-                && a.primary != Some(id)
+                && primary_id != Some(id)
             {
                 b |= WEAPON_SELECT;
             }
             steer.second = now.map(|(id, p)| (id, 1, 0.0, p));
         }
+    }
+    if steer.aim == 1 && steer.double_hold {
+        b |= SLOW;
+    }
+    if steer.aim == 2 && primary.is_some() && (AIM_SPEED[0]..AIM_SPEED[1]).contains(&steer.speed) {
+        hold_shot = true;
+    }
+    if steer.aim == 0 && steer.fire_off {
+        hold_shot = true;
+    }
+    // Only the button finger down: no shot from it.
+    if playing.is_empty() {
+        hold_shot = true;
+    }
+    if hold_shot && shot_by_touch {
+        b &= !SHOT;
     }
     b
 }
@@ -234,7 +353,7 @@ impl Pad {
                 b |= TRIGGER << i;
             }
         }
-        b |= play_extras(a, steer);
+        let b = play_extras(a, steer, b);
         let b = menu_touch(a, steer, b);
         self.buttons = b;
         self.pressed = b & !self.previous;
@@ -379,7 +498,8 @@ mod tests {
         a
     }
 
-    /// Fingers (id, place) down this tick, the first one steering.
+    /// Fingers (id, place) down this tick, the first one steering (and
+    /// shooting, as the Touch binding does).
     fn fingers(f: &[(u64, [f32; 2])]) -> ActionState {
         let mut a = ActionState::default();
         a.touching = !f.is_empty();
@@ -388,53 +508,149 @@ mod tests {
             a.raw.fingers.push(Finger { id, pos: [0.5; 2] });
             a.touches.push(pos);
         }
+        if a.touching {
+            a.hold_by_touch(Action::SHOT);
+        }
         a
     }
 
+    fn playing(aim: u8) -> Steer {
+        Steer { ship: Some([320.0, 400.0]), aim, ..Default::default() }
+    }
+
+    /// The bits `play_extras` makes of the pad's `b` (the touch shot when
+    /// a finger is down).
+    fn run(a: &ActionState, steer: &mut Steer) -> u16 {
+        let b = if a.touching { SHOT } else { 0 };
+        play_extras(a, steer, b)
+    }
+
+    const ONE: [(u64, [f32; 2]); 1] = [(1, [100.0, 100.0])];
+    const TWO: [(u64, [f32; 2]); 2] = [(1, [100.0, 100.0]), (2, [300.0, 200.0])];
+
     #[test]
     fn second_finger_holds_slow_and_taps_weapon() {
-        let mut steer = Steer { ship: Some([320.0, 400.0]), ..Default::default() };
-        let one = fingers(&[(1, [100.0, 100.0])]);
-        let two = fingers(&[(1, [100.0, 100.0]), (2, [300.0, 200.0])]);
-        assert_eq!(play_extras(&one, &mut steer), 0);
+        let mut steer = playing(0);
+        let (one, two) = (fingers(&ONE), fingers(&TWO));
+        assert_eq!(run(&one, &mut steer), SHOT);
         // A quick tap: nothing while down, the weapon select on release.
         for _ in 0..3 {
-            assert_eq!(play_extras(&two, &mut steer), 0);
+            assert_eq!(run(&two, &mut steer), SHOT);
         }
-        assert_eq!(play_extras(&one, &mut steer), WEAPON_SELECT);
-        assert_eq!(play_extras(&one, &mut steer), 0);
+        assert_eq!(run(&one, &mut steer), SHOT | WEAPON_SELECT);
+        assert_eq!(run(&one, &mut steer), SHOT);
         // Held: the slow move from SECOND_HOLD ticks on, no select on release.
-        let held: Vec<u16> = (0..SECOND_HOLD + 2).map(|_| play_extras(&two, &mut steer)).collect();
-        assert_eq!(held[..SECOND_HOLD as usize - 1], vec![0; SECOND_HOLD as usize - 1][..]);
-        assert!(held[SECOND_HOLD as usize..].iter().all(|&b| b == SLOW));
-        assert_eq!(play_extras(&one, &mut steer), 0);
+        let held: Vec<u16> = (0..SECOND_HOLD + 2).map(|_| run(&two, &mut steer)).collect();
+        assert!(held[..SECOND_HOLD as usize - 1].iter().all(|&b| b == SHOT));
+        assert!(held[SECOND_HOLD as usize..].iter().all(|&b| b == SHOT | SLOW));
+        assert_eq!(run(&one, &mut steer), SHOT);
         // A tap that slides is not a select.
-        play_extras(&two, &mut steer);
-        play_extras(&fingers(&[(1, [100.0, 100.0]), (2, [340.0, 200.0])]), &mut steer);
-        assert_eq!(play_extras(&one, &mut steer), 0);
+        run(&two, &mut steer);
+        run(&fingers(&[(1, [100.0, 100.0]), (2, [340.0, 200.0])]), &mut steer);
+        assert_eq!(run(&one, &mut steer), SHOT);
         // The steering finger lifts and the other takes over: not a select.
-        play_extras(&two, &mut steer);
-        assert_eq!(play_extras(&fingers(&[(2, [300.0, 200.0])]), &mut steer), 0);
+        run(&two, &mut steer);
+        assert_eq!(run(&fingers(&[(2, [300.0, 200.0])]), &mut steer), SHOT);
+    }
+
+    #[test]
+    fn fire_button_turns_the_touch_shot_off_and_on() {
+        let mut steer = playing(0);
+        steer.fire_button = Some([500.0, 400.0, 600.0, 440.0]);
+        let one = fingers(&ONE);
+        let on_button = fingers(&[(1, [100.0, 100.0]), (3, [550.0, 420.0])]);
+        assert_eq!(run(&one, &mut steer), SHOT);
+        // A finger lands on the button: off, and it is no second finger.
+        for _ in 0..SECOND_HOLD + 2 {
+            assert_eq!(run(&on_button, &mut steer), 0);
+        }
+        assert_eq!(run(&one, &mut steer), 0);
+        // A shot that is not the finger's alone (a key's) still shoots.
+        let mut k = ActionState::default();
+        k.touching = true;
+        k.primary = Some(1);
+        k.raw.fingers.push(Finger { id: 1, pos: [0.5; 2] });
+        k.touches.push([100.0, 100.0]);
+        assert_eq!(play_extras(&k, &mut steer, SHOT), SHOT);
+        // Tapped again: on.
+        run(&on_button, &mut steer);
+        assert_eq!(run(&one, &mut steer), SHOT);
+        // A first finger on the button alone does not shoot.
+        assert_eq!(run(&fingers(&[(4, [550.0, 420.0])]), &mut steer), 0);
+    }
+
+    #[test]
+    fn second_finger_aim_holds_the_shot_and_double_tap_is_slow() {
+        let mut steer = playing(1);
+        let (one, two) = (fingers(&ONE), fingers(&TWO));
+        run(&one, &mut steer);
+        let held: Vec<u16> = (0..SECOND_HOLD + 2).map(|_| run(&two, &mut steer)).collect();
+        assert!(held[SECOND_HOLD as usize..].iter().all(|&b| b == 0));
+        assert_eq!(run(&one, &mut steer), SHOT);
+        let none = fingers(&[]);
+        // Lifted after steering a while, and down again at once (moving
+        // the finger): no slow move.
+        run(&none, &mut steer);
+        assert_eq!(run(&one, &mut steer), SHOT);
+        for _ in 0..TAP_TICKS {
+            run(&one, &mut steer);
+        }
+        // A tap, and down again soon at the same place: the slow move while
+        // it stays down.
+        run(&none, &mut steer);
+        run(&none, &mut steer);
+        assert_eq!(run(&one, &mut steer), SHOT);
+        run(&none, &mut steer);
+        assert_eq!(run(&one, &mut steer), SHOT | SLOW);
+        assert_eq!(run(&one, &mut steer), SHOT | SLOW);
+        run(&none, &mut steer);
+        // A tap, then down again late, or far away: no slow move.
+        run(&one, &mut steer);
+        for _ in 0..=DOUBLE_TAP {
+            run(&none, &mut steer);
+        }
+        assert_eq!(run(&one, &mut steer), SHOT);
+        run(&none, &mut steer);
+        assert_eq!(run(&fingers(&[(1, [300.0, 100.0])]), &mut steer), SHOT);
+    }
+
+    #[test]
+    fn slow_drag_aims() {
+        let mut steer = playing(2);
+        let mut one = fingers(&ONE);
+        assert_eq!(run(&one, &mut steer), SHOT);
+        // A slow drag: the shot held up once the speed settles.
+        one.drag = [1.0, 0.5];
+        let b: Vec<u16> = (0..20).map(|_| run(&one, &mut steer)).collect();
+        assert_eq!(*b.last().unwrap(), 0);
+        // A fast one (dodging): shooting.
+        one.drag = [12.0, 0.0];
+        let b: Vec<u16> = (0..20).map(|_| run(&one, &mut steer)).collect();
+        assert_eq!(*b.last().unwrap(), SHOT);
+        // Still: shooting.
+        one.drag = [0.0, 0.0];
+        let b: Vec<u16> = (0..20).map(|_| run(&one, &mut steer)).collect();
+        assert_eq!(*b.last().unwrap(), SHOT);
     }
 
     #[test]
     fn wheel_selects_the_weapon_once_per_turn() {
-        let mut steer = Steer { ship: Some([320.0, 400.0]), ..Default::default() };
+        let mut steer = playing(0);
         let wheel = |w: f32| {
             let mut a = ActionState::default();
             a.raw.mouse.wheel = w;
             a
         };
-        assert_eq!(play_extras(&wheel(5.0), &mut steer), 0);
-        assert_eq!(play_extras(&wheel(5.5), &mut steer), 0);
-        assert_eq!(play_extras(&wheel(4.5), &mut steer), WEAPON_SELECT);
+        assert_eq!(run(&wheel(5.0), &mut steer), 0);
+        assert_eq!(run(&wheel(5.5), &mut steer), 0);
+        assert_eq!(run(&wheel(4.5), &mut steer), WEAPON_SELECT);
         // A trackpad's long scroll: one select, then a rest.
-        let after: Vec<u16> = (0..WHEEL_WAIT).map(|i| play_extras(&wheel(5.0 + i as f32), &mut steer)).collect();
+        let after: Vec<u16> = (0..WHEEL_WAIT).map(|i| run(&wheel(5.0 + i as f32), &mut steer)).collect();
         assert!(after.iter().all(|&b| b == 0));
-        assert_eq!(play_extras(&wheel(30.0), &mut steer), WEAPON_SELECT);
+        assert_eq!(run(&wheel(30.0), &mut steer), WEAPON_SELECT);
         // No ship (the menus have their own wheel): nothing.
         steer.ship = None;
-        assert_eq!(play_extras(&wheel(40.0), &mut steer), 0);
+        assert_eq!(run(&wheel(40.0), &mut steer), 0);
     }
 
     #[test]

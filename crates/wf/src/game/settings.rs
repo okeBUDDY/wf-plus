@@ -26,6 +26,14 @@ pub const RENDER_SCALES: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 pub const DEAD_ZONES: [f32; 10] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5];
 pub const TOUCH_SCALES: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
+/// How a touch player aims the laser's cone (which moves only while the
+/// shot is up): (options name, wf-plus.ini `input.touch_aim`).
+/// 0: a FIRE button on screen turns the shot on and off. 1 (the default):
+/// a second finger held holds the shot (the steering finger's
+/// double-tap-and-hold is then the slow move). 2: a slow drag holds the
+/// shot.
+pub const TOUCH_AIMS: [(&str, &str); 3] = [("FIRE BUTTON", "button"), ("2ND FINGER", "finger"), ("SLOW DRAG", "drag")];
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub display: DisplayConfig,
@@ -38,6 +46,8 @@ pub struct Settings {
     pub mouse_steering: bool,
     pub dead_zone: f32,
     pub touch_scale: f32,
+    /// Index into `TOUCH_AIMS`.
+    pub touch_aim: u8,
     /// The input tuning changed (the bindings follow).
     pub input_dirty: bool,
     /// The display rate measured last, for SHOW FPS.
@@ -74,6 +84,7 @@ impl Default for Settings {
             mouse_steering: true,
             dead_zone: 0.35,
             touch_scale: 1.0,
+            touch_aim: 1,
             input_dirty: true,
             fps: 0.0,
             perf_overlay: false,
@@ -114,6 +125,9 @@ impl Settings {
         s.mouse_steering = b.mouse_steering;
         s.dead_zone = b.dead_zone;
         s.touch_scale = b.touch_scale;
+        if let Some(n) = c.get("input.touch_aim").and_then(|v| TOUCH_AIMS.iter().position(|(_, k)| k.eq_ignore_ascii_case(v))) {
+            s.touch_aim = n as u8;
+        }
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             if let Some(v) = c.get(key)
                 && let Some(n) = MOUSE_ACTIONS.iter().position(|(name, _)| name.eq_ignore_ascii_case(v))
@@ -138,6 +152,7 @@ impl Settings {
         c.set("input.mouse_steering", self.mouse_steering);
         c.set("input.dead_zone", self.dead_zone);
         c.set("input.touch_scale", self.touch_scale);
+        c.set("input.touch_aim", TOUCH_AIMS[self.touch_aim as usize].1);
     }
 
     /// The bindings as these settings tune them: the mouse buttons'

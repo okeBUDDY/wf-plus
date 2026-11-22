@@ -38,7 +38,9 @@ pub fn log(level: Level, msg: &str) {
     if enabled(level) {
         #[cfg(target_os = "android")]
         crate::platform::android::log(level == Level::Error, msg);
-        #[cfg(not(target_os = "android"))]
+        #[cfg(target_arch = "wasm32")]
+        crate::platform::web::log(level == Level::Error, &format!("[{}] {msg}", format!("{level:?}").to_ascii_lowercase()));
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         eprintln!("[{}] {msg}", format!("{level:?}").to_ascii_lowercase());
     }
 }
@@ -49,7 +51,7 @@ pub fn log(level: Level, msg: &str) {
 /// another thread's last one, an optional log file and an optional status
 /// file (the Android activity shows it on screen).
 struct Crumbs {
-    start: std::time::Instant,
+    start: web_time::Instant,
     game: Option<std::thread::ThreadId>,
     /// The game thread's last steps: (seconds since start, step).
     recent: std::collections::VecDeque<(f32, String)>,
@@ -66,7 +68,7 @@ static CRUMBS: std::sync::Mutex<Option<Crumbs>> = std::sync::Mutex::new(None);
 fn with_crumbs<R>(f: impl FnOnce(&mut Crumbs) -> R) -> Option<R> {
     let mut guard = CRUMBS.lock().ok()?;
     let c = guard.get_or_insert_with(|| Crumbs {
-        start: std::time::Instant::now(),
+        start: web_time::Instant::now(),
         game: None,
         recent: std::collections::VecDeque::new(),
         other: None,

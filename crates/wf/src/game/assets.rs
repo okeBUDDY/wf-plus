@@ -67,7 +67,7 @@ impl Assets {
     /// Loads the data.bin inside the zip at `zip` (the download, read in
     /// place: nothing is saved); the music is looked for in `home`.
     pub fn load_zip(zip: &Path, home: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
+        let bytes = crate::platform::read_file(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
         let data = crate::data_import::extract(&bytes).map_err(|e| format!("{}: {e}", zip.display()))?;
         let pack = Pack::from_bytes(data).map_err(|e| format!("data.bin がオープンできません ({e})"))?;
         Self::from_pack(pack, crate::sound::Music::load(home))

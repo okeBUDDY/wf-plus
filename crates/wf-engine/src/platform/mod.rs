@@ -4,9 +4,12 @@
 //! game's mixer. The SDL3 implementation is in `sdl`; game code never sees
 //! SDL types.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sdl;
 #[cfg(target_os = "android")]
 pub mod android;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 /// The display's refresh rate (Hz, f32 bits; 0 = unknown): on Android the
 /// panel's highest, set by the activity (it picks that display mode); on
@@ -49,8 +52,27 @@ pub fn display_size() -> Option<(u32, u32)> {
 pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     #[cfg(target_os = "android")]
     return android::read_file(path);
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_arch = "wasm32")]
+    return web::read_file(path);
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     std::fs::read(path)
+}
+
+/// Opens `url` in the system's browser (a new tab in the browser build).
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    return web::open_url(url);
+    #[cfg(not(target_arch = "wasm32"))]
+    sdl::open_url(url)
+}
+
+/// The platform's file dialog is showing (none in the browser build: the
+/// page has its own file input).
+pub fn file_dialog_open() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return false;
+    #[cfg(not(target_arch = "wasm32"))]
+    sdl::Platform::file_dialog_open()
 }
 
 /// What the platform lets the game change about its display. The options
@@ -95,9 +117,10 @@ impl Capabilities {
 }
 
 /// This platform's display capabilities: Android and iOS give the game the
-/// whole panel; desktops allow everything.
+/// whole panel, and so does the browser (the page's canvas, its Escape a
+/// phone's Back); desktops allow everything.
 pub const fn capabilities() -> Capabilities {
-    if cfg!(any(target_os = "android", target_os = "ios")) { Capabilities::MOBILE } else { Capabilities::DESKTOP }
+    if cfg!(any(target_os = "android", target_os = "ios", target_arch = "wasm32")) { Capabilities::MOBILE } else { Capabilities::DESKTOP }
 }
 
 impl Default for Capabilities {

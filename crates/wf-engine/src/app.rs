@@ -6,13 +6,20 @@
 //! accumulator's remainder, and waits as the frame cap says. The game is a
 //! [`Game`]: deterministic state that turns actions into snapshots.
 
-use std::time::Instant;
+use web_time::Instant;
 
-use crate::config::{DisplayConfig, WindowMode};
+use crate::config::DisplayConfig;
 use crate::gfx::{self, DrawList, Layout};
 use crate::input::{ActionState, Bindings, InputSystem};
-use crate::platform::{self, Event, RawInput};
-use crate::time::{FixedStep, FpsCap, FpsCounter, Limiter, TICK};
+use crate::platform::RawInput;
+use crate::time::{FixedStep, TICK};
+// The window (SDL3): everywhere but the browser, whose loop is the page's.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::config::WindowMode;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::platform::{self, Event};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::time::{FpsCap, FpsCounter, Limiter};
 
 /// What the loop drives.
 pub trait Game {
@@ -101,6 +108,7 @@ pub fn add_border(list: &mut DrawList, layout: &Layout) {
     list.draws.append(&mut tail);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The window's surface and the renderer.
 ///
 /// Mobile windows lose their native surface when the app goes to the
@@ -143,6 +151,7 @@ pub struct Display {
 static GPU_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Frames presented by any Display (the Android startup watchdog).
+#[cfg(not(target_arch = "wasm32"))]
 static PRESENTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The first uncaptured GPU error, taken.
@@ -150,6 +159,7 @@ pub fn take_gpu_error() -> Option<String> {
     GPU_ERROR.lock().ok().and_then(|mut e| e.take())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Display {
     pub fn new(platform: &platform::sdl::Platform, art: &wf_art::Pack, cap: FpsCap) -> Result<Self, String> {
         #[allow(unused_mut)]
@@ -414,6 +424,7 @@ impl Display {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The window's surface. Called under the platform's surface lock, with a
 /// native window present (sdl3's window handle does not check for one).
 fn create_surface(instance: &wgpu::Instance, platform: &platform::sdl::Platform) -> Result<wgpu::Surface<'static>, String> {
@@ -427,6 +438,7 @@ fn create_surface(instance: &wgpu::Instance, platform: &platform::sdl::Platform)
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn present_mode(caps: &wgpu::SurfaceCapabilities, cap: FpsCap) -> wgpu::PresentMode {
     if cap == FpsCap::VSync {
         return wgpu::PresentMode::Fifo;
@@ -548,8 +560,10 @@ impl Drop for Watchdog {
 }
 
 /// In the background (the watchdog waits for no frames then).
+#[cfg(not(target_arch = "wasm32"))]
 static BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The windowed loop. `on_frame` sees each shown frame (screenshots).
 pub fn run_windowed(
     game: &mut dyn Game,
@@ -722,6 +736,7 @@ pub fn bench(game: &mut dyn Game, renderer: &mut gfx::gpu::Renderer, size: (u32,
 }
 
 /// Applies the window mode at start-up.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn apply_window_mode(platform: &mut platform::sdl::Platform, mode: WindowMode) {
     if mode != WindowMode::Windowed {
         platform.set_window_mode(mode);

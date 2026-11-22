@@ -17,6 +17,7 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod config;
+pub mod fs;
 pub mod gfx;
 pub mod input;
 pub mod log;

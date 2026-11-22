@@ -1178,7 +1178,7 @@ impl Renderer {
         let layout = super::Layout::new(list.arena, window).resized(window, size);
         let k = layout.scale;
 
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         self.stats = RenderStats { draws: list.draws.len() as u32, ..Default::default() };
         self.by_sprite.clear();
         self.px_by_sprite.clear();
@@ -1371,7 +1371,7 @@ impl Renderer {
         self.instances.extend(self.raster_jobs.iter().map(|j| j.1));
         self.stats.cache = self.cache.stats;
         self.stats.build_us = t0.elapsed().as_secs_f64() * 1e6;
-        let t1 = std::time::Instant::now();
+        let t1 = web_time::Instant::now();
         if self.instances.len() > self.instance_capacity {
             self.instance_capacity = self.instances.len().next_power_of_two();
             self.instance_buffer =
@@ -1430,7 +1430,7 @@ impl Renderer {
             + self.line_instances.len() * std::mem::size_of::<LineInstance>()
             + std::mem::size_of::<ViewUniform>()) as u64;
         self.stats.upload_us = t1.elapsed().as_secs_f64() * 1e6;
-        let t2 = std::time::Instant::now();
+        let t2 = web_time::Instant::now();
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         let instances = self.instance_buffer.slice(ring_offset..);
@@ -1694,12 +1694,21 @@ pub fn create_device(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    pollster::block_on(request_device(instance, surface))
+}
+
+/// [`create_device`], awaited (the browser cannot block on it).
+pub async fn request_device(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: surface,
         apply_limit_buckets: false,
-    }))
+    })
+    .await
     .map_err(|e| format!("no GPU adapter: {e}"))?;
     let info = adapter.get_info();
     let limits = adapter.limits();
@@ -1707,13 +1716,19 @@ pub fn create_device(
         "GPU adapter: {} ({:?}, {:?}), driver {} {}; max 2D texture {}, max buffer {}",
         info.name, info.backend, info.device_type, info.driver, info.driver_info, limits.max_texture_dimension_2d, limits.max_buffer_size
     ));
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("wf"),
         // Frame timing where the adapter has it (Vulkan on Android does).
         required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
-        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        required_limits: if cfg!(target_arch = "wasm32") {
+            wgpu::Limits::downlevel_webgl2_defaults()
+        } else {
+            wgpu::Limits::downlevel_defaults()
+        }
+        .using_resolution(adapter.limits()),
         ..Default::default()
-    }))
+    })
+    .await
     .map_err(|e| format!("cannot create the GPU device: {e}"))?;
     crate::log::breadcrumb("GPU device made");
     Ok((adapter, device, queue))

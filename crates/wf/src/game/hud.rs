@@ -708,7 +708,7 @@ impl Task for GameHud {
         cx.hud = HudState::default();
         self.chart = [[0.0; 2]; 8];
         if cx.replay.mode == super::replay::Mode::Play
-            && let Ok(meta) = std::fs::metadata(cx.replay.path()) {
+            && let Some(modified) = wf_engine::fs::modified(cx.replay.path()) {
                 let mut name: Vec<u8> = cx.replay.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into_bytes();
                 self.replay_name_x = (80 - name.len() as i32) * 8;
                 for c in &mut name {
@@ -718,7 +718,7 @@ impl Task for GameHud {
                     }
                 }
                 self.replay_name = name;
-                self.replay_date = meta.modified().ok().map(super::time::format_local).unwrap_or_default().into_bytes();
+                self.replay_date = super::time::format_local(modified).into_bytes();
                 self.flags |= FLAG_REPLAY;
             }
         true

@@ -23,7 +23,7 @@
 // Much of the game-facing API is ported ahead of the stages that use it.
 #![allow(dead_code)]
 
-// pub(crate): android.rs re-exports them at its crate root.
+// pub(crate): lib.rs re-exports them at its crate root.
 pub(crate) mod app_info;
 pub(crate) mod art;
 pub(crate) mod data;
@@ -31,6 +31,8 @@ pub(crate) mod data_import;
 pub(crate) mod game;
 pub(crate) mod setup;
 pub(crate) mod shape_table;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 pub use wf_engine::{audio as sound, gfx, log, platform};
 
@@ -113,31 +115,38 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
+impl Options {
+    /// The defaults (and WF_DATA, WF_HOME), before the command line.
+    fn new() -> Self {
+        Options {
+            data: std::env::var_os("WF_DATA").map(|p| setup::Found::File(PathBuf::from(p))),
+            headless: false,
+            frames: 60,
+            screenshot: None,
+            size: None,
+            fps_cap: None,
+            window_mode: None,
+            show_fps: false,
+            perf_overlay: false,
+            sprite_cache: None,
+            analytic_shapes: None,
+            render_scale: None,
+            bench: None,
+            arena: None,
+            guide: None,
+            caps: None,
+            perf: None,
+            script: Vec::new(),
+            home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
+            viewer: false,
+            replay: None,
+            hash_log: None,
+        }
+    }
+}
+
 fn options() -> Options {
-    let mut o = Options {
-        data: std::env::var_os("WF_DATA").map(|p| setup::Found::File(PathBuf::from(p))),
-        headless: false,
-        frames: 60,
-        screenshot: None,
-        size: None,
-        fps_cap: None,
-        window_mode: None,
-        show_fps: false,
-        perf_overlay: false,
-        sprite_cache: None,
-        analytic_shapes: None,
-        render_scale: None,
-        bench: None,
-        arena: None,
-        guide: None,
-        caps: None,
-        perf: None,
-        script: Vec::new(),
-        home: std::env::var_os("WF_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")),
-        viewer: false,
-        replay: None,
-        hash_log: None,
-    };
+    let mut o = Options::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| usage());
@@ -254,7 +263,10 @@ fn startup(o: &Options, art: art::Art) -> Result<(Cx, App), String> {
         }
     };
     let mut cx = Cx::new(art, assets, CHANNELS);
+    #[cfg(not(target_arch = "wasm32"))]
     game::time::set_utc_offset(platform::sdl::local_utc_offset());
+    #[cfg(target_arch = "wasm32")]
+    game::time::set_utc_offset(platform::web::local_utc_offset());
     cx.open_home(o.home.clone());
     if let Some(caps) = o.caps {
         cx.settings.set_caps(caps);
@@ -541,7 +553,7 @@ fn perf(
     let settle = if warm { 64 } else { 0 };
     // Timed draw: wall microseconds and the GPU timestamps' (0: none).
     let timed = |r: &mut gfx::gpu::Renderer, list: &gfx::DrawList| {
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         r.render_offscreen(list, size);
         let wall = t.elapsed().as_secs_f64() * 1e6;
         r.collect_gpu_time();
@@ -810,6 +822,7 @@ impl Row {
 }
 
 /// The window icon (assets/icon), as RGBA.
+#[cfg(not(target_arch = "wasm32"))]
 fn icon() -> Option<(u32, u32, Vec<u8>)> {
     const PNG: &[u8] = include_bytes!("../../../assets/icon/windows/wf_256.png");
     let mut decoder = png::Decoder::new(std::io::Cursor::new(PNG));
@@ -825,6 +838,7 @@ fn icon() -> Option<(u32, u32, Vec<u8>)> {
 }
 
 /// The setup screen until the game data turns up; None if the player quit.
+#[cfg(not(target_arch = "wasm32"))]
 fn run_setup(o: &Options, art: &art::Art) -> Result<Option<(setup::Found, platform::sdl::Platform, wf_engine::app::Display)>, String> {
     let cfg = wf_engine::config::DisplayConfig::default();
     let mut platform = platform::sdl::Platform::new(app_info::NAME, cfg.width, cfg.height)?;
@@ -838,6 +852,7 @@ fn run_setup(o: &Options, art: &art::Art) -> Result<Option<(setup::Found, platfo
     Ok(screen.found.take().map(|found| (found, platform, display)))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_windowed(o: &Options) -> Result<(), String> {
     let art = art::Art::load();
     let mut ready = None;
@@ -935,7 +950,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
 /// Done for good once one is lit.
 #[cfg(target_os = "android")]
 struct BlackCheck {
-    start: std::time::Instant,
+    start: web_time::Instant,
     /// The next sample in `AT`; `AT.len()` once done.
     next: usize,
 }
@@ -946,7 +961,7 @@ impl BlackCheck {
         [std::time::Duration::from_secs(5), std::time::Duration::from_secs(7), std::time::Duration::from_secs(9)];
 
     fn new() -> Self {
-        BlackCheck { start: std::time::Instant::now(), next: 0 }
+        BlackCheck { start: web_time::Instant::now(), next: 0 }
     }
 
     fn frame(&mut self, display: &mut wf_engine::app::Display, frame: &gfx::DrawList, frames: u32) {
@@ -1012,7 +1027,11 @@ pub(crate) fn android_main() -> i32 {
 fn main() {
     log::init_from_env();
     let o = options();
+    #[cfg(not(target_arch = "wasm32"))]
     let result = if o.headless { run_headless(&o) } else { run_windowed(&o) };
+    // The browser build is the library (platform::web); this is only the CLI.
+    #[cfg(target_arch = "wasm32")]
+    let result = run_headless(&o);
     if let Err(e) = result {
         // Shown like the original's Shutdown() MessageBox, on stderr.
         eprintln!("ERROR: {e}");

@@ -18,3 +18,11 @@ bytemuck = { version = "1.25", features = ["derive"] }
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# The browser build (scripts/build-web.sh): the release, smaller to download.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"

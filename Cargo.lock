@@ -1237,11 +1237,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wf"
 version = "1.0.0"
 dependencies = [
  "bytemuck",
  "encoding_rs",
+ "js-sys",
  "lewton",
  "libm",
  "miniz_oxide 0.9.1",
@@ -1249,6 +1260,10 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "sdl3",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "wf-art",
  "wf-cook",
  "wf-engine",
@@ -1278,10 +1293,14 @@ name = "wf-engine"
 version = "1.0.0"
 dependencies = [
  "bytemuck",
+ "js-sys",
  "lewton",
  "pollster",
  "raw-window-handle",
  "sdl3",
+ "wasm-bindgen",
+ "web-sys",
+ "web-time",
  "wf-art",
  "wgpu",
 ]
@@ -1344,6 +1363,7 @@ dependencies = [
  "thiserror",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -1364,6 +1384,15 @@ name = "wgpu-core-deps-emscripten"
 version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55ccf093bd215ae9dc4f96df293e675513ac1f2569f8293a2911cc34ca3505d1"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "30.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b20f43aeb9962d05e61e3ccb717e2e27ba1b04e979d4ca7e361384f8ee03db56"
 dependencies = [
  "wgpu-hal",
 ]

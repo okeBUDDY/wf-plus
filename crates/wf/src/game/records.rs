@@ -20,7 +20,7 @@ impl Cx {
 pub fn init_records(cx: &mut Cx) {
     cx.global.replay_path.clear();
     cx.global.last_record.clear();
-    let _ = std::fs::create_dir_all(cx.home_path("rec"));
+    let _ = wf_engine::fs::create_dir_all(cx.home_path("rec"));
 }
 
 /// cGlobal::ClearReplay (0x418710).
@@ -29,14 +29,14 @@ pub fn clear_replay(cx: &mut Cx) {
 }
 
 fn copy(cx: &Cx, from: &str, to: &str) {
-    let _ = std::fs::copy(cx.home_path(from), cx.home_path(to));
+    let _ = wf_engine::fs::copy(cx.home_path(from), cx.home_path(to));
 }
 
 /// cGlobal::NextReplay (0x418720): the replay to play next: the last
 /// record if it is one, else the first replay after replay_path by name,
 /// wrapping around.
 pub fn next_replay(cx: &mut Cx) -> Option<String> {
-    let _ = std::fs::remove_file(cx.home_path(TEMP));
+    let _ = wf_engine::fs::remove_file(cx.home_path(TEMP));
     if !cx.global.last_record.is_empty() {
         let path = std::mem::take(&mut cx.global.last_record);
         if replay::is_replay_file(&cx.home_path(&path)) {
@@ -44,11 +44,10 @@ pub fn next_replay(cx: &mut Cx) -> Option<String> {
             return Some(path);
         }
     }
-    let dir = std::fs::read_dir(cx.home_path("rec")).ok()?;
+    let dir = wf_engine::fs::list_dir(cx.home_path("rec")).ok()?;
     let mut next = String::new();
     let mut first = String::new();
-    for e in dir.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
+    for name in dir {
         // FindFirstFile("rec\\*.rec"), names shorter than 0x40.
         if name.len() >= 0x40 || !name.to_ascii_lowercase().ends_with(".rec") {
             continue;
@@ -97,7 +96,7 @@ pub fn save_replay(cx: &mut Cx, finished: bool) {
         copy(cx, TEMP, &path);
         cx.global.last_record = "rec/stage01.rec".to_string();
     }
-    let _ = std::fs::remove_file(cx.home_path(TEMP));
+    let _ = wf_engine::fs::remove_file(cx.home_path(TEMP));
 }
 
 /// FnGame::RateGame (0x418b60): rates the game ending at this stage.

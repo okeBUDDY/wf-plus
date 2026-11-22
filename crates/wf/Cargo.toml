@@ -8,12 +8,12 @@ version = "1.0.0"
 publish.workspace = true
 build = "build.rs"
 
-# The Android entry point: the activity loads libwfplus.so (System.loadLibrary
-# "wfplus"; Android requires the lib prefix) and calls SDL_main in it.
-# Empty on other targets (see src/android.rs).
+# The Android entry point (the activity loads libwfplus.so, System.loadLibrary
+# "wfplus"; Android requires the lib prefix, and calls SDL_main in it) and the
+# browser's wasm module. Empty on other targets (see src/lib.rs).
 [lib]
 name = "wfplus"
-path = "src/android.rs"
+path = "src/lib.rs"
 crate-type = ["cdylib"]
 test = false
 doctest = false
@@ -27,9 +27,10 @@ path = "src/main.rs"
 wf-art.workspace = true
 wf-engine.workspace = true
 bytemuck.workspace = true
-sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"] }
 wgpu = "30"
 pollster = "1"
+# Instant and SystemTime that work in a browser too (std's panic there).
+web-time = "1"
 lewton = "0.10"
 encoding_rs = "0.8"
 # The sim's atan2/sin/cos: pure Rust (the musl port), the same bits on
@@ -46,3 +47,15 @@ wf-art.workspace = true
 # The exe's version resource, icon and manifest: build.rs uses it when
 # the target is Windows (a build dependency's cfg would match the host).
 winresource = "0.1.34"
+
+# SDL3 is the platform everywhere but the browser (see platform::web).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"] }
+
+# The browser (see src/web.rs).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "30", features = ["webgl"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "KeyboardEvent", "console"] }

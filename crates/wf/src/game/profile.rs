@@ -17,7 +17,7 @@ impl Profile {
     /// Profile::Open: uses `path` (created on the first write).
     pub fn open(path: PathBuf) -> Self {
         let mut p = Profile { path: Some(path), ..Default::default() };
-        if let Some(text) = p.path.as_ref().and_then(|f| std::fs::read(f).ok()) {
+        if let Some(text) = p.path.as_ref().and_then(|f| wf_engine::fs::read(f).ok()) {
             p.parse(&String::from_utf8_lossy(&text));
         }
         p
@@ -49,7 +49,7 @@ impl Profile {
                 out.push_str(&format!("{k}={v}\n"));
             }
         }
-        if let Err(e) = std::fs::write(path, out) {
+        if let Err(e) = wf_engine::fs::write(path, out) {
             crate::log::warn(&format!("cannot write {}: {e}", path.display()));
         }
     }

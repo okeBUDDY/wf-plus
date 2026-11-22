@@ -6,7 +6,8 @@
 //! the cap allows and interpolates between the last two ticks' snapshots
 //! by [`FixedStep::alpha`].
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// HLSync::Initialize (0x40c9e0): (10000 / 60 + 5) / 10 = 17 ms.
 pub const TICK: Duration = Duration::from_millis(17);

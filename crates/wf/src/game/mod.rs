@@ -173,7 +173,7 @@ impl Cx {
     /// the scores in wf.sco and the replays in rec/.
     pub fn open_home(&mut self, home: std::path::PathBuf) {
         self.home = home;
-        let _ = std::fs::create_dir_all(&self.home);
+        let _ = wf_engine::fs::create_dir_all(&self.home);
         self.profile = profile::Profile::open(self.home.join("wf.ini"));
         self.port = wf_engine::config::Config::load(&self.home.join("wf-plus.ini"));
         arena::load_choice(self);
@@ -296,7 +296,7 @@ pub(crate) mod tests {
     #[test]
     fn startup_layer_costs_are_quick_and_sane() {
         let art = Art::load();
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         let costs = crate::gfx::gpu::layer_curve_estimates(&art.pack);
         let took = t.elapsed();
         assert!(took.as_secs_f32() < 1.0, "layer cost estimate took {took:?}");

@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Warning Forever+</title>
+<style>
+  :root { --green: #1fa463; --grid: rgba(31, 164, 99, 0.22); --yellow: #ffd000; --violet: #7a5cff; --grey: #8a8a8a; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--grey); overflow: hidden;
+    font: 13px/1.6 ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; letter-spacing: 0.12em; }
+  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  #front { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; padding: 16px; box-sizing: border-box; text-align: center; overflow: hidden; }
+  [hidden] { display: none !important; }
+  /* The title screen's grid, drifting. */
+  #grid { position: absolute; inset: -60%; transform: rotate(-36deg); pointer-events: none;
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 150px 150px; animation: drift 14s linear infinite; }
+  @keyframes drift { to { background-position: 150px 150px; } }
+  #logo { position: relative; width: min(34vh, 60vw); height: auto; overflow: visible; }
+  #logo .face { fill: #fff; fill-opacity: 0.2; }
+  #logo .edge { fill: #fff; }
+  #logo .w { animation: rise 1.1s cubic-bezier(.2, .8, .2, 1) both; }
+  #logo .f { animation: rise 1.1s 0.15s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(40px); } }
+  #title { position: relative; width: min(512px, 86vw); height: auto; }
+  #panel { position: relative; min-height: 96px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  #bar { width: min(360px, 76vw); height: 3px; background: rgba(255, 255, 255, 0.1); }
+  #fill { height: 100%; width: 0; background: var(--yellow); box-shadow: 0 0 8px var(--yellow); transition: width 0.15s; }
+  #status { color: var(--green); text-transform: uppercase; margin-top: 12px; }
+  #error { color: #ff5a5a; white-space: pre-wrap; max-width: 640px; text-align: left; font-size: 12px; }
+  #error-box { display: flex; flex-direction: column; align-items: center; }
+  .button { color: var(--yellow); border: 1px solid var(--yellow); background: none; font: inherit; letter-spacing: inherit;
+    padding: 9px 20px; cursor: pointer; text-transform: uppercase; }
+  .button:hover, .button:focus-visible { background: rgba(255, 208, 0, 0.12); outline: none; }
+  .blink { color: var(--yellow); animation: blink 1.2s steps(2, start) infinite; text-transform: uppercase; }
+  @keyframes blink { to { visibility: hidden; } }
+  .note { color: var(--grey); text-transform: uppercase; font-size: 11px; }
+  .note a, .link { color: var(--green); background: none; border: 0; font: inherit; letter-spacing: inherit; cursor: pointer; padding: 0; text-decoration: underline; }
+  #pick input { display: none; }
+  @media (prefers-reduced-motion: reduce) { #grid, #logo .w, #logo .f, .blink { animation: none; } }
+</style>
+<canvas id="screen" tabindex="0" hidden></canvas>
+<div id="front">
+  <div id="grid"></div>
+  <!-- The title screen's W and F (sprites etc0_001 and etc0_002). -->
+  <svg id="logo" viewBox="0 0 268 316" aria-hidden="true">
+    <g class="w">
+      <path class="face" d="M1 207 L1 1 L15 1 L15 187.293 L64 138.293 L113 187.293 L113 1 L127 1 L127 207 L113.293 207 L64 157.707 L14.707 207 Z"/>
+      <path class="edge" d="M1 207 L1 1 L15 1 L15 187.293 L64 138.293 L113 187.293 L113 1 L127 1 L127 207 L113.293 207 L64 157.707 L14.707 207 Z M14 2 L2 2 L2 206 L14.293 206 L64 156.293 L113.707 206 L126 206 L126 2 L114 2 L114 189.707 L64 139.707 L14 189.707 Z"/>
+    </g>
+    <g transform="translate(139 106)"><g class="f">
+      <path class="face" d="M127 47 L113 47 L113 15 L15 15 L15 89 L87 89 L87 103 L15 103 L15 207 L1 207 L1 1 L127 1 Z"/>
+      <path class="edge" d="M113 47 L113 15 L15 15 L15 89 L87 89 L87 103 L15 103 L15 207 L1 207 L1 1 L127 1 L127 47 Z M114 46 L126 46 L126 2 L2 2 L2 206 L14 206 L14 102 L86 102 L86 90 L14 90 L14 14 L114 14 Z"/>
+    </g></g>
+  </svg>
+  <!-- "WARNING FOREVER+" in the game's text font. -->
+  <svg id="title" viewBox="0 0 256 16" role="img" aria-label="Warning Forever+"><g transform="translate(0 0)"><path fill="#ffd000" d="M2 15 L2 15 L1.414 15 L1 15 L1 14.586 L1 1 L2 1 L2 13.586 L7.293 8.293 L8.707 8.293 L14 13.586 L14 1 L15 1 L15 14.586 L15 15 L14.586 15 L14 15 L14 15 L14 15 L8.293 9.293 L7.707 9.293 Z"/></g>
+<g transform="translate(16 0)"><path fill="#ffd000" d="M15 15 L14 15 L14 12 L2 12 L2 15 L1 15 L1 12 L1 11 L1 8.293 L8.293 1 L15 1 L15 11 L15 12 Z M14 2 L8.707 2 L2 8.707 L2 11 L14 11 Z"/></g>
+<g transform="translate(32 0)"><path fill="#ffd000" d="M1 8 L1 7 L1 1 L15 1 L15 8 L8.707 8 L15 14.293 L14.293 15 L7.293 8 L2 8 L2 15 L1 15 Z M14 7 L14 2 L2 2 L2 7 L7.707 7 Z"/></g>
+<g transform="translate(48 0)"><path fill="#ffd000" d="M2 3 L2 15 L1 15 L1 2 L1 1 L2 1 L14 13 L14 1 L15 1 L15 14 L15 15 L14 15 Z"/></g>
+<g transform="translate(64 0)"><path fill="#ffd000" d="M6 1 L6 2 L8 2 L8 14 L6 14 L6 15 L11 15 L11 14 L9 14 L9 2 L11 2 L11 1 Z"/></g>
+<g transform="translate(80 0)"><path fill="#ffd000" d="M2 3 L2 15 L1 15 L1 2 L1 1 L2 1 L14 13 L14 1 L15 1 L15 14 L15 15 L14 15 Z"/></g>
+<g transform="translate(96 0)"><path fill="#ffd000" d="M1 1 L1 15 L15 15 L15 8 L10 8 L10 9 L14 9 L14 14 L2 14 L2 2 L14 2 L14 4 L15 4 L15 1 Z"/></g>
+<g transform="translate(128 0)"><path fill="#ffd000" d="M1 1 L1 15 L2 15 L2 8 L10 8 L10 7 L2 7 L2 2 L14 2 L14 4 L15 4 L15 1 Z"/></g>
+<g transform="translate(144 0)"><path fill="#ffd000" d="M1 1 L1 15 L15 15 L15 1 Z M2 2 L14 2 L14 14 L2 14 Z"/></g>
+<g transform="translate(160 0)"><path fill="#ffd000" d="M1 8 L1 7 L1 1 L15 1 L15 8 L8.707 8 L15 14.293 L14.293 15 L7.293 8 L2 8 L2 15 L1 15 Z M14 7 L14 2 L2 2 L2 7 L7.707 7 Z"/></g>
+<g transform="translate(176 0)"><path fill="#ffd000" d="M1 1 L1 15 L15 15 L15 12 L14 12 L14 14 L2 14 L2 8 L10 8 L10 7 L2 7 L2 2 L14 2 L14 4 L15 4 L15 1 Z"/></g>
+<g transform="translate(192 0)"><path fill="#ffd000" d="M7.707 15 L1 15 L1 1 L2 1 L2 14 L7.293 14 L14 7.293 L14 1 L15 1 L15 7.707 Z"/></g>
+<g transform="translate(208 0)"><path fill="#ffd000" d="M1 1 L1 15 L15 15 L15 12 L14 12 L14 14 L2 14 L2 8 L10 8 L10 7 L2 7 L2 2 L14 2 L14 4 L15 4 L15 1 Z"/></g>
+<g transform="translate(224 0)"><path fill="#ffd000" d="M1 8 L1 7 L1 1 L15 1 L15 8 L8.707 8 L15 14.293 L14.293 15 L7.293 8 L2 8 L2 15 L1 15 Z M14 7 L14 2 L2 2 L2 7 L7.707 7 Z"/></g>
+<g transform="translate(240 0)"><path fill="#7a5cff" d="M8 1 L8 7 L2 7 L2 8 L8 8 L8 15 L9 15 L9 8 L15 8 L15 7 L9 7 L9 1 Z"/></g>
+<metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTo3MmExMWIxNS0xZDU2LTQ5NGEtOTJmYi03NTMyYzUyNDBjZmYAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaN10JF7+J6j763hpvSoznscAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDo0Mzk4YzNhMC1hNDViLTQ1MTAtYWJkNi05ZmJiNDc2MGUwMGRscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNoRoeNDAeb4ujbnLnTRr4UpgAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggp0WqdpgVK07Tp5jAEtaLv/qNV0rcwxbpurAeGqRO6g2kZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaNZHDRghRMx5nWMwjYr+waoAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIOdYygXlzNGqNOY3la+qSllozY2v3FlailXOSdtbFvoYZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GQncZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjcyYTExYjE1LTFkNTYtNDk0YS05MmZiLTc1MzJjNTI0MGNmZi9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjA5Y2Q5N2Q2LTc5MjYtNDA4NC1iMTcxLTFjZDgxZTEwZTA3MXJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCCnRap2mBUrTtOnmMAS1ou/+o1XStzDFum6sB4apE7qDaJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFgg1vKvfSofE/E2kKFDmH7+//1kMyNpyLxFxHO1YvgVBpWiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggvWiQ0rapy3xsKP4OcIAzA0DJGyS8GD5WlQ/LImKBNHl0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQB75Y6VquqPBBAreQfVG8mYjwAGIgEfmm/FH43F5Y7Z3p6kmY5lAYBwVVB40RaVbb4BTo7JA+hc87xwIXmXStPI=</c2pa:manifest></metadata></svg>
+  <div id="panel">
+    <div id="loading">
+      <div id="bar"><div id="fill"></div></div>
+      <div id="status">Loading</div>
+    </div>
+    <div id="pick" hidden>
+      <div class="note" style="margin-bottom: 14px">The game needs Warning Forever 1.08's data (wf108.zip or data.bin).<br>
+        <a href="https://www.hikware.com/Prod/index.html#wf" target="_blank" rel="noopener">Get wf108.zip from the official website</a></div>
+      <label class="button" tabindex="0">Choose a file<input id="file" type="file" accept=".zip,.bin"></label>
+      <div class="note" style="margin-top: 14px">or drop it here. It stays in this browser.</div>
+      <div class="note" id="nosave" style="margin-top: 6px; color: #ff5a5a" hidden>This browser keeps no storage for the page (private mode?): nothing is saved.</div>
+    </div>
+    <div id="go" hidden>
+      <div class="blink">Click or press any key</div>
+      <div class="note" style="margin-top: 14px"><button class="link" id="forget">Use other game data</button></div>
+    </div>
+    <div id="error-box" hidden>
+      <div id="error"></div>
+      <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center">
+        <button class="button" onclick="location.reload()">Try again</button>
+        <button class="button" id="forget-error" hidden>Use other game data</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// Errors on this screen. A classic script, so it runs even where the game's
+// module cannot load (a page opened from a file, an old browser).
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fromFile = location.protocol === 'file:';
+  const FILE_HELP = 'This page was opened as a file, and browsers do not let a page opened from a file load the game. '
+    + 'Serve the folder over HTTP instead: for example run\n\n  python3 -m http.server\n\nin this folder and open http://localhost:8000.';
+  // Shows `msg` in place of the loading bar or the file choice; once.
+  window.wfFatal = (msg) => {
+    if (window.wfFailed) return;
+    window.wfFailed = window.failed = String(msg);
+    for (const id of ['loading', 'pick', 'go']) $(id).hidden = true;
+    $('screen').hidden = true;
+    $('front').hidden = false;
+    $('error').textContent = fromFile ? FILE_HELP : String(msg);
+    $('error-box').hidden = false;
+  };
+  addEventListener('error', (e) => window.wfFatal(e.message || 'a script failed to load'));
+  addEventListener('unhandledrejection', (e) => window.wfFatal((e.reason && e.reason.message) || e.reason || 'unknown error'));
+  if (fromFile) return window.wfFatal(FILE_HELP);
+  if (typeof WebAssembly !== 'object') return window.wfFatal('This browser cannot run WebAssembly.');
+  if (!document.createElement('canvas').getContext('webgl2')) {
+    return window.wfFatal('This browser has no WebGL 2 (or it is turned off), which the game draws with.');
+  }
+  // The module sets wfBooted first thing; a module that never ran (blocked,
+  // or a browser without modules) shows here instead of a stuck screen.
+  setTimeout(() => window.wfBooted || window.wfFatal('The game\'s script did not start (blocked by the browser, or no module support).'), 10000);
+})();
+</script>
+<script type="module">
+window.wfBooted = true;
+const fail = (msg) => window.wfFatal(msg);
+// Loaded here (not a static import), so a failure reaches the error screen.
+let init, wf;
+try {
+  wf = await import('./pkg/wfplus.js');
+  init = wf.default;
+} catch (e) {
+  fail(`The game's script could not be loaded: ${(e && e.message) || e}`);
+  throw e;
+}
+
+// The wasm module's size, written by scripts/build-web.sh (a compressed
+// download's Content-Length is not the size the stream gives).
+const WASM_SIZE = Number('6655297') || 0;
+const DATA_FILES = ['data.bin', 'wf108.zip'];
+
+const $ = (id) => document.getElementById(id);
+const show = (id) => { for (const p of ['loading', 'pick', 'go']) $(p).hidden = p !== id; };
+
+// What the game saves (wf.ini, wf.sco, rec/) and the game data, in IndexedDB.
+const db = await new Promise((resolve) => {
+  try {
+    const open = indexedDB.open('wfplus', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('files');
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => resolve(null);
+  } catch { resolve(null); }
+});
+const tx = (mode, f) => new Promise((resolve) => {
+  if (!db) return resolve(null);
+  const t = db.transaction('files', mode);
+  const req = f(t.objectStore('files'));
+  t.oncomplete = () => resolve(req && req.result);
+  t.onerror = t.onabort = () => resolve(null);
+});
+// Called by the game (platform::web) when it writes or removes a file.
+globalThis.wfStore = {
+  put: (path, data, modified) => tx('readwrite', (s) => s.put({ data: data.slice(), modified }, path)),
+  delete: (path) => tx('readwrite', (s) => s.delete(path)),
+};
+if (!db) $('nosave').hidden = false;
+const stored = async () => {
+  const keys = (await tx('readonly', (s) => s.getAllKeys())) || [];
+  const values = (await tx('readonly', (s) => s.getAll())) || [];
+  return keys.map((k, i) => [String(k), values[i]]);
+};
+
+// The wasm, with its download shown.
+async function load() {
+  let res;
+  try {
+    res = await fetch('pkg/wfplus_bg.wasm');
+  } catch (e) {
+    throw new Error(`The game could not be downloaded (pkg/wfplus_bg.wasm): ${(e && e.message) || e}`);
+  }
+  if (!res.ok) throw new Error(`The game could not be downloaded: pkg/wfplus_bg.wasm gave ${res.status} ${res.statusText}`);
+  const total = WASM_SIZE || Number(res.headers.get('Content-Length')) || 0;
+  const mb = (n) => (n / 1048576).toFixed(1);
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    $('fill').style.width = total ? `${Math.min(100, (got / total) * 100)}%` : '50%';
+    $('status').textContent = total ? `Loading ${mb(got)} / ${mb(total)} MB` : `Loading ${mb(got)} MB`;
+  }
+  $('fill').style.width = '100%';
+  $('status').textContent = 'Starting';
+  const bytes = new Uint8Array(got);
+  let at = 0;
+  for (const p of parts) { bytes.set(p, at); at += p.length; }
+  await init({ module_or_path: bytes });
+}
+
+let started = false;
+async function start() {
+  if (started || window.wfFailed) return;
+  started = true;
+  const canvas = $('screen');
+  const fit = () => {
+    canvas.width = Math.max(1, Math.round(innerWidth * devicePixelRatio));
+    canvas.height = Math.max(1, Math.round(innerHeight * devicePixelRatio));
+  };
+  fit();
+  addEventListener('resize', fit);
+  canvas.hidden = false;
+  try {
+    // The title's EXIT: back to this page's start, ready to play again.
+    await wf.start(canvas, undefined, () => location.reload());
+    if (window.wfFailed) return;
+    $('front').hidden = true;
+    canvas.focus();
+    window.started = true;
+  } catch (e) {
+    fail(`The game could not start: ${(e && e.message) || e}`);
+  }
+}
+
+// The game data: a picked or dropped file, kept for the next visit.
+async function useData(file) {
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (e) {
+    return fail(`${file.name} could not be read: ${(e && e.message) || e}`);
+  }
+  // A zip starts with "PK".
+  const name = bytes[0] === 0x50 && bytes[1] === 0x4b ? 'wf108.zip' : 'data.bin';
+  for (const n of DATA_FILES) await tx('readwrite', (s) => s.delete(n));
+  await tx('readwrite', (s) => s.put({ data: bytes, modified: Date.now() }, name));
+  wf.put_file(name, bytes, Date.now());
+  // Picking the file was a click: the audio may start.
+  start();
+}
+$('file').addEventListener('change', (e) => e.target.files[0] && useData(e.target.files[0]));
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file && !$('pick').hidden) useData(file);
+});
+// After an error with the data stored, the way out is other data.
+$('forget-error').hidden = false;
+const forget = async () => {
+  for (const n of DATA_FILES) await tx('readwrite', (s) => s.delete(n));
+  location.reload();
+};
+$('forget').addEventListener('click', forget);
+$('forget-error').addEventListener('click', forget);
+
+try {
+  await load();
+  const files = await stored();
+  for (const [path, f] of files) wf.put_file(path, f.data, f.modified);
+  if (files.some(([p]) => DATA_FILES.includes(p))) {
+    // Browsers let the audio start only after a click or a key.
+    show('go');
+    const go = (e) => {
+      if (window.wfFailed || (e.target.closest && e.target.closest('#forget'))) return;
+      removeEventListener('pointerdown', go);
+      removeEventListener('keydown', go);
+      start();
+    };
+    addEventListener('pointerdown', go);
+    addEventListener('keydown', go);
+  } else {
+    show('pick');
+  }
+} catch (e) {
+  fail(String((e && e.message) || e));
+}
+</script>
+</html>

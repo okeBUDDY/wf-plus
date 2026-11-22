@@ -41,6 +41,68 @@ pub struct Steer {
     travel: f32,
     touch_ticks: u32,
     was_touching: bool,
+    /// In play, a second finger (see [`play_extras`]): its id, ticks down,
+    /// travel and last place.
+    second: Option<(u64, u32, f32, [f32; 2])>,
+    /// The mouse wheel: its total last tick, the turn not yet spent and
+    /// the ticks until it can select again.
+    wheel: Option<f32>,
+    wheel_turn: f32,
+    wheel_wait: u32,
+}
+
+/// A second finger held this long (ticks) is the slow move; lifted sooner,
+/// having stayed put, it is a tap: the weapon select.
+const SECOND_HOLD: u32 = 8;
+/// After the wheel selects the weapon, it rests this many ticks (a
+/// trackpad's scroll goes on long after the fingers lift).
+const WHEEL_WAIT: u32 = 15;
+
+/// In play, the triggers that touch and the mouse have no button for. A
+/// second finger, anywhere, held: the slow move (while held); tapped: the
+/// weapon select. A turn of the wheel either way: the weapon select. The
+/// first finger steers and shoots as before.
+fn play_extras(a: &ActionState, steer: &mut Steer) -> u16 {
+    let total = a.raw.mouse.wheel;
+    let turned = steer.wheel.map_or(0.0, |w| (total - w).abs());
+    steer.wheel = Some(total);
+    if steer.ship.is_none() {
+        (steer.second, steer.wheel_turn, steer.wheel_wait) = (None, 0.0, 0);
+        return 0;
+    }
+    let mut b = 0;
+    if steer.wheel_wait > 0 {
+        steer.wheel_wait -= 1;
+        steer.wheel_turn = 0.0;
+    } else {
+        steer.wheel_turn += turned;
+        if steer.wheel_turn >= 1.0 {
+            b |= WEAPON_SELECT;
+            (steer.wheel_turn, steer.wheel_wait) = (0.0, WHEEL_WAIT);
+        }
+    }
+    let other = a.raw.fingers.iter().zip(&a.touches).find(|(f, _)| a.touching && Some(f.id) != a.primary).map(|(f, &p)| (f.id, p));
+    match (steer.second, other) {
+        (Some((id, ticks, travel, last)), Some((now, p))) if now == id => {
+            let moved = (p[0] - last[0]).abs() + (p[1] - last[1]).abs();
+            steer.second = Some((id, ticks + 1, travel + moved, p));
+            if ticks + 1 >= SECOND_HOLD {
+                b |= SLOW;
+            }
+        }
+        (last, now) => {
+            // Lifted soon and still (not just become the steering finger).
+            if let Some((id, ticks, travel, _)) = last
+                && ticks < SECOND_HOLD
+                && travel < 12.0
+                && a.primary != Some(id)
+            {
+                b |= WEAPON_SELECT;
+            }
+            steer.second = now.map(|(id, p)| (id, 1, 0.0, p));
+        }
+    }
+    b
 }
 
 /// A swipe this long (arena units) is one menu step.
@@ -172,6 +234,7 @@ impl Pad {
                 b |= TRIGGER << i;
             }
         }
+        b |= play_extras(a, steer);
         let b = menu_touch(a, steer, b);
         self.buttons = b;
         self.pressed = b & !self.previous;
@@ -314,6 +377,64 @@ mod tests {
             a.raw.fingers.push(Finger { id: 1, pos });
         }
         a
+    }
+
+    /// Fingers (id, place) down this tick, the first one steering.
+    fn fingers(f: &[(u64, [f32; 2])]) -> ActionState {
+        let mut a = ActionState::default();
+        a.touching = !f.is_empty();
+        a.primary = f.first().map(|f| f.0);
+        for &(id, pos) in f {
+            a.raw.fingers.push(Finger { id, pos: [0.5; 2] });
+            a.touches.push(pos);
+        }
+        a
+    }
+
+    #[test]
+    fn second_finger_holds_slow_and_taps_weapon() {
+        let mut steer = Steer { ship: Some([320.0, 400.0]), ..Default::default() };
+        let one = fingers(&[(1, [100.0, 100.0])]);
+        let two = fingers(&[(1, [100.0, 100.0]), (2, [300.0, 200.0])]);
+        assert_eq!(play_extras(&one, &mut steer), 0);
+        // A quick tap: nothing while down, the weapon select on release.
+        for _ in 0..3 {
+            assert_eq!(play_extras(&two, &mut steer), 0);
+        }
+        assert_eq!(play_extras(&one, &mut steer), WEAPON_SELECT);
+        assert_eq!(play_extras(&one, &mut steer), 0);
+        // Held: the slow move from SECOND_HOLD ticks on, no select on release.
+        let held: Vec<u16> = (0..SECOND_HOLD + 2).map(|_| play_extras(&two, &mut steer)).collect();
+        assert_eq!(held[..SECOND_HOLD as usize - 1], vec![0; SECOND_HOLD as usize - 1][..]);
+        assert!(held[SECOND_HOLD as usize..].iter().all(|&b| b == SLOW));
+        assert_eq!(play_extras(&one, &mut steer), 0);
+        // A tap that slides is not a select.
+        play_extras(&two, &mut steer);
+        play_extras(&fingers(&[(1, [100.0, 100.0]), (2, [340.0, 200.0])]), &mut steer);
+        assert_eq!(play_extras(&one, &mut steer), 0);
+        // The steering finger lifts and the other takes over: not a select.
+        play_extras(&two, &mut steer);
+        assert_eq!(play_extras(&fingers(&[(2, [300.0, 200.0])]), &mut steer), 0);
+    }
+
+    #[test]
+    fn wheel_selects_the_weapon_once_per_turn() {
+        let mut steer = Steer { ship: Some([320.0, 400.0]), ..Default::default() };
+        let wheel = |w: f32| {
+            let mut a = ActionState::default();
+            a.raw.mouse.wheel = w;
+            a
+        };
+        assert_eq!(play_extras(&wheel(5.0), &mut steer), 0);
+        assert_eq!(play_extras(&wheel(5.5), &mut steer), 0);
+        assert_eq!(play_extras(&wheel(4.5), &mut steer), WEAPON_SELECT);
+        // A trackpad's long scroll: one select, then a rest.
+        let after: Vec<u16> = (0..WHEEL_WAIT).map(|i| play_extras(&wheel(5.0 + i as f32), &mut steer)).collect();
+        assert!(after.iter().all(|&b| b == 0));
+        assert_eq!(play_extras(&wheel(30.0), &mut steer), WEAPON_SELECT);
+        // No ship (the menus have their own wheel): nothing.
+        steer.ship = None;
+        assert_eq!(play_extras(&wheel(40.0), &mut steer), 0);
     }
 
     #[test]

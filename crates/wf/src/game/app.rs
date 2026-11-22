@@ -3,6 +3,7 @@
 //! (main.rs); this is the game-facing part.
 
 use super::Cx;
+use wf_engine::platform::Capabilities;
 use super::task::{self, ListId};
 
 /// A stage of the program (UserFunc): the title, the game, ...
@@ -147,10 +148,21 @@ impl App {
             return false;
         }
         let Some(mut stage) = self.stage.take() else { return false };
-        if cx.input.quit_pressed {
+        // The port's F12 for the mouse and touch: in a game (not a menu),
+        // a phone's Back (Escape there, which would quit), and with a ship
+        // in play the mouse's back button (the name entry's delete), go
+        // back to the title. A paused game's back button resumes it
+        // instead (below).
+        let in_game = !cx.draw.menu;
+        let phone_back = in_game && cx.input.quit_pressed && cx.settings.caps == Capabilities::MOBILE;
+        let mouse_back = in_game
+            && cx.input.steer.ship.is_some()
+            && cx.ui.back
+            && cx.app.flags & AppFlags::TIME_STOPPED == 0;
+        if cx.input.quit_pressed && !phone_back {
             cx.app.finish(None);
         }
-        if cx.input.reset_pressed {
+        if cx.input.reset_pressed || phone_back || mouse_back {
             cx.app.request_reset();
         }
         // InputTask::IsProtected (0x405f30): the pause button of any pad,

@@ -186,6 +186,9 @@ pub struct ActionState {
     pub drag: [f32; 2],
     /// Some finger is down.
     pub touching: bool,
+    /// The finger that steers (the first one down; the next oldest when
+    /// it lifts). Only its travel makes `drag`.
+    pub primary: Option<u64>,
     /// The mouse in arena units whenever it is in the window (menus).
     pub cursor: Option<[f32; 2]>,
     /// The fingers down, in arena units (menus).
@@ -207,6 +210,7 @@ impl ActionState {
 pub struct InputSystem {
     pub bindings: Bindings,
     last_fingers: Vec<(u64, [f32; 2])>,
+    primary: Option<u64>,
     last_pads: Vec<Option<[f32; 2]>>,
 }
 
@@ -262,8 +266,13 @@ impl InputSystem {
             s.cursor = Some(layout.to_logical(raw.mouse.pos[0], raw.mouse.pos[1]));
         }
         s.touches = raw.fingers.iter().map(|f| layout.to_logical(f.pos[0] * w, f.pos[1] * h)).collect();
+        if !raw.fingers.iter().any(|f| Some(f.id) == self.primary) {
+            // The oldest finger left (fingers come in the order they went down).
+            self.primary = raw.fingers.first().map(|f| f.id);
+        }
+        s.primary = self.primary;
         if self.bindings.touch {
-            for f in &raw.fingers {
+            for f in raw.fingers.iter().filter(|f| Some(f.id) == self.primary) {
                 if let Some((_, p)) = self.last_fingers.iter().find(|(id, _)| *id == f.id) {
                     s.drag[0] += (f.pos[0] - p[0]) * w / layout.scale;
                     s.drag[1] += (f.pos[1] - p[1]) * h / layout.scale;
@@ -331,6 +340,25 @@ mod tests {
         raw.fingers[0].pos = [0.5 + 15.0 / 1280.0, 0.5];
         let s = sys.update(&raw, &layout());
         assert!((s.drag[0] - 10.0).abs() < 1e-3, "{:?}", s.drag);
+    }
+
+    #[test]
+    fn only_the_first_finger_drags() {
+        let mut sys = InputSystem::default();
+        let mut raw = RawInput { window: (1280, 720), ..Default::default() };
+        raw.fingers.push(Finger { id: 1, pos: [0.5, 0.5] });
+        sys.update(&raw, &layout());
+        raw.fingers.push(Finger { id: 2, pos: [0.8, 0.5] });
+        assert_eq!(sys.update(&raw, &layout()).primary, Some(1));
+        // The second finger moves: no drag.
+        raw.fingers[1].pos = [0.9, 0.6];
+        assert_eq!(sys.update(&raw, &layout()).drag, [0.0, 0.0]);
+        // The first lifts: the second steers, from where it is.
+        raw.fingers.remove(0);
+        let s = sys.update(&raw, &layout());
+        assert_eq!((s.primary, s.drag), (Some(2), [0.0, 0.0]));
+        raw.fingers[0].pos = [0.9 + 15.0 / 1280.0, 0.6];
+        assert!((sys.update(&raw, &layout()).drag[0] - 10.0).abs() < 1e-3);
     }
 
     #[test]

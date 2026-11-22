@@ -201,11 +201,15 @@ last one used picks the prompts.
 * Keyboard: arrows (or numpad) move; Z shoots, X moves slowly, D selects the
   weapon, F pauses (when enabled). Esc quits, F12 resets to the title.
 * Mouse: the ship steers toward the pointer; left shoots, right moves
-  slowly, middle selects the weapon (all rebindable).
+  slowly, middle selects the weapon (all rebindable). In play, a turn of
+  the wheel also selects the weapon, and the back button (X1) resets to
+  the title.
 * Gamepad (SDL_Gamepad, hot-plugged): left stick or d-pad, with a dead zone;
   buttons are triggers. A gamepad touchpad drags the ship.
 * Touch: drag anywhere to move the ship relative to the finger; a finger
-  down shoots.
+  down shoots. A second finger anywhere moves slowly while it is held, and
+  a quick tap of it selects the weapon. Android's Back resets to the title
+  from a game (and quits from the title).
 
 The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS,
 RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel

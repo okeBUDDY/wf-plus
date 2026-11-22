@@ -155,11 +155,21 @@ impl App {
         // instead (below).
         let in_game = !cx.draw.menu;
         let phone_back = in_game && cx.input.quit_pressed && cx.settings.caps == Capabilities::MOBILE;
+        // A phone's Back on a menu other than the title's (the arena choice,
+        // the options) is the back button there: a step back toward the
+        // title. Only the title's menu quits.
+        let phone_menu_back = !in_game
+            && cx.input.quit_pressed
+            && cx.settings.caps == Capabilities::MOBILE
+            && cx.guide != Some(super::guide::Guide::Menu);
+        if phone_menu_back {
+            cx.ui.back = true;
+        }
         let mouse_back = in_game
             && cx.input.steer.ship.is_some()
             && cx.ui.back
             && cx.app.flags & AppFlags::TIME_STOPPED == 0;
-        if cx.input.quit_pressed && !phone_back {
+        if cx.input.quit_pressed && !phone_back && !phone_menu_back {
             cx.app.finish(None);
         }
         if cx.input.reset_pressed || phone_back || mouse_back {

@@ -51,6 +51,19 @@ import org.libsdl.app.SDLActivity;
  *  "backend" (vulkan|gl) and "refresh" (on|off) go to the native side
  *  before SDL_main starts. */
 public class WarningForeverActivity extends SDLActivity implements DisplayManager.DisplayListener {
+
+    /**
+     * Back as a key, from the system Back of every navigation mode. SDL
+     * traps Back (SDL_ANDROID_TRAP_BACK_BUTTON) and only a key event reaches
+     * the game as one; the back gesture and Android 13+'s back dispatch call
+     * onBackPressed with no key event, which SDL's trap then swallowed.
+     */
+    @Override
+    public void onBackPressed() {
+        SDLActivity.onNativeKeyDown(android.view.KeyEvent.KEYCODE_BACK);
+        SDLActivity.onNativeKeyUp(android.view.KeyEvent.KEYCODE_BACK);
+    }
+
     private static final String TAG = "wf";
 
     /** System.loadLibrary name: lib + NATIVE_LIB + .so in the APK. */

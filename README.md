@@ -207,9 +207,10 @@ last one used picks the prompts.
 * Gamepad (SDL_Gamepad, hot-plugged): left stick or d-pad, with a dead zone;
   buttons are triggers. A gamepad touchpad drags the ship.
 * Touch: drag anywhere to move the ship relative to the finger; a finger
-  down shoots. A second finger anywhere moves slowly while it is held, and
-  a quick tap of it selects the weapon. Android's Back resets to the title
-  from a game (and quits from the title).
+  down shoots. A second finger anywhere moves slowly while it is held, and a
+  quick tap of it selects the weapon. Android's Back (the button or the
+  gesture) goes back to the title from a game, the arena choice or the
+  options, and quits from the title's menu.
 
 The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS,
 RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel

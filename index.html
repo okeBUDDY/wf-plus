@@ -8,7 +8,9 @@
   :root { --green: #1fa463; --grid: rgba(31, 164, 99, 0.22); --yellow: #ffd000; --violet: #7a5cff; --grey: #8a8a8a; }
   html, body { margin: 0; height: 100%; background: #000; color: var(--grey); overflow: hidden;
     font: 13px/1.6 ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; letter-spacing: 0.12em; }
-  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  /* Sized by the script to the visible viewport (100vh is taller than it
+     on phones, behind the browser's bars). */
+  canvas { display: block; position: fixed; left: 0; top: 0; width: 100vw; height: 100dvh; touch-action: none; outline: none; }
   #front { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 22px; padding: 16px; box-sizing: border-box; text-align: center; overflow: hidden; }
   [hidden] { display: none !important; }
@@ -210,12 +212,31 @@ async function start() {
   if (started || window.wfFailed) return;
   started = true;
   const canvas = $('screen');
+  // The canvas covers what is visible: on phones the visual viewport, which
+  // the address bar and the toolbar shrink (100vh does not).
   const fit = () => {
-    canvas.width = Math.max(1, Math.round(innerWidth * devicePixelRatio));
-    canvas.height = Math.max(1, Math.round(innerHeight * devicePixelRatio));
+    const v = window.visualViewport;
+    const w = v ? v.width : innerWidth;
+    const h = v ? v.height : innerHeight;
+    canvas.style.left = `${v ? v.offsetLeft : 0}px`;
+    canvas.style.top = `${v ? v.offsetTop : 0}px`;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = Math.max(1, Math.round(w * devicePixelRatio));
+    canvas.height = Math.max(1, Math.round(h * devicePixelRatio));
   };
   fit();
   addEventListener('resize', fit);
+  addEventListener('orientationchange', () => setTimeout(fit, 250));
+  if (window.visualViewport) {
+    visualViewport.addEventListener('resize', fit);
+    visualViewport.addEventListener('scroll', fit);
+  }
+  // A phone or tablet: the whole screen, without the browser's bars (the
+  // click or key that started the game allows it; a refusal is fine).
+  if (matchMedia('(pointer: coarse)').matches && document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  }
   canvas.hidden = false;
   try {
     // The title's EXIT: back to this page's start, ready to play again.

@@ -22,6 +22,9 @@ pub struct Platform {
     last_device: Device,
     mouse_inside: bool,
     wheel: f32,
+    /// Android's Back was pressed since the last input read.
+    #[cfg(target_os = "android")]
+    back_pressed: std::cell::Cell<bool>,
     /// The window's title as created (the FPS display appends to it).
     pub title: String,
     /// Files dropped on the window since the last [`Platform::take_dropped`].
@@ -205,6 +208,8 @@ impl Platform {
             last_device: if cfg!(target_os = "android") { Device::Touch } else { Device::Keyboard },
             mouse_inside: false,
             wheel: 0.0,
+            #[cfg(target_os = "android")]
+            back_pressed: Default::default(),
         })
     }
 
@@ -297,6 +302,11 @@ impl Platform {
                     self.gamepads.retain(|p| p.id().ok() != Some(which));
                 }
                 // The last-used device: whatever the player touched last.
+                // Android's Back (a button, a gesture): its press and
+                // release can come in one batch, so the press is kept for
+                // the next input read.
+                #[cfg(target_os = "android")]
+                SdlEvent::KeyDown { scancode: Some(Scancode::AcBack), .. } => self.back_pressed.set(true),
                 SdlEvent::KeyDown { repeat: false, .. } => self.last_device = Device::Keyboard,
                 SdlEvent::MouseMotion { xrel, yrel, .. } => {
                     self.mouse_inside = true;
@@ -337,10 +347,10 @@ impl Platform {
         for k in ALL_KEYS {
             raw.keys[k as usize] = state.is_scancode_pressed(keymap(k));
         }
-        // Android's Back button is Escape.
+        // Android's Back is Escape.
         #[cfg(target_os = "android")]
         {
-            raw.keys[Key::Escape as usize] |= state.is_scancode_pressed(Scancode::AcBack);
+            raw.keys[Key::Escape as usize] |= state.is_scancode_pressed(Scancode::AcBack) || self.back_pressed.take();
         }
         for pad in &self.gamepads {
             let mut g = GamepadState::default();

@@ -7,11 +7,11 @@ pub const NAME: &str = "Warning Forever+";
 /// Warning Forever+'s own version (semantic: major.minor.patch), not the
 /// original's: every release is based on the original's last version,
 /// [`BASED_ON`]. Shown with the name, never alone.
-pub const VERSION: [u16; 3] = [1, 1, 0];
-pub const VERSION_TEXT: &str = "1.1.0";
+pub const VERSION: [u16; 3] = [1, 1, 1];
+pub const VERSION_TEXT: &str = "1.1.1";
 /// The version of Warning Forever this is a port of (its data.bin).
 pub const BASED_ON: &str = "1.08";
-/// The full version line: "Warning Forever+ 1.1.0 (based on Warning
+/// The full version line: "Warning Forever+ 1.1.1 (based on Warning
 /// Forever 1.08)".
 pub fn version_line() -> String {
     format!("{NAME} {VERSION_TEXT} (based on Warning Forever {BASED_ON})")
@@ -35,7 +35,7 @@ pub const LANGUAGE: u16 = 0x0409;
 /// elevation, Windows 10/11. No XML declaration: winresource writes each
 /// line padded with spaces, and a declaration must start the document.
 pub const WINDOWS_MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
-<assemblyIdentity type="win32" name="okeBUDDY.WarningForeverPlus" version="1.1.0.0"/>
+<assemblyIdentity type="win32" name="okeBUDDY.WarningForeverPlus" version="1.1.1.0"/>
 <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
 <security>
 <requestedPrivileges>

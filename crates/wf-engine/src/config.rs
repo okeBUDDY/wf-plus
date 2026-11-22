@@ -18,7 +18,7 @@ impl Config {
     /// Reads `path` (an empty config when it does not exist).
     pub fn load(path: &Path) -> Self {
         let mut c = Config { values: BTreeMap::new(), path: Some(path.to_path_buf()) };
-        if let Ok(text) = std::fs::read_to_string(path) {
+        if let Ok(text) = crate::fs::read_to_string(path) {
             c.parse(&text);
         }
         c
@@ -81,7 +81,7 @@ impl Config {
             }
             out.push_str(&format!("{key} = {v}\n"));
         }
-        std::fs::write(path, out)
+        crate::fs::write(path, out)
     }
 }
 

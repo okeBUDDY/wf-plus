@@ -199,7 +199,7 @@ impl App {
             }
         }
 
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         if cx.app.flags & AppFlags::TIME_STOPPED != 0 {
             task::remove_up_to(cx, ListId::Tasks, 0);
             task::remove_up_to(cx, ListId::Overlays, 0);
@@ -208,7 +208,7 @@ impl App {
             stage.update(cx);
             task::remove_up_to(cx, ListId::Overlays, 2);
         }
-        let t1 = std::time::Instant::now();
+        let t1 = web_time::Instant::now();
         begin_frame(cx, stage.is_menu());
         task::run_all(cx, ListId::Tasks);
         stage.draw(cx);

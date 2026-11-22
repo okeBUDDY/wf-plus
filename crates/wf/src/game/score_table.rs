@@ -158,7 +158,7 @@ impl ScoreTable {
         let rec = self.record();
         d.extend_from_slice(&(rec.len() as i32).to_le_bytes());
         d.extend_from_slice(&rec);
-        std::fs::write(path, d).is_ok()
+        wf_engine::fs::write(path, d).is_ok()
     }
 
     /// Recover (0x421330).
@@ -180,7 +180,7 @@ impl ScoreTable {
     /// Load (0x421360): the table of the current rules.
     pub fn load(&mut self) -> bool {
         let Some(path) = &self.path else { return false };
-        let Ok(data) = std::fs::read(path) else { return false };
+        let Ok(data) = wf_engine::fs::read(path) else { return false };
         if data.len() < 4 {
             self.recover();
             return false;
@@ -220,7 +220,7 @@ impl ScoreTable {
     /// adding a record if there is none.
     pub fn store(&mut self) -> bool {
         let Some(path) = &self.path else { return false };
-        let Ok(mut data) = std::fs::read(path) else { return false };
+        let Ok(mut data) = wf_engine::fs::read(path) else { return false };
         let Some((mut pos, count, size)) = Self::header(&data) else { return false };
         let rules = bytemuck::bytes_of(&self.rules).to_vec();
         let mut i = 0;
@@ -240,7 +240,7 @@ impl ScoreTable {
         if i == count {
             data[4..8].copy_from_slice(&(count + 1).to_le_bytes());
         }
-        std::fs::write(path, data).is_ok()
+        wf_engine::fs::write(path, data).is_ok()
     }
 
     /// Import (0x4217b0): without a score file, makes one from the scores

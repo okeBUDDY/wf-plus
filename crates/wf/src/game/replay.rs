@@ -84,7 +84,7 @@ impl Default for Replay {
 
 /// Replay::IsReplayFile (0x415ac0).
 pub fn is_replay_file(path: &std::path::Path) -> bool {
-    match std::fs::read(path) {
+    match wf_engine::fs::read(path) {
         Ok(b) if b.len() >= 4 => {
             let v = u32::from_le_bytes(b[0..4].try_into().unwrap());
             (OLD_VERSION as u32..=VERSION as u32).contains(&v) || v == HD_VERSION as u32
@@ -97,9 +97,9 @@ impl Replay {
     fn close_file(&mut self) {
         if let Some(data) = self.writer.take() {
             if let Some(dir) = self.path.parent() {
-                let _ = std::fs::create_dir_all(dir);
+                let _ = wf_engine::fs::create_dir_all(dir);
             }
-            if let Err(e) = std::fs::write(&self.path, data) {
+            if let Err(e) = wf_engine::fs::write(&self.path, data) {
                 crate::log::warn(&format!("cannot write {}: {e}", self.path.display()));
             }
         }
@@ -210,7 +210,7 @@ pub fn load_header(cx: &mut Cx) -> bool {
     if cx.replay.mode != Mode::Play {
         return true;
     }
-    let Ok(data) = std::fs::read(&cx.replay.path) else { return false };
+    let Ok(data) = wf_engine::fs::read(&cx.replay.path) else { return false };
     let mut r = Reader::new(data);
     let Some(version) = r.i32() else { return false };
     let mut rules = GameRules::default();

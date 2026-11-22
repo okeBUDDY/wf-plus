@@ -120,7 +120,7 @@ impl Setup {
             draw: DrawList::new(),
             // As the title's (colour, speed); a new angle each run.
             grid: BackgroundGrid::started(0xff00_4030, 8.0, {
-                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+                let nanos = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
                 (nanos >> 10 & 0x3ff) as i16
             }),
             grid_line: art.shapes.grid_line,
@@ -152,7 +152,7 @@ impl Setup {
         self.error = None;
         match button {
             Button::Download => {
-                if let Err(e) = wf_engine::platform::sdl::open_url(data_import::DOWNLOAD_URL) {
+                if let Err(e) = wf_engine::platform::open_url(data_import::DOWNLOAD_URL) {
                     self.error = Some(format!("CANNOT OPEN THE BROWSER ({})", e.to_ascii_uppercase()));
                 }
             }
@@ -219,7 +219,7 @@ impl Setup {
         }
         if let Some(e) = self.error.clone() {
             self.centred(false, 392.0, &e, RED);
-        } else if wf_engine::platform::sdl::Platform::file_dialog_open() {
+        } else if wf_engine::platform::file_dialog_open() {
             self.centred(false, 392.0, "WAITING FOR THE FILE DIALOG", GREY);
         }
         if !self.mobile {

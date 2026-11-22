@@ -54,4 +54,5 @@ PY
 # The page shows the download's progress against the module's size.
 size=$(stat -c %s "$OUT/pkg/wfplus_bg.wasm")
 sed "s/__WASM_SIZE__/$size/" "$REPO/web/index.html" > "$OUT/index.html"
+cp "$REPO/licenses/THIRD-PARTY-LICENSES.txt" "$OUT/"
 echo "built $OUT ($(du -sh "$OUT" | cut -f1))"

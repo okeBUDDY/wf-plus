@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates licenses/THIRD-PARTY-LICENSES.txt: every crate in Cargo.lock
-# that a desktop, Windows or Android build links (cargo-about, see
+# that a desktop, Windows, Android or browser build links (cargo-about, see
 # about.toml), then SDL3's own licence. Needs cargo-about (--features cli).
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)

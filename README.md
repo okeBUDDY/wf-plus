@@ -151,6 +151,16 @@ the original game's files, whose licence allows public redistribution only
 with the author's permission. `--with-data` adds data.bin and the original
 readmes, for a build of your own.
 
+`scripts/build-linux.sh` makes the Linux x86_64 release the same way: a
+`.tar.gz` of a folder with a stripped `wfplus` (SDL3 linked in statically)
+and the licence notices, and `--with-data` as above. The binary needs the
+glibc it was built against or newer, so the release is built on Ubuntu 22.04
+(glibc 2.35, which SteamOS 3 and current distributions have); SDL3 loads
+the X11, Wayland, libdecor, PulseAudio, PipeWire and ALSA libraries at run
+time from the system, and is built with the back ends whose development
+headers the build machine has (the script lists them, and stops if X11,
+Wayland or PulseAudio is missing).
+
 `android/` is the Gradle project for Android (arm64-v8a and x86_64,
 Android 7 and later); it builds the same crate as `libwfplus.so` through
 cargo-ndk. `gradle assembleRelease` makes the APK to sideload, signed with

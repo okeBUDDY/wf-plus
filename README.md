@@ -221,7 +221,8 @@ last one used picks the prompts.
   back (it never quits). The menus' buttons are fixed: A confirms, B goes
   back, LB/RB change tabs. Buttons are named for the gamepad in use (Xbox,
   PlayStation, Nintendo, Steam Deck, or by place for others), or as
-  OPTIONS > PAD > BUTTON NAMES says. A new game played on a gamepad shows
+  OPTIONS > PAD > BUTTON NAMES says (AUTO shows the kind it detected,
+  as in AUTO (STEAM DECK)). A new game played on a gamepad shows
   its controls along the bottom for its first seconds. A gamepad touchpad
   drags the ship.
 * Touch: drag anywhere to move the ship relative to the finger; a finger
@@ -247,7 +248,9 @@ render scale, FPS cap, show FPS) apply at once. ASPECT RATIO and RESOLUTION
 list the display's own modes (each ratio, then the sizes of the chosen
 one): the window's size, or in FULLSCREEN the display mode to switch to
 (switching to FULLSCREEN starts at the display's current mode); BORDERLESS
-always takes the display's resolution.
+always takes the display's resolution. RENDER SCALE (50% to 400%) shows
+the size it draws at, e.g. 300% (3840X2400) in a 1280x800 window: above
+100% it supersamples, for sharper lines on a display smaller than 4K.
 
 Every menu also works with the mouse alone, and the same targets take
 taps. On the title, hover and click the item to choose it and the arrows

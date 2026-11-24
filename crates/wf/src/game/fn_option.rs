@@ -61,6 +61,9 @@ pub enum Item {
     PadWeapon2,
     PadWeapon3,
     PadNames,
+    /// Back to the default keys and mouse buttons, and pad buttons.
+    ResetKeys,
+    ResetPad,
     Exit,
 }
 pub const ITEMS: usize = Item::Exit as usize + 1;
@@ -148,6 +151,8 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     button(Kind::Button, 7, "WEAPON 2        : "),
     button(Kind::Button, 8, "WEAPON 3        : "),
     formatted(settings::PAD_NAMES.len() as i16, "BUTTON NAMES    : "),
+    OptionItem { kind: Kind::Action, count: 0, column: 0, param: 0, text: "RESET TO DEFAULTS" },
+    OptionItem { kind: Kind::Action, count: 0, column: 0, param: 0, text: "RESET TO DEFAULTS" },
     OptionItem { kind: Kind::Action, count: 0, column: 0, param: 0, text: "EXIT" },
 ];
 /// The initial cursor widths (0x45da50's `width` fields).
@@ -171,10 +176,10 @@ const TABS: [(&str, &[Item]); 6] = {
         (
             "CONTROLS",
             &[
-                ShotKey, SlowKey, WeaponKey, PauseKey, MouseLeft, MouseMiddle, MouseRight, MouseSteering, TouchScale, TouchAim, Exit,
+                ShotKey, SlowKey, WeaponKey, PauseKey, MouseLeft, MouseMiddle, MouseRight, MouseSteering, TouchScale, TouchAim, ResetKeys, Exit,
             ],
         ),
-        ("PAD", &[PadShot1, PadShot2, PadShot3, PadSlow1, PadSlow2, PadSlow3, PadWeapon1, PadWeapon2, PadWeapon3, DeadZone, PadNames, Exit]),
+        ("PAD", &[PadShot1, PadShot2, PadShot3, PadSlow1, PadSlow2, PadSlow3, PadWeapon1, PadWeapon2, PadWeapon3, DeadZone, PadNames, ResetPad, Exit]),
         ("RECORDS", &[StageReplay, ScoreReset, Exit]),
     ]
 };
@@ -772,6 +777,20 @@ impl FnOption {
         s.display_dirty = true;
     }
 
+    /// The binding rows' texts, after a reset.
+    fn refresh_bindings(&mut self, cx: &mut Cx) {
+        for i in 0..ITEMS {
+            match OPTION_ITEMS[i].kind {
+                Kind::Button | Kind::Key => {
+                    cx.options.values[i] = trigger(cx, i);
+                    self.update_button_text(cx, i);
+                }
+                Kind::Formatted => self.update_choice_text(cx, i),
+                _ => {}
+            }
+        }
+    }
+
     /// Binds a pad slot, and keeps wf.ini's one button per trigger (the
     /// original's) at the action's first button where it has one.
     fn set_pad_slot(cx: &mut Cx, k: usize, slot: usize, button: Option<PadButton>) {
@@ -1125,8 +1144,28 @@ impl Stage for FnOption {
                 Self::play(cx, sounds::SWITCH);
             }
             Kind::Action => {
-                if pressed & (input::SHOT | input::SLOW | input::WEAPON_SELECT) != 0 && c == Item::Exit as usize {
-                    self.exit(cx);
+                if pressed & (input::SHOT | input::SLOW | input::WEAPON_SELECT) == 0 {
+                    return;
+                }
+                match c {
+                    x if x == Item::Exit as usize => self.exit(cx),
+                    x if x == Item::ResetKeys as usize => {
+                        cx.input.pads[0].key_map = input::TRIGGER_KEYS;
+                        cx.settings.reset_mouse();
+                        Self::load_port_values(cx);
+                        self.refresh_bindings(cx);
+                        Self::play(cx, sounds::SWITCH);
+                    }
+                    x if x == Item::ResetPad as usize => {
+                        cx.settings.reset_pad();
+                        let pad = &mut cx.input.pads[0];
+                        for &(t, _) in &settings::PAD_ACTIONS {
+                            pad.button_map[t as usize] = t;
+                        }
+                        self.refresh_bindings(cx);
+                        Self::play(cx, sounds::SWITCH);
+                    }
+                    _ => {}
                 }
             }
             Kind::Button | Kind::Key => {
@@ -1332,6 +1371,15 @@ mod tests {
         FnOption::set_pad_slot(&mut cx, 0, 0, Some(P::West));
         // wf.ini's trigger map follows the first button.
         assert_eq!(cx.input.pad(0).button_map[0], 2);
+        // RESET TO DEFAULTS.
+        let mut f = FnOption::new();
+        let pad = cx.options.tabs.iter().position(|(n, _)| *n == "PAD").unwrap();
+        cx.options.tab = pad;
+        cx.options.rows[pad] = cx.options.tabs[pad].1.iter().position(|&i| i == Item::ResetPad).unwrap();
+        cx.input.pads[0].set(input::SHOT);
+        f.update(&mut cx);
+        assert_eq!(cx.settings.pad, settings::default_pad());
+        assert_eq!(cx.input.pad(0).button_map[0], 0);
     }
 
     #[test]

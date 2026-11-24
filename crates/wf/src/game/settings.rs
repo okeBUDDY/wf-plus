@@ -256,6 +256,19 @@ impl Settings {
         PAD_NAMES[self.pad_names as usize].2.unwrap_or(detected)
     }
 
+    /// The default gamepad buttons (written to wf-plus.ini from now on).
+    pub fn reset_pad(&mut self) {
+        self.pad = default_pad();
+        self.pad_custom = true;
+        self.input_dirty = true;
+    }
+
+    /// The default mouse buttons.
+    pub fn reset_mouse(&mut self) {
+        self.mouse = MOUSE_DEFAULTS;
+        self.input_dirty = true;
+    }
+
     /// Binds `button` to slot `slot` of pad action `k` (None clears it); a
     /// button bound elsewhere leaves there.
     pub fn set_pad_slot(&mut self, k: usize, slot: usize, button: Option<PadButton>) {

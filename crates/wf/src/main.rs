@@ -385,16 +385,16 @@ impl wf_engine::app::Game for WfGame {
         if std::mem::take(&mut self.cx.settings.input_dirty) {
             self.cx.settings.apply_input(b);
         }
+        // A menu's gamepad buttons are fixed (the last frame's screen).
+        b.menu = self.cx.draw.menu;
         let pad = &self.cx.input.pads[0];
         let maps = (pad.key_map, pad.button_map);
         if self.synced == Some(maps) {
             return;
         }
+        // The gamepad's buttons are the settings' (apply_input).
         for i in 0..8 {
             b.set_trigger_key(i as u8, maps.0[i]);
-            if let Some(&button) = platform::PadButton::TRIGGERS.get(maps.1[i] as usize) {
-                b.set_trigger_button(i as u8, button);
-            }
         }
         self.synced = Some(maps);
     }
@@ -910,7 +910,7 @@ fn run_windowed(o: &Options) -> Result<(), String> {
             (platform, display)
         }
     };
-    wf_engine::app::apply_window_mode(&mut platform, display_cfg.mode);
+    wf_engine::app::apply_window_mode(&mut platform, &display_cfg);
     display.renderer.set_sprite_cache(game.cx.settings.sprite_cache);
     display.renderer.analytic_shapes = game.cx.settings.analytic_shapes;
     game.cx.art.register_line_shapes(&mut display.renderer);

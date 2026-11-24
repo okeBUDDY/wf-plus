@@ -89,7 +89,8 @@ impl Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMode {
     Windowed,
-    /// Exclusive fullscreen at the desktop mode.
+    /// Exclusive fullscreen, at the desktop mode or a mode the player
+    /// picked (`DisplayConfig::fullscreen_size`).
     Fullscreen,
     /// A borderless window covering the display.
     Borderless,
@@ -98,9 +99,13 @@ pub enum WindowMode {
 /// The display settings (section `display`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayConfig {
+    /// The window's size, windowed.
     pub width: u32,
     pub height: u32,
     pub mode: WindowMode,
+    /// The display mode of exclusive fullscreen, in pixels; None: the
+    /// desktop's.
+    pub fullscreen_size: Option<(u32, u32)>,
     pub fps_cap: FpsCap,
     /// Render target pixels per window pixel (1 = native, DPI-aware).
     pub render_scale: f32,
@@ -114,7 +119,7 @@ impl Default for DisplayConfig {
         let (mode, fps_cap) = (WindowMode::Fullscreen, FpsCap::VSync);
         #[cfg(not(target_os = "android"))]
         let (mode, fps_cap) = (WindowMode::Windowed, FpsCap::Off);
-        DisplayConfig { width: 1280, height: 720, mode, fps_cap, render_scale: 1.0, show_fps: false }
+        DisplayConfig { width: 1280, height: 720, mode, fullscreen_size: None, fps_cap, render_scale: 1.0, show_fps: false }
     }
 }
 
@@ -128,6 +133,10 @@ impl DisplayConfig {
                 Some(m) if m == "fullscreen" => WindowMode::Fullscreen,
                 Some(m) if m == "borderless" => WindowMode::Borderless,
                 _ => WindowMode::Windowed,
+            },
+            fullscreen_size: match (c.get_or("display.fullscreen_width", 0u32), c.get_or("display.fullscreen_height", 0u32)) {
+                (w, h) if w >= 64 && h >= 64 => Some((w, h)),
+                _ => None,
             },
             fps_cap: c.get("display.fps_cap").and_then(FpsCap::parse).unwrap_or(d.fps_cap),
             render_scale: c.get_or("display.render_scale", d.render_scale).clamp(0.25, 4.0),
@@ -146,6 +155,9 @@ impl DisplayConfig {
                 WindowMode::Borderless => "borderless",
             },
         );
+        let (fw, fh) = self.fullscreen_size.unwrap_or((0, 0));
+        c.set("display.fullscreen_width", fw);
+        c.set("display.fullscreen_height", fh);
         c.set(
             "display.fps_cap",
             match self.fps_cap {

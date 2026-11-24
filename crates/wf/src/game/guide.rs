@@ -10,10 +10,9 @@
 //! (the rotating bands) from running under the text.
 
 use super::Cx;
-use super::fn_option::PAD_NAMES;
 use super::input::TRIGGER_KEYS;
 use crate::gfx::{Argb, Blend, Pass, Primitive, Transform};
-use wf_engine::platform::Device;
+use wf_engine::platform::{Device, PadButton};
 
 /// The strip's height (logical units).
 pub const STRIP: f32 = 20.0;
@@ -27,6 +26,9 @@ pub enum Guide {
     Paused,
     Skip,
     NameEntry,
+    /// The game's controls, at the start of a game played on a gamepad
+    /// (shown whatever the policy but Off).
+    Play,
 }
 
 /// When the guide shows (wf-plus.ini `ui.input_guide`).
@@ -59,7 +61,7 @@ impl Policy {
 }
 
 /// The device the guide speaks of.
-fn device(cx: &Cx) -> Device {
+pub fn device(cx: &Cx) -> Device {
     cx.settings.guide_device.unwrap_or(cx.ui.device)
 }
 
@@ -80,18 +82,44 @@ pub fn menu_strip(cx: &Cx) -> f32 {
 
 /// How far the HUD lifts its bottom bands and texts in a game.
 pub fn lift(cx: &Cx) -> f32 {
-    if !cx.draw.menu && cx.guide.is_some() && shown(cx) { STRIP } else { 0.0 }
+    if !cx.draw.menu && cx.guide.is_some_and(|g| visible(cx, g)) { STRIP } else { 0.0 }
 }
 
-/// The name of trigger `i`'s key or button.
+/// Whether guide `g` shows now: as the policy says, and the game's
+/// legend on a gamepad unless the guide is off.
+fn visible(cx: &Cx, g: Guide) -> bool {
+    shown(cx) || (g == Guide::Play && cx.settings.input_guide != Policy::Off)
+}
+
+/// The name of trigger `i`'s key or button: on a gamepad the menus'
+/// fixed buttons, in a game the action's first button, and START for
+/// the pause.
 fn trigger(cx: &Cx, pad: bool, i: usize) -> String {
     let p = cx.input.pad(0);
     if pad {
-        PAD_NAMES.get(p.button_map[i] as usize).unwrap_or(&"?").to_string()
+        let style = cx.settings.pad_style(cx.input.raw.pad_style);
+        let menu = wf_engine::input::MENU_PAD.iter().find(|(_, a)| *a == wf_engine::input::Action::Trigger(i as u8));
+        let button = match menu {
+            Some(&(b, _)) if cx.draw.menu => Some(b),
+            _ if i == 7 => Some(PadButton::Start),
+            _ => super::settings::PAD_ACTIONS
+                .iter()
+                .position(|&(t, _)| t as usize == i)
+                .and_then(|k| cx.settings.pad[k].iter().flatten().next().copied()),
+        };
+        button.map_or("-".into(), |b| b.label(style).to_string())
     } else {
         let k = TRIGGER_KEYS.iter().position(|&k| k == p.key_map[i]).unwrap_or(0);
         (b"ZXSDAWEF"[k] as char).to_string()
     }
+}
+
+/// The names of the gamepad buttons of trigger `i` in a game.
+fn pad_buttons(cx: &Cx, i: usize) -> Vec<&'static str> {
+    let style = cx.settings.pad_style(cx.input.raw.pad_style);
+    let k = super::settings::PAD_ACTIONS.iter().position(|&(t, _)| t as usize == i);
+    let names: Vec<&'static str> = k.map(|k| cx.settings.pad[k].iter().flatten().map(|b| b.label(style)).collect()).unwrap_or_default();
+    if names.is_empty() { vec!["-"] } else { names }
 }
 
 /// The guide's text.
@@ -110,6 +138,10 @@ pub fn text(cx: &Cx, guide: Guide) -> String {
         (Guide::ArenaSelect, _) => format!("UP/DOWN: ARENA   {shot}: START   {slow}: BACK"),
         (Guide::Options, Device::Touch) => "TAP: SELECT/CHANGE   BACK: TITLE".into(),
         (Guide::Options, Device::Mouse) => "CLICK: SELECT/CHANGE   RIGHT CLICK: BACK A STEP   WHEEL: CHANGE".into(),
+        (Guide::Options, Device::Gamepad) if super::fn_option::FnOption::on_pad_slot(cx) => {
+            let style = cx.settings.pad_style(cx.input.raw.pad_style);
+            format!("PRESS A BUTTON: BIND   {}: CLEAR   {}: BACK", PadButton::Back.label(style), PadButton::Start.label(style))
+        }
         (Guide::Options, Device::Gamepad) => format!("D-PAD: SELECT/CHANGE   {slow}: BACK"),
         (Guide::Options, _) => format!("UP/DOWN: SELECT   LEFT/RIGHT: CHANGE   {slow}: BACK"),
         (Guide::Paused, Device::Touch) => "PAUSED   TAP: RESUME".into(),
@@ -122,6 +154,12 @@ pub fn text(cx: &Cx, guide: Guide) -> String {
         (Guide::NameEntry, Device::Mouse) => "WHEEL OR CLICK: LETTER   RIGHT CLICK: DELETE".into(),
         (Guide::NameEntry, Device::Gamepad) => format!("D-PAD: LETTER   {shot}: ENTER   {slow}: DELETE"),
         (Guide::NameEntry, _) => format!("ARROWS: LETTER   {shot}: ENTER   {slow}: DELETE"),
+        (Guide::Play, _) => {
+            let all = |i: usize| pad_buttons(cx, i).join("/");
+            let start = PadButton::Start.label(cx.settings.pad_style(cx.input.raw.pad_style));
+            let back = if cx.input.time_stop_mask != 0 { "PAUSE" } else { "TITLE" };
+            format!("SHOT: {}   SLOW: {}   WEAPON: {}   {start}: {back}", all(0), all(1), all(3))
+        }
     }
 }
 
@@ -189,7 +227,7 @@ pub fn draw(cx: &mut Cx) {
         cx.draw.set_pass(Pass::Arena);
     }
     let fps = (cx.settings.display.show_fps || cx.settings.perf_overlay).then(|| fps_text(&cx.settings));
-    let guide = cx.guide.filter(|_| shown(cx)).map(|g| text(cx, g));
+    let guide = cx.guide.filter(|&g| visible(cx, g)).map(|g| text(cx, g));
     if fps.is_none() && guide.is_none() {
         return;
     }

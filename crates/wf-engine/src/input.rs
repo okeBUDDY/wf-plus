@@ -104,7 +104,27 @@ pub struct Bindings {
     pub touch: bool,
     /// Touch drag speed (1 = the finger's own travel).
     pub touch_scale: f32,
+    /// A menu is up: the gamepad's triggers are `MENU_PAD`'s, whatever
+    /// the game binds (menu buttons are not remapped).
+    pub menu: bool,
 }
+
+/// The gamepad's triggers in a menu: A confirms, B cancels.
+pub const MENU_PAD: [(PadButton, Action); 2] = [(PadButton::South, Action::CONFIRM), (PadButton::East, Action::CANCEL)];
+
+/// The gamepad's default buttons of each action: SHOT on A and the right
+/// shoulder and trigger, SLOW MOVE on B, WEAPON on Y and the left
+/// shoulder and trigger, PAUSE on START (fixed).
+pub const DEFAULT_PAD: [(PadButton, Action); 8] = [
+    (PadButton::South, Action::SHOT),
+    (PadButton::RightShoulder, Action::SHOT),
+    (PadButton::RightTrigger, Action::SHOT),
+    (PadButton::East, Action::SLOW),
+    (PadButton::North, Action::WEAPON),
+    (PadButton::LeftShoulder, Action::WEAPON),
+    (PadButton::LeftTrigger, Action::WEAPON),
+    (PadButton::Start, Action::PAUSE),
+];
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -127,10 +147,10 @@ impl Default for Bindings {
             (Source::Mouse(1), A::WEAPON),
             (Source::Touch, A::SHOT),
         ];
-        // The original's default trigger maps: ZXSDAWEF and pad buttons 1-8.
+        // The original's default trigger keys: ZXSDAWEF.
         binds.extend(DEFAULT_TRIGGER_KEYS.iter().enumerate().map(|(i, &k)| (Source::Key(k), A::Trigger(i as u8))));
-        binds.extend(PadButton::TRIGGERS[..8].iter().enumerate().map(|(i, &b)| (Source::Pad(b), A::Trigger(i as u8))));
-        Bindings { binds, dead_zone: 0.35, mouse_steering: true, touch: true, touch_scale: 1.0 }
+        binds.extend(DEFAULT_PAD.iter().map(|&(b, a)| (Source::Pad(b), a)));
+        Bindings { binds, dead_zone: 0.35, mouse_steering: true, touch: true, touch_scale: 1.0, menu: false }
     }
 }
 
@@ -164,10 +184,10 @@ impl Bindings {
         self.binds.push((Source::Key(key), Action::Trigger(n)));
     }
 
-    /// Rebinds trigger `n`'s gamepad button.
-    pub fn set_trigger_button(&mut self, n: u8, button: PadButton) {
+    /// Rebinds trigger `n`'s gamepad buttons.
+    pub fn set_trigger_buttons(&mut self, n: u8, buttons: &[PadButton]) {
         self.binds.retain(|(s, a)| !(matches!(s, Source::Pad(_)) && *a == Action::Trigger(n)));
-        self.binds.push((Source::Pad(button), Action::Trigger(n)));
+        self.binds.extend(buttons.iter().map(|&b| (Source::Pad(b), Action::Trigger(n))));
     }
 }
 
@@ -242,7 +262,10 @@ impl InputSystem {
             Source::Touch => self.bindings.touch && !raw.fingers.is_empty(),
         };
         let (mut touch, mut other) = (0, 0);
-        for (src, action) in &self.bindings.binds {
+        let menu_pad = MENU_PAD.iter().map(|&(b, a)| (Source::Pad(b), a));
+        let binds = self.bindings.binds.iter().copied().filter(|(s, a)| !(self.bindings.menu && matches!(s, Source::Pad(_)) && matches!(a, Action::Trigger(_))));
+        let binds: Vec<(Source, Action)> = if self.bindings.menu { binds.chain(menu_pad).collect() } else { binds.collect() };
+        for (src, action) in &binds {
             if source_held(src) {
                 if *src == Source::Touch {
                     touch |= action.bit();
@@ -338,6 +361,22 @@ mod tests {
         assert!(sys.update(&raw, &layout()).held(Action::SHOT));
         let raw = RawInput { mouse: MouseState { buttons: 1, ..Default::default() }, ..Default::default() };
         assert!(sys.update(&raw, &layout()).held(Action::SHOT));
+    }
+
+    #[test]
+    fn a_menu_has_fixed_gamepad_buttons() {
+        let pad = |b: PadButton| RawInput { gamepads: vec![GamepadState { buttons: 1 << b as u32, ..Default::default() }], ..Default::default() };
+        let mut sys = InputSystem::default();
+        // In play: the right trigger fires, and fire can be rebound.
+        assert!(sys.update(&pad(PadButton::RightTrigger), &layout()).held(Action::SHOT));
+        sys.bindings.set_trigger_buttons(0, &[PadButton::West]);
+        assert!(!sys.update(&pad(PadButton::South), &layout()).held(Action::SHOT));
+        assert!(sys.update(&pad(PadButton::West), &layout()).held(Action::SHOT));
+        // In a menu A confirms and B cancels, whatever the game binds.
+        sys.bindings.menu = true;
+        assert!(sys.update(&pad(PadButton::South), &layout()).held(Action::CONFIRM));
+        assert!(!sys.update(&pad(PadButton::West), &layout()).held(Action::SHOT));
+        assert!(sys.update(&pad(PadButton::East), &layout()).held(Action::CANCEL));
     }
 
     #[test]

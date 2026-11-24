@@ -28,14 +28,11 @@ pub enum Item {
     TimerMode,
     Ships,
     Extend,
-    ShotButton,
-    SlowButton,
-    WeaponButton,
     Pause,
-    PauseButton,
     // The port's own (wf-plus.ini).
     DefaultArena,
     WindowMode,
+    AspectRatio,
     Resolution,
     RenderScale,
     FpsCap,
@@ -52,6 +49,18 @@ pub enum Item {
     DeadZone,
     TouchScale,
     TouchAim,
+    // The gamepad's buttons of each action (settings::PAD_ACTIONS), three
+    // slots each.
+    PadShot1,
+    PadShot2,
+    PadShot3,
+    PadSlow1,
+    PadSlow2,
+    PadSlow3,
+    PadWeapon1,
+    PadWeapon2,
+    PadWeapon3,
+    PadNames,
     Exit,
 }
 pub const ITEMS: usize = Item::Exit as usize + 1;
@@ -65,7 +74,8 @@ enum Kind {
     Choice,
     Formatted,
     Action,
-    /// A gamepad button to remap (param: the trigger).
+    /// A gamepad button slot to remap (param: action * PAD_SLOTS + slot;
+    /// value: the button's index in `PadButton::BINDABLE` + 1, 0 none).
     Button,
     /// A keyboard key to remap (param: the trigger).
     Key,
@@ -104,14 +114,12 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(2, "TIMER MODE      : "),
     formatted(10, "NUMBER OF SHIPS : "),
     formatted(3, "SHIP EXTEND     : "),
-    button(Kind::Button, 0, "SHOT      (PAD) : "),
-    button(Kind::Button, 1, "SLOW MOVE (PAD) : "),
-    button(Kind::Button, 3, "WEAPON    (PAD) : "),
     choice(2, 72, "GAME PAUSE      : DISABLE  ENABLE"),
-    button(Kind::Button, 7, "PAUSE     (PAD) : "),
     formatted(2, "DEFAULT ARENA   : "),
     formatted(3, "WINDOW MODE     : "),
-    formatted(settings::RESOLUTIONS.len() as i16, "RESOLUTION      : "),
+    // The display's ratios and sizes (OptionState::aspects, sizes).
+    formatted(1, "ASPECT RATIO    : "),
+    formatted(1, "RESOLUTION      : "),
     formatted(settings::RENDER_SCALES.len() as i16, "RENDER SCALE    : "),
     // The presets, MAX (the display's refresh rate), CUSTOM.
     formatted(FpsCap::PRESETS.len() as i16 + 2, "FPS CAP         : "),
@@ -129,6 +137,17 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(settings::DEAD_ZONES.len() as i16, "PAD DEADZONE    : "),
     formatted(settings::TOUCH_SCALES.len() as i16, "TOUCH SPEED     : "),
     formatted(settings::TOUCH_AIMS.len() as i16, "TOUCH AIM       : "),
+    // param: action * PAD_SLOTS + slot.
+    button(Kind::Button, 0, "SHOT 1          : "),
+    button(Kind::Button, 1, "SHOT 2          : "),
+    button(Kind::Button, 2, "SHOT 3          : "),
+    button(Kind::Button, 3, "SLOW MOVE 1     : "),
+    button(Kind::Button, 4, "SLOW MOVE 2     : "),
+    button(Kind::Button, 5, "SLOW MOVE 3     : "),
+    button(Kind::Button, 6, "WEAPON 1        : "),
+    button(Kind::Button, 7, "WEAPON 2        : "),
+    button(Kind::Button, 8, "WEAPON 3        : "),
+    formatted(settings::PAD_NAMES.len() as i16, "BUTTON NAMES    : "),
     OptionItem { kind: Kind::Action, count: 0, column: 0, param: 0, text: "EXIT" },
 ];
 /// The initial cursor widths (0x45da50's `width` fields).
@@ -143,19 +162,19 @@ const WIDTHS: [i16; ITEMS] = {
 };
 
 /// The tabs and their items, top to bottom (EXIT ends each).
-const TABS: [(&str, &[Item]); 5] = {
+const TABS: [(&str, &[Item]); 6] = {
     use Item::*;
     [
         ("GAME", &[GameMode, StartTime, TimerMode, Ships, Extend, Pause, DefaultArena, Exit]),
-        ("DISPLAY", &[WindowMode, Resolution, RenderScale, FpsCap, ShowFps, HideNames, BossName, Exit]),
+        ("DISPLAY", &[WindowMode, AspectRatio, Resolution, RenderScale, FpsCap, ShowFps, HideNames, BossName, Exit]),
         ("AUDIO", &[BgmVolume, SeVolume, BgmMode, Exit]),
         (
             "CONTROLS",
             &[
-                ShotKey, SlowKey, WeaponKey, PauseKey, ShotButton, SlowButton, WeaponButton, PauseButton, MouseLeft, MouseMiddle,
-                MouseRight, MouseSteering, DeadZone, TouchScale, TouchAim, Exit,
+                ShotKey, SlowKey, WeaponKey, PauseKey, MouseLeft, MouseMiddle, MouseRight, MouseSteering, TouchScale, TouchAim, Exit,
             ],
         ),
+        ("PAD", &[PadShot1, PadShot2, PadShot3, PadSlow1, PadSlow2, PadSlow3, PadWeapon1, PadWeapon2, PadWeapon3, DeadZone, PadNames, Exit]),
         ("RECORDS", &[StageReplay, ScoreReset, Exit]),
     ]
 };
@@ -168,7 +187,7 @@ const TAB_GAP: f32 = 16.0;
 fn supported(item: Item, caps: &Capabilities) -> bool {
     match item {
         Item::WindowMode => caps.window_mode,
-        Item::Resolution => caps.window_size,
+        Item::AspectRatio | Item::Resolution => caps.window_size,
         _ => true,
     }
 }
@@ -181,8 +200,6 @@ fn build_tabs(caps: &Capabilities) -> Vec<(&'static str, Vec<Item>)> {
         .filter(|(_, items)| items.len() > 1)
         .collect()
 }
-/// The gamepad buttons' names, by `PadButton::TRIGGERS` index.
-pub const PAD_NAMES: [&str; 10] = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START", "LS", "RS"];
 
 /// Seconds of each START TIME, 0: none (0x45da00).
 const START_TIMES: [i16; 10] = [0, 10, 30, 60, 120, 180, 240, 300, 600, 999];
@@ -211,7 +228,13 @@ pub struct OptionState {
     /// The tab shown, and the cursor row of each tab (kept while the game
     /// runs).
     tab: usize,
-    rows: [usize; 5],
+    rows: [usize; 6],
+    /// ASPECT RATIO's choices: the ratios of the display's sizes (and of
+    /// the window's size, if it is none of them), narrowest first.
+    aspects: Vec<(u32, u32)>,
+    /// RESOLUTION's choices: the display's sizes of the chosen ratio (and
+    /// the window's size), smallest first.
+    sizes: Vec<(u32, u32)>,
 }
 
 impl Default for OptionState {
@@ -229,11 +252,35 @@ impl Default for OptionState {
             tabs,
             tab: 0,
             rows,
+            aspects: Vec::new(),
+            sizes: Vec::new(),
         }
     }
 }
 
 impl OptionState {
+    /// How many values `item` has: the display's for ASPECT RATIO and
+    /// RESOLUTION.
+    fn count(&self, item: usize) -> i16 {
+        match item {
+            x if x == Item::AspectRatio as usize => self.aspects.len().max(1) as i16,
+            x if x == Item::Resolution as usize => self.sizes.len().max(1) as i16,
+            _ => OPTION_ITEMS[item].count,
+        }
+    }
+
+    /// Lists the display's ratios and the sizes of the window's ratio
+    /// (`size`), and points ASPECT RATIO and RESOLUTION at it.
+    fn list_sizes(&mut self, size: (u32, u32)) {
+        let mut all = settings::resolutions();
+        all.push(size);
+        let ratio = settings::aspect(size.0, size.1);
+        self.aspects = settings::aspects(&all);
+        self.sizes = settings::sizes_of(&all, ratio);
+        self.values[Item::AspectRatio as usize] = self.aspects.iter().position(|&r| r == ratio).unwrap_or(0) as i16;
+        self.values[Item::Resolution as usize] = self.sizes.iter().position(|&r| r == size).unwrap_or(0) as i16;
+    }
+
     /// SetPreset (0x41c8a0).
     fn set_preset(&mut self, preset: usize) {
         let rules = self.presets[preset];
@@ -245,23 +292,21 @@ impl OptionState {
     }
 }
 
-/// The device code a remap item shows: the trigger's key (Key items) or
-/// `PAD_CODE | button` (Button items).
+/// What a remap item shows: the trigger's key (Key items) or the slot's
+/// button (Button items, see `Kind::Button`).
 fn trigger(cx: &Cx, item: usize) -> i16 {
     let t = OPTION_ITEMS[item].param as usize;
-    let pad = cx.input.pad(0);
     match OPTION_ITEMS[item].kind {
-        Kind::Button => (input::PAD_CODE | pad.button_map[t] as i32) as i16,
-        _ => pad.trigger(t) as i16,
+        Kind::Button => {
+            let b = cx.settings.pad[t / settings::PAD_SLOTS][t % settings::PAD_SLOTS];
+            b.and_then(|b| PadButton::BINDABLE.iter().position(|&x| x == b)).map_or(0, |i| i as i16 + 1)
+        }
+        _ => cx.input.pad(0).trigger(t) as i16,
     }
 }
 
-/// The remap items.
-const REMAPS: [Item; 8] = [
-    Item::ShotButton,
-    Item::SlowButton,
-    Item::WeaponButton,
-    Item::PauseButton,
+/// The keyboard remap items.
+const REMAPS: [Item; 4] = [
     Item::ShotKey,
     Item::SlowKey,
     Item::WeaponKey,
@@ -363,6 +408,21 @@ pub fn load_settings(cx: &mut Cx) {
     let keys = p.get_string("Keyboard", "");
     let buttons = p.get_string("Gamepad", "");
     cx.input.pads[0].set_trigger_maps(&keys, &buttons);
+    // Without the port's pad slots, a button wf.ini changed (an earlier
+    // version's options, or the original's) replaces that action's
+    // defaults.
+    if !cx.settings.pad_custom {
+        for (k, &(t, _)) in settings::PAD_ACTIONS.iter().enumerate() {
+            let i = cx.input.pad(0).button_map[t as usize];
+            if i != t
+                && let Some(&b) = PadButton::TRIGGERS.get(i as usize)
+                && PadButton::BINDABLE.contains(&b)
+            {
+                cx.settings.pad[k] = [Some(b), None, None];
+                cx.settings.input_dirty = true;
+            }
+        }
+    }
     let o = &mut cx.options;
     o.values[Item::ScoreReset as usize] = 0;
     o.values[Item::Exit as usize] = 0;
@@ -417,6 +477,8 @@ pub struct FnOption {
     /// next tab).
     slide: i16,
     slide_dir: f32,
+    /// The gamepad family the pad rows name their buttons for.
+    pad_style: wf_engine::platform::PadStyle,
 }
 
 const FLAG_EXIT: u32 = 0x1;
@@ -429,7 +491,15 @@ const ROW_H: f32 = 16.0;
 
 impl FnOption {
     pub fn new() -> Self {
-        FnOption { flags: 0, blink: 0, items: vec![Vec::new(); ITEMS], background: None, slide: 0, slide_dir: 1.0 }
+        FnOption {
+            flags: 0,
+            blink: 0,
+            items: vec![Vec::new(); ITEMS],
+            background: None,
+            slide: 0,
+            slide_dir: 1.0,
+            pad_style: Default::default(),
+        }
     }
 
     fn tab_items(cx: &Cx) -> Vec<Item> {
@@ -453,7 +523,17 @@ impl FnOption {
 
     /// Each tab's left edge on the strip.
     fn tab_x(cx: &Cx, tab: usize) -> f32 {
-        TAB_X0 + cx.options.tabs[..tab].iter().map(|(n, _)| n.len() as f32 * 8.0 + TAB_GAP).sum::<f32>()
+        let gap = Self::tab_gap(cx);
+        TAB_X0 + cx.options.tabs[..tab].iter().map(|(n, _)| n.len() as f32 * 8.0 + gap).sum::<f32>()
+    }
+
+    /// The gap between the tabs: `TAB_GAP`, less if the strip would pass
+    /// the screen's right edge.
+    fn tab_gap(cx: &Cx) -> f32 {
+        let tabs = &cx.options.tabs;
+        let text: f32 = tabs.iter().map(|(n, _)| n.len() as f32 * 8.0).sum();
+        let gaps = tabs.len().saturating_sub(1).max(1) as f32;
+        TAB_GAP.min(((640.0 - 4.0 - TAB_X0 - text) / gaps).floor()).max(8.0)
     }
 
     /// The item under the cursor.
@@ -461,12 +541,19 @@ impl FnOption {
         Self::tab_items(cx)[cx.options.rows[cx.options.tab]] as usize
     }
 
+    /// The cursor is on a gamepad button slot (for the guide).
+    pub fn on_pad_slot(cx: &Cx) -> bool {
+        !cx.options.tabs.is_empty() && OPTION_ITEMS[Self::current(cx)].kind == Kind::Button
+    }
+
     /// UpdateButtonText (0x41d340), for keys and gamepad buttons.
     fn update_button_text(&mut self, cx: &Cx, item: usize) {
         let code = cx.options.values[item] as i32;
-        let name = if code & input::PAD_CODE != 0 {
-            let b = (code & 0x7f) as usize;
-            format!("BUTTON {} ({})", b + 1, PAD_NAMES.get(b).unwrap_or(&"?"))
+        let name = if OPTION_ITEMS[item].kind == Kind::Button {
+            match code.checked_sub(1).and_then(|i| PadButton::BINDABLE.get(i as usize)) {
+                Some(b) => b.label(cx.settings.pad_style(cx.input.raw.pad_style)).into(),
+                None => "NONE".into(),
+            }
         } else {
             let n = Pad::name(code);
             format!("KEY {}", n[0] as char)
@@ -490,12 +577,20 @@ impl FnOption {
             x if x == Item::Extend as usize => EXTEND_NAMES[v].into(),
             x if x == Item::DefaultArena as usize => ["CLASSIC", "HD"][v].into(),
             x if x == Item::WindowMode as usize => settings::WINDOW_MODES[v].0.into(),
+            x if x == Item::AspectRatio as usize && Self::resolution_locked(cx) => match wf_engine::platform::display_size() {
+                Some((w, h)) => settings::aspect_name(settings::aspect(w, h)),
+                None => "DISPLAY".into(),
+            },
+            x if x == Item::AspectRatio as usize => {
+                let (w, h) = Self::chosen_size(cx);
+                settings::aspect_name(cx.options.aspects.get(v).copied().unwrap_or(settings::aspect(w, h)))
+            }
             x if x == Item::Resolution as usize && Self::resolution_locked(cx) => match wf_engine::platform::display_size() {
                 Some((w, h)) => format!("{w}X{h}"),
                 None => "DISPLAY".into(),
             },
             x if x == Item::Resolution as usize => {
-                let (w, h) = settings::RESOLUTIONS.get(v).copied().unwrap_or((s.display.width, s.display.height));
+                let (w, h) = cx.options.sizes.get(v).copied().unwrap_or(Self::chosen_size(cx));
                 format!("{w}X{h}")
             }
             x if x == Item::RenderScale as usize => format!("{}%", (settings::RENDER_SCALES[v] * 100.0) as i32),
@@ -513,6 +608,7 @@ impl FnOption {
             x if x == Item::DeadZone as usize => format!("{}%", (settings::DEAD_ZONES[v] * 100.0).round() as i32),
             x if x == Item::TouchScale as usize => format!("{}X", settings::TOUCH_SCALES[v]),
             x if x == Item::TouchAim as usize => settings::TOUCH_AIMS[v].0.into(),
+            x if x == Item::PadNames as usize => settings::PAD_NAMES[v].0.into(),
             _ => String::new(),
         }
     }
@@ -522,7 +618,7 @@ impl FnOption {
         let value = cx.options.values[item];
         let name = Self::value_name(cx, item, value);
         let (left, right) = if cx.options.enabled[item] {
-            (if value != 0 { "< " } else { "  " }, if value < OPTION_ITEMS[item].count - 1 { " >" } else { "" })
+            (if value != 0 { "< " } else { "  " }, if value < cx.options.count(item) - 1 { " >" } else { "" })
         } else {
             ("  ", "")
         };
@@ -530,19 +626,42 @@ impl FnOption {
         cx.options.widths[item] = (name.len() * 8) as i16;
     }
 
-    /// Borderless and fullscreen windows take the display's resolution
-    /// (fullscreen switches to the desktop's mode), so RESOLUTION, the
-    /// windowed size, is locked to it and shows it.
+    /// A borderless window takes the display's resolution, so ASPECT
+    /// RATIO and RESOLUTION are locked to it and show it.
     fn resolution_locked(cx: &Cx) -> bool {
-        cx.settings.display.mode != wf_engine::config::WindowMode::Windowed
+        cx.settings.display.mode == wf_engine::config::WindowMode::Borderless
     }
 
-    /// RESOLUTION follows the window mode: locked to the display's size
-    /// outside a window.
+    /// The size ASPECT RATIO and RESOLUTION choose: the window's, or in
+    /// fullscreen the display mode's (the desktop's until one is picked).
+    fn chosen_size(cx: &Cx) -> (u32, u32) {
+        let d = &cx.settings.display;
+        match d.mode {
+            wf_engine::config::WindowMode::Fullscreen => {
+                d.fullscreen_size.or_else(wf_engine::platform::display_size).unwrap_or((d.width, d.height))
+            }
+            _ => (d.width, d.height),
+        }
+    }
+
+    fn set_chosen_size(cx: &mut Cx, size: (u32, u32)) {
+        let d = &mut cx.settings.display;
+        match d.mode {
+            wf_engine::config::WindowMode::Fullscreen => d.fullscreen_size = Some(size),
+            _ => (d.width, d.height) = size,
+        }
+    }
+
+    /// ASPECT RATIO and RESOLUTION follow the window mode: the window's
+    /// size or the fullscreen mode, locked to the display's when
+    /// borderless.
     fn sync_resolution(&mut self, cx: &mut Cx) {
-        let item = Item::Resolution as usize;
-        cx.options.enabled[item] = !Self::resolution_locked(cx);
-        self.update_choice_text(cx, item);
+        let size = Self::chosen_size(cx);
+        cx.options.list_sizes(size);
+        for item in [Item::AspectRatio as usize, Item::Resolution as usize] {
+            cx.options.enabled[item] = !Self::resolution_locked(cx);
+            self.update_choice_text(cx, item);
+        }
     }
 
     /// The port's items' values, from the settings.
@@ -551,7 +670,6 @@ impl FnOption {
         let v = [
             (Item::DefaultArena, (cx.arena_choice == super::arena::Mode::Hd) as usize),
             (Item::WindowMode, s.window_mode_index()),
-            (Item::Resolution, s.resolution_index()),
             (Item::RenderScale, settings::nearest(&settings::RENDER_SCALES, s.display.render_scale)),
             (Item::FpsCap, s.fps_index()),
             (Item::ShowFps, if s.perf_overlay { 2 } else { s.display.show_fps as usize }),
@@ -563,10 +681,13 @@ impl FnOption {
             (Item::DeadZone, settings::nearest(&settings::DEAD_ZONES, s.dead_zone)),
             (Item::TouchScale, settings::nearest(&settings::TOUCH_SCALES, s.touch_scale)),
             (Item::TouchAim, s.touch_aim as usize),
+            (Item::PadNames, s.pad_names as usize),
         ];
         for (item, value) in v {
             cx.options.values[item as usize] = value as i16;
         }
+        let size = Self::chosen_size(cx);
+        cx.options.list_sizes(size);
     }
 
     /// A port item changed: the settings follow at once (the display and
@@ -579,11 +700,34 @@ impl FnOption {
                 cx.arena_choice = if v == 1 { super::arena::Mode::Hd } else { super::arena::Mode::Classic };
                 return;
             }
-            x if x == Item::WindowMode as usize => s.display.mode = settings::WINDOW_MODES[v].1,
-            x if x == Item::Resolution as usize => {
-                if let Some(&(w, h)) = settings::RESOLUTIONS.get(v) {
-                    (s.display.width, s.display.height) = (w, h);
+            x if x == Item::WindowMode as usize => {
+                s.display.mode = settings::WINDOW_MODES[v].1;
+                // Into fullscreen at the display's current mode, whatever
+                // was picked before (RESOLUTION can change it after).
+                if s.display.mode == wf_engine::config::WindowMode::Fullscreen {
+                    s.display.fullscreen_size = None;
                 }
+            }
+            // Another ratio: its size nearest the window's in area.
+            x if x == Item::AspectRatio as usize => {
+                let Some(&ratio) = cx.options.aspects.get(v) else { return };
+                let area = |(w, h): (u32, u32)| w as f64 * h as f64;
+                let now = area(Self::chosen_size(cx));
+                let all = settings::resolutions();
+                let sizes = settings::sizes_of(&all, ratio);
+                let Some(&size) = sizes.iter().min_by(|&&a, &&b| (area(a) / now).ln().abs().total_cmp(&(area(b) / now).ln().abs())) else {
+                    return;
+                };
+                Self::set_chosen_size(cx, size);
+                cx.options.list_sizes(size);
+                cx.settings.display_dirty = true;
+                return;
+            }
+            x if x == Item::Resolution as usize => {
+                let Some(&size) = cx.options.sizes.get(v) else { return };
+                Self::set_chosen_size(cx, size);
+                cx.settings.display_dirty = true;
+                return;
             }
             x if x == Item::RenderScale as usize => s.display.render_scale = settings::RENDER_SCALES[v],
             x if x == Item::FpsCap as usize => s.set_fps_index(v),
@@ -619,9 +763,25 @@ impl FnOption {
                 s.touch_aim = v as u8;
                 return;
             }
+            x if x == Item::PadNames as usize => {
+                s.pad_names = v as u8;
+                return;
+            }
             _ => return,
         }
         s.display_dirty = true;
+    }
+
+    /// Binds a pad slot, and keeps wf.ini's one button per trigger (the
+    /// original's) at the action's first button where it has one.
+    fn set_pad_slot(cx: &mut Cx, k: usize, slot: usize, button: Option<PadButton>) {
+        cx.settings.set_pad_slot(k, slot, button);
+        let t = settings::PAD_ACTIONS[k].0 as usize;
+        if let Some(first) = cx.settings.pad[k].iter().flatten().next()
+            && let Some(i) = PadButton::TRIGGERS.iter().position(|b| b == first)
+        {
+            cx.input.pads[0].button_map[t] = i as u8;
+        }
     }
 
     fn play(cx: &mut Cx, id: usize) {
@@ -714,8 +874,9 @@ impl FnOption {
             self.switch_tab(cx, to, dir as f32);
             return 0;
         }
-        // The back button leaves (a remap row takes it as nothing).
-        if ui.back && remap.is_none() {
+        // The back button leaves (a remap row takes it as nothing); START
+        // always does.
+        if (ui.back && remap.is_none()) || ui.start {
             self.exit(cx);
             return 0;
         }
@@ -856,6 +1017,14 @@ impl Stage for FnOption {
         if self.slide > 0 {
             self.slide -= 1;
         }
+        // Another kind of gamepad: its buttons' names.
+        let style = cx.settings.pad_style(cx.input.raw.pad_style);
+        if style != self.pad_style {
+            self.pad_style = style;
+            for i in (Item::PadShot1 as usize)..=(Item::PadWeapon3 as usize) {
+                self.update_button_text(cx, i);
+            }
+        }
         if cx.fade.fade_frames() != 0 {
             return;
         }
@@ -905,13 +1074,14 @@ impl Stage for FnOption {
         match kind {
             Kind::Choice | Kind::Formatted => {
                 let old = cx.options.values[c];
+                let count = cx.options.count(c);
                 let v = &mut cx.options.values[c];
                 if pressed & input::LEFT != 0 {
-                    *v = (*v - 1).clamp(0, OPTION_ITEMS[c].count - 1);
+                    *v = (*v - 1).clamp(0, count - 1);
                 } else if pressed & input::RIGHT != 0 {
                     *v += 1;
-                    if *v >= OPTION_ITEMS[c].count {
-                        *v = OPTION_ITEMS[c].count - 1;
+                    if *v >= count {
+                        *v = count - 1;
                     }
                 }
                 let value = *v;
@@ -937,7 +1107,7 @@ impl Stage for FnOption {
                         && value == 0 && cx.options.values[Item::StartTime as usize] == 0 => {
                             cx.options.values[Item::StartTime as usize] = 1;
                         }
-                    x if x == Item::WindowMode as usize => {
+                    x if x == Item::WindowMode as usize || x == Item::AspectRatio as usize => {
                         Self::store_port_value(cx, x, value);
                         self.sync_resolution(cx);
                     }
@@ -960,15 +1130,18 @@ impl Stage for FnOption {
                 }
             }
             Kind::Button | Kind::Key => {
-                // Only the item's own device remaps it.
+                // Only the item's own device remaps it. A pad slot takes
+                // any bindable button; BACK (SELECT) clears it.
                 let raw = &cx.input.raw;
                 let code = if kind == Kind::Key {
                     input::TRIGGER_KEYS.iter().position(|&k| raw.key(k)).map(|i| i as i32)
+                } else if raw.gamepads.iter().any(|g| g.held(PadButton::Back)) {
+                    Some(0)
                 } else {
                     raw.gamepads
                         .iter()
-                        .find_map(|g| PadButton::TRIGGERS.iter().position(|&b| g.held(b)))
-                        .map(|b| input::PAD_CODE | b as i32)
+                        .find_map(|g| PadButton::BINDABLE.iter().position(|&b| g.held(b)))
+                        .map(|b| b as i32 + 1)
                 };
                 let Some(code) = code else {
                     self.flags &= !FLAG_HELD;
@@ -980,9 +1153,20 @@ impl Stage for FnOption {
                 self.flags |= FLAG_HELD;
                 Self::play(cx, sounds::SWITCH);
                 if code as i16 != cx.options.values[c] {
-                    cx.input.pads[0].set_trigger(OPTION_ITEMS[c].param as usize, code);
-                    cx.options.values[c] = code as i16;
-                    self.update_button_text(cx, c);
+                    if kind == Kind::Key {
+                        cx.input.pads[0].set_trigger(OPTION_ITEMS[c].param as usize, code);
+                        cx.options.values[c] = code as i16;
+                        self.update_button_text(cx, c);
+                    } else {
+                        let t = OPTION_ITEMS[c].param as usize;
+                        let button = (code as usize).checked_sub(1).map(|i| PadButton::BINDABLE[i]);
+                        Self::set_pad_slot(cx, t / settings::PAD_SLOTS, t % settings::PAD_SLOTS, button);
+                        // A button moved from another slot: every slot's text.
+                        for i in (Item::PadShot1 as usize)..=(Item::PadWeapon3 as usize) {
+                            cx.options.values[i] = trigger(cx, i);
+                            self.update_button_text(cx, i);
+                        }
+                    }
                 }
             }
         }
@@ -1087,11 +1271,13 @@ mod tests {
     #[test]
     fn pointer_hits_tabs_rows_and_value_arrows() {
         let cx = super::super::tests::cx();
-        // The desktop strip: GAME DISPLAY AUDIO CONTROLS RECORDS.
-        let xs: Vec<f32> = (0..5).map(|i| FnOption::tab_x(&cx, i)).collect();
-        assert_eq!(xs, [320.0, 368.0, 440.0, 496.0, 576.0]);
+        // The desktop strip: GAME DISPLAY AUDIO CONTROLS PAD RECORDS,
+        // closer than TAB_GAP to fit the screen.
+        let xs: Vec<f32> = (0..6).map(|i| FnOption::tab_x(&cx, i)).collect();
+        assert_eq!(xs, [320.0, 360.0, 424.0, 472.0, 544.0, 576.0]);
+        assert!(xs[5] + 7.0 * 8.0 <= 640.0);
         assert_eq!(FnOption::tab_at(&cx, [328.0, TAB_Y + 4.0]), Some(0));
-        assert_eq!(FnOption::tab_at(&cx, [584.0, TAB_Y + 4.0]), Some(4));
+        assert_eq!(FnOption::tab_at(&cx, [584.0, TAB_Y + 4.0]), Some(5));
         assert_eq!(FnOption::tab_at(&cx, [448.0, TAB_Y + 40.0]), None);
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + 2.0]), Some(0));
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + ROW_H * 2.0 + 2.0]), Some(2));
@@ -1117,13 +1303,45 @@ mod tests {
     }
 
     #[test]
+    fn aspect_ratio_lists_the_sizes_of_its_ratio() {
+        let mut cx = super::super::tests::cx();
+        // The fallback list (no display modes in tests): 16:9 1280x720 is
+        // among the 16:9 sizes, smallest first.
+        cx.options.list_sizes((1280, 720));
+        assert_eq!(cx.options.sizes[0], (1280, 720));
+        assert!(cx.options.sizes.iter().all(|&(w, h)| settings::aspect(w, h) == (16, 9)));
+        assert_eq!(cx.options.aspects[cx.options.values[Item::AspectRatio as usize] as usize], (16, 9));
+        // Another ratio takes its size nearest in area.
+        let four_three = cx.options.aspects.iter().position(|&r| r == (4, 3)).unwrap();
+        FnOption::store_port_value(&mut cx, Item::AspectRatio as usize, four_three as i16);
+        assert_eq!((cx.settings.display.width, cx.settings.display.height), (1024, 768));
+        // A size of no listed ratio is listed with its own.
+        cx.options.list_sizes((1280, 800));
+        assert!(cx.options.aspects.contains(&(16, 10)));
+        assert_eq!(cx.options.sizes, [(1280, 800)]);
+    }
+
+    #[test]
+    fn pad_slots_take_a_button_from_elsewhere() {
+        use wf_engine::platform::PadButton as P;
+        let mut cx = super::super::tests::cx();
+        assert_eq!(cx.settings.pad[0], [Some(P::South), Some(P::RightShoulder), Some(P::RightTrigger)]);
+        FnOption::set_pad_slot(&mut cx, 2, 1, Some(P::RightShoulder));
+        assert_eq!(cx.settings.pad[0], [Some(P::South), None, Some(P::RightTrigger)]);
+        assert_eq!(cx.settings.pad[2], [Some(P::North), Some(P::RightShoulder), Some(P::LeftTrigger)]);
+        FnOption::set_pad_slot(&mut cx, 0, 0, Some(P::West));
+        // wf.ini's trigger map follows the first button.
+        assert_eq!(cx.input.pad(0).button_map[0], 2);
+    }
+
+    #[test]
     fn mobile_omits_the_window_rows() {
         let display = |caps: &Capabilities| build_tabs(caps).into_iter().find(|(n, _)| *n == "DISPLAY").unwrap().1;
         assert_eq!(display(&Capabilities::DESKTOP), TABS[1].1);
         assert_eq!(display(&Capabilities::MOBILE), [Item::RenderScale, Item::FpsCap, Item::ShowFps, Item::HideNames, Item::BossName, Item::Exit]);
-        // No tab is left empty, so all five stay; the other tabs are as on a desktop.
+        // No tab is left empty, so all six stay; the other tabs are as on a desktop.
         let tabs = build_tabs(&Capabilities::MOBILE);
-        assert_eq!(tabs.len(), 5);
+        assert_eq!(tabs.len(), 6);
         assert!(tabs.iter().zip(TABS).all(|((a, items), (b, all))| a == &b && (a == &"DISPLAY" || items == all)));
 
         // The cursor on RESOLUTION moves to EXIT when the row goes; on
@@ -1140,7 +1358,7 @@ mod tests {
         cx.settings.set_caps(Capabilities::DESKTOP);
         FnOption::set_tabs(&mut cx);
         assert_eq!(FnOption::current(&cx), Item::RenderScale as usize);
-        assert_eq!(cx.options.rows[1], 2);
+        assert_eq!(cx.options.rows[1], 3);
     }
 
     #[test]
@@ -1157,14 +1375,26 @@ mod tests {
         f.sync_resolution(&mut cx);
         assert!(cx.options.enabled[item]);
         assert!(text(&f).contains("1280X720"), "{}", text(&f));
-        for mode in [WindowMode::Borderless, WindowMode::Fullscreen] {
-            cx.settings.display.mode = mode;
-            f.sync_resolution(&mut cx);
-            assert!(!cx.options.enabled[item]);
-            assert!(text(&f).ends_with(" 2560X1440"), "{}", text(&f));
-            // The windowed size is kept for going back to a window.
-            assert_eq!((cx.settings.display.width, cx.settings.display.height), (1280, 720));
-        }
+        cx.settings.display.mode = WindowMode::Borderless;
+        f.sync_resolution(&mut cx);
+        assert!(!cx.options.enabled[item]);
+        assert!(text(&f).ends_with(" 2560X1440"), "{}", text(&f));
+        // The windowed size is kept for going back to a window.
+        assert_eq!((cx.settings.display.width, cx.settings.display.height), (1280, 720));
+        // Fullscreen picks its own mode: the desktop's until one is chosen,
+        // and again whenever WINDOW MODE switches to it.
+        cx.settings.display.fullscreen_size = Some((1280, 720));
+        FnOption::store_port_value(&mut cx, Item::WindowMode as usize, 2);
+        assert_eq!(cx.settings.display.mode, WindowMode::Fullscreen);
+        assert_eq!(cx.settings.display.fullscreen_size, None);
+        f.sync_resolution(&mut cx);
+        assert!(cx.options.enabled[item]);
+        assert!(text(&f).contains("2560X1440"), "{}", text(&f));
+        let aspect = String::from_utf8_lossy(&f.items[Item::AspectRatio as usize]).into_owned();
+        assert!(aspect.contains("16:9"), "{aspect}");
+        FnOption::store_port_value(&mut cx, item, 0);
+        assert!(cx.settings.display.fullscreen_size.is_some());
+        assert_eq!((cx.settings.display.width, cx.settings.display.height), (1280, 720));
         cx.settings.display.mode = WindowMode::Windowed;
         f.sync_resolution(&mut cx);
         assert!(cx.options.enabled[item]);

@@ -4,7 +4,7 @@
 
 use wf_engine::config::{Config, DisplayConfig, WindowMode};
 use wf_engine::input::{Action, Bindings, Source};
-use wf_engine::platform::{Capabilities, Device};
+use wf_engine::platform::{Capabilities, Device, PadButton, PadStyle};
 use wf_engine::time::FpsCap;
 
 /// What a mouse button does (MOUSE LEFT/MIDDLE/RIGHT).
@@ -16,12 +16,102 @@ pub const MOUSE_ACTIONS: [(&str, Option<Action>); 5] = [
     ("NONE", None),
 ];
 const MOUSE_KEYS: [&str; 3] = ["input.mouse_left", "input.mouse_middle", "input.mouse_right"];
+
+/// The gamepad's game actions: (trigger, wf-plus.ini key), each bound to
+/// up to `PAD_SLOTS` buttons.
+pub const PAD_ACTIONS: [(u8, &str); 3] = [(0, "input.pad_shot"), (1, "input.pad_slow"), (3, "input.pad_weapon")];
+pub const PAD_SLOTS: usize = 3;
+pub type PadSlots = [[Option<PadButton>; PAD_SLOTS]; 3];
+
+/// BUTTON NAMES: (options name, wf-plus.ini `input.pad_names`, the
+/// family; None: AUTO, the one detected).
+pub const PAD_NAMES: [(&str, &str, Option<PadStyle>); 6] = [
+    ("AUTO", "auto", None),
+    ("XBOX", "xbox", Some(PadStyle::Xbox)),
+    ("PLAYSTATION", "playstation", Some(PadStyle::PlayStation)),
+    ("NINTENDO", "nintendo", Some(PadStyle::Nintendo)),
+    ("STEAM DECK", "steamdeck", Some(PadStyle::SteamDeck)),
+    ("GENERIC", "generic", Some(PadStyle::Generic)),
+];
+
+/// The defaults (the engine's `DEFAULT_PAD`): SHOT A RB RT, SLOW MOVE B,
+/// WEAPON Y LB LT.
+pub fn default_pad() -> PadSlots {
+    let mut slots: PadSlots = Default::default();
+    for (k, &(t, _)) in PAD_ACTIONS.iter().enumerate() {
+        let buttons = wf_engine::input::DEFAULT_PAD.iter().filter(|(_, a)| *a == Action::Trigger(t)).map(|(b, _)| *b);
+        for (slot, b) in slots[k].iter_mut().zip(buttons) {
+            *slot = Some(b);
+        }
+    }
+    slots
+}
 /// Left shoots, middle selects the weapon, right moves slowly.
 const MOUSE_DEFAULTS: [u8; 3] = [0, 2, 1];
 
-/// The window sizes the options offer (16:9 first).
+/// The window sizes the options offer when the display's modes are not
+/// known.
 pub const RESOLUTIONS: [(u32, u32); 9] =
     [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160), (640, 480), (1024, 768), (1280, 960), (2560, 1080)];
+
+/// The window sizes the options offer: the display's modes, else
+/// `RESOLUTIONS`.
+pub fn resolutions() -> Vec<(u32, u32)> {
+    let modes = wf_engine::platform::display_modes();
+    if modes.is_empty() { RESOLUTIONS.to_vec() } else { modes }
+}
+
+/// The aspect ratios known by their usual names, which round some sizes:
+/// 1366x768 is 16:9 and 2560x1080 and 3440x1440 are 21:9.
+const ASPECTS: [(u32, u32); 10] = [(1, 1), (5, 4), (4, 3), (3, 2), (16, 10), (5, 3), (16, 9), (17, 9), (21, 9), (32, 9)];
+
+/// The aspect ratio of a `w`x`h` size, as (width, height) terms: the named
+/// ratio within 3%, else the size reduced. A portrait size gets the
+/// ratio turned (9:16).
+pub fn aspect(w: u32, h: u32) -> (u32, u32) {
+    if h > w {
+        let (a, b) = aspect(h, w);
+        return (b, a);
+    }
+    let r = w as f64 / h.max(1) as f64;
+    let named = ASPECTS
+        .iter()
+        .map(|&(a, b)| ((a as f64 / b as f64 / r - 1.0).abs(), (a, b)))
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .filter(|&(d, _)| d <= 0.03);
+    match named {
+        Some((_, ab)) => ab,
+        None => {
+            let g = gcd(w, h).max(1);
+            (w / g, h / g)
+        }
+    }
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// A ratio's name in the options, as 16:9.
+pub fn aspect_name((a, b): (u32, u32)) -> String {
+    format!("{a}:{b}")
+}
+
+/// The aspect ratios of `sizes`, each once, narrowest first.
+pub fn aspects(sizes: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = sizes.iter().map(|&(w, h)| aspect(w, h)).collect();
+    v.sort_by(|x, y| (x.0 as f64 / x.1 as f64).total_cmp(&(y.0 as f64 / y.1 as f64)));
+    v.dedup();
+    v
+}
+
+/// The sizes of `sizes` with the aspect ratio `ratio`, smallest first.
+pub fn sizes_of(sizes: &[(u32, u32)], ratio: (u32, u32)) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = sizes.iter().copied().filter(|&(w, h)| aspect(w, h) == ratio).collect();
+    v.sort_by_key(|&(w, h)| (w as u64 * h as u64, w));
+    v.dedup();
+    v
+}
 pub const RENDER_SCALES: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 pub const DEAD_ZONES: [f32; 10] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5];
 pub const TOUCH_SCALES: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
@@ -44,6 +134,13 @@ pub struct Settings {
     /// Index into `MOUSE_ACTIONS` of the left, middle and right buttons.
     pub mouse: [u8; 3],
     pub mouse_steering: bool,
+    /// The gamepad's buttons of SHOT, SLOW MOVE and WEAPON (`PAD_ACTIONS`).
+    pub pad: PadSlots,
+    /// `pad` came from wf-plus.ini (else wf.ini's one button per trigger,
+    /// if changed, replaces the defaults; see fn_option::load_settings).
+    pub pad_custom: bool,
+    /// BUTTON NAMES, an index of `PAD_NAMES`.
+    pub pad_names: u8,
     pub dead_zone: f32,
     pub touch_scale: f32,
     /// Index into `TOUCH_AIMS`.
@@ -81,6 +178,9 @@ impl Default for Settings {
             fps_custom: 90.0,
             display_dirty: false,
             mouse: MOUSE_DEFAULTS,
+            pad: default_pad(),
+            pad_custom: false,
+            pad_names: 0,
             mouse_steering: true,
             dead_zone: 0.35,
             touch_scale: 1.0,
@@ -135,7 +235,40 @@ impl Settings {
                 s.mouse[i] = n as u8;
             }
         }
+        if let Some(n) = c.get("input.pad_names").and_then(|v| PAD_NAMES.iter().position(|(_, k, _)| k.eq_ignore_ascii_case(v))) {
+            s.pad_names = n as u8;
+        }
+        for (k, &(_, key)) in PAD_ACTIONS.iter().enumerate() {
+            if let Some(v) = c.get(key) {
+                s.pad_custom = true;
+                let mut buttons = v.split(',').filter_map(|n| PadButton::parse(n.trim())).filter(|b| PadButton::BINDABLE.contains(b));
+                for slot in &mut s.pad[k] {
+                    *slot = buttons.next();
+                }
+            }
+        }
         s
+    }
+
+    /// The gamepad family whose button names show: BUTTON NAMES, or the
+    /// gamepad's (`detected`) on AUTO.
+    pub fn pad_style(&self, detected: PadStyle) -> PadStyle {
+        PAD_NAMES[self.pad_names as usize].2.unwrap_or(detected)
+    }
+
+    /// Binds `button` to slot `slot` of pad action `k` (None clears it); a
+    /// button bound elsewhere leaves there.
+    pub fn set_pad_slot(&mut self, k: usize, slot: usize, button: Option<PadButton>) {
+        if let Some(b) = button {
+            for s in self.pad.iter_mut().flatten() {
+                if *s == Some(b) {
+                    *s = None;
+                }
+            }
+        }
+        self.pad[k][slot] = button;
+        self.pad_custom = true;
+        self.input_dirty = true;
     }
 
     pub fn store(&self, c: &mut Config) {
@@ -148,6 +281,13 @@ impl Settings {
         c.set("gfx.analytic_shapes", if self.analytic_shapes { "on" } else { "off" });
         for (i, key) in MOUSE_KEYS.iter().enumerate() {
             c.set(key, MOUSE_ACTIONS[self.mouse[i] as usize].0.to_ascii_lowercase());
+        }
+        c.set("input.pad_names", PAD_NAMES[self.pad_names as usize].1);
+        if self.pad_custom {
+            for (k, &(_, key)) in PAD_ACTIONS.iter().enumerate() {
+                let names: Vec<&str> = self.pad[k].iter().flatten().map(|b| b.name()).collect();
+                c.set(key, names.join(", "));
+            }
         }
         c.set("input.mouse_steering", self.mouse_steering);
         c.set("input.dead_zone", self.dead_zone);
@@ -163,6 +303,10 @@ impl Settings {
             if let Some(action) = MOUSE_ACTIONS[n as usize].1 {
                 b.binds.push((Source::Mouse(button as u8), action));
             }
+        }
+        for (k, &(t, _)) in PAD_ACTIONS.iter().enumerate() {
+            let buttons: Vec<PadButton> = self.pad[k].iter().flatten().copied().collect();
+            b.set_trigger_buttons(t, &buttons);
         }
         b.mouse_steering = self.mouse_steering;
         b.dead_zone = self.dead_zone;
@@ -194,11 +338,6 @@ impl Settings {
     pub fn set_caps(&mut self, caps: Capabilities) {
         self.caps = caps;
         caps.mask(&mut self.display);
-    }
-
-    pub fn resolution_index(&self) -> usize {
-        let d = &self.display;
-        RESOLUTIONS.iter().position(|&r| r == (d.width, d.height)).unwrap_or(RESOLUTIONS.len())
     }
 
     pub fn window_mode_index(&self) -> usize {
@@ -240,6 +379,8 @@ pub struct UiInput {
     pub right_click: Option<[f32; 2]>,
     /// The mouse's back button (X1) was pressed this tick: cancel.
     pub back: bool,
+    /// A gamepad's START pressed this tick (a phone's Back: see app.rs).
+    pub start: bool,
     /// A step through a list asked this tick by the wheel (one notch) or a
     /// vertical swipe: -1 up, +1 down.
     pub nav: i8,
@@ -273,6 +414,7 @@ const UI_RB: u32 = 32;
 const UI_CLICK: u32 = 64;
 const UI_RIGHT: u32 = 128;
 const UI_BACK: u32 = 256;
+const UI_START: u32 = 512;
 
 impl UiInput {
     /// The pointer is the device in use (the mouse or a finger).
@@ -286,7 +428,7 @@ impl UiInput {
     }
 
     pub fn update(&mut self, a: &wf_engine::input::ActionState) {
-        use wf_engine::platform::{Key, PadButton};
+        use wf_engine::platform::Key;
         self.ticks = self.ticks.wrapping_add(1);
         let raw = &a.raw;
         let pad = |b: PadButton| raw.gamepads.iter().any(|g| g.held(b));
@@ -301,6 +443,7 @@ impl UiInput {
             (raw.mouse.buttons & 1 != 0, UI_CLICK),
             (raw.mouse.buttons & 4 != 0, UI_RIGHT),
             (raw.mouse.buttons & 8 != 0, UI_BACK),
+            (pad(PadButton::Start), UI_START),
         ] {
             if on {
                 held |= bit;
@@ -335,6 +478,7 @@ impl UiInput {
         }
         self.right_click = if pressed & UI_RIGHT != 0 { a.cursor } else { None };
         self.back = pressed & UI_BACK != 0;
+        self.start = pressed & UI_START != 0;
         self.nav = if self.wheel > 0.0 {
             -1
         } else if self.wheel < 0.0 {
@@ -372,4 +516,24 @@ impl UiInput {
 /// hundredths, e.g. 165 or 59.94), when the platform knows it.
 pub fn max_refresh_cap() -> Option<FpsCap> {
     wf_engine::platform::max_refresh().map(|hz| FpsCap::Fps((hz as f64 * 100.0).round() / 100.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes_get_their_usual_ratio() {
+        assert_eq!(aspect(1920, 1080), (16, 9));
+        assert_eq!(aspect(1366, 768), (16, 9));
+        assert_eq!(aspect(1280, 800), (16, 10));
+        assert_eq!(aspect(1024, 768), (4, 3));
+        assert_eq!(aspect(1280, 1024), (5, 4));
+        assert_eq!(aspect(2560, 1080), (21, 9));
+        assert_eq!(aspect(3440, 1440), (21, 9));
+        assert_eq!(aspect(5120, 1440), (32, 9));
+        assert_eq!(aspect(1080, 1920), (9, 16));
+        assert_eq!(aspect(1000, 300), (10, 3));
+        assert_eq!(aspects(&[(1920, 1080), (1024, 768), (1280, 800), (1280, 720)]), [(4, 3), (16, 10), (16, 9)]);
+    }
 }

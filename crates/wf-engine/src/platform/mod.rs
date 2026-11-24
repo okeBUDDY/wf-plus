@@ -47,6 +47,24 @@ pub fn display_size() -> Option<(u32, u32)> {
     (v != 0).then_some(((v >> 32) as u32, v as u32))
 }
 
+/// The window's display's modes, as sizes in pixels, largest first and
+/// each size once (SDL lists a size again for each refresh rate): set with
+/// the display size. Empty when unknown (no window, or the platform has no
+/// list).
+static DISPLAY_MODES: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_display_modes(mut modes: Vec<(u32, u32)>) {
+    modes.retain(|&(w, h)| w > 0 && h > 0);
+    modes.sort_by_key(|&(w, h)| std::cmp::Reverse((w * h, w)));
+    modes.dedup();
+    *DISPLAY_MODES.lock().unwrap_or_else(|e| e.into_inner()) = modes;
+}
+
+/// The window's display's modes (see `set_display_modes`).
+pub fn display_modes() -> Vec<(u32, u32)> {
+    DISPLAY_MODES.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Reads a whole file. On Android a relative path reads from the APK's
 /// assets (through SDL's IO), so the bundled data.bin needs no unpacking.
 pub fn read_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
@@ -218,10 +236,13 @@ pub enum PadButton {
     DpadDown,
     DpadLeft,
     DpadRight,
+    /// The analog triggers, held past half way.
+    LeftTrigger,
+    RightTrigger,
 }
 
 impl PadButton {
-    pub const COUNT: usize = PadButton::DpadRight as usize + 1;
+    pub const COUNT: usize = PadButton::RightTrigger as usize + 1;
 
     /// A button by its name in bindings ("south", "start", "dpup").
     pub fn parse(s: &str) -> Option<PadButton> {
@@ -240,9 +261,114 @@ impl PadButton {
             "dpdown" => PadButton::DpadDown,
             "dpleft" => PadButton::DpadLeft,
             "dpright" => PadButton::DpadRight,
+            "lt" | "lefttrigger" => PadButton::LeftTrigger,
+            "rt" | "righttrigger" => PadButton::RightTrigger,
             _ => return None,
         })
     }
+    /// The button's name in bindings and on screen (upper-cased): the
+    /// Xbox layout's.
+    pub fn name(self) -> &'static str {
+        match self {
+            PadButton::South => "a",
+            PadButton::East => "b",
+            PadButton::West => "x",
+            PadButton::North => "y",
+            PadButton::LeftShoulder => "lb",
+            PadButton::RightShoulder => "rb",
+            PadButton::Back => "back",
+            PadButton::Start => "start",
+            PadButton::LeftStick => "ls",
+            PadButton::RightStick => "rs",
+            PadButton::DpadUp => "dpup",
+            PadButton::DpadDown => "dpdown",
+            PadButton::DpadLeft => "dpleft",
+            PadButton::DpadRight => "dpright",
+            PadButton::LeftTrigger => "lt",
+            PadButton::RightTrigger => "rt",
+        }
+    }
+
+    /// The button's name on a `style` gamepad, as the options and the
+    /// prompts show it.
+    pub fn label(self, style: PadStyle) -> &'static str {
+        use PadButton::*;
+        match (style, self) {
+            (PadStyle::PlayStation, South) => "CROSS",
+            (PadStyle::PlayStation, East) => "CIRCLE",
+            (PadStyle::PlayStation, West) => "SQUARE",
+            (PadStyle::PlayStation, North) => "TRIANGLE",
+            (PadStyle::PlayStation, LeftShoulder) => "L1",
+            (PadStyle::PlayStation, RightShoulder) => "R1",
+            (PadStyle::PlayStation, LeftTrigger) => "L2",
+            (PadStyle::PlayStation, RightTrigger) => "R2",
+            (PadStyle::PlayStation, LeftStick) => "L3",
+            (PadStyle::PlayStation, RightStick) => "R3",
+            (PadStyle::PlayStation, Back) => "SHARE",
+            (PadStyle::PlayStation, Start) => "OPTIONS",
+            (PadStyle::Nintendo, South) => "B",
+            (PadStyle::Nintendo, East) => "A",
+            (PadStyle::Nintendo, West) => "Y",
+            (PadStyle::Nintendo, North) => "X",
+            (PadStyle::Nintendo, LeftShoulder) => "L",
+            (PadStyle::Nintendo, RightShoulder) => "R",
+            (PadStyle::Nintendo, LeftTrigger) => "ZL",
+            (PadStyle::Nintendo, RightTrigger) => "ZR",
+            (PadStyle::Nintendo, Back) => "-",
+            (PadStyle::Nintendo, Start) => "+",
+            (PadStyle::SteamDeck, LeftShoulder) => "L1",
+            (PadStyle::SteamDeck, RightShoulder) => "R1",
+            (PadStyle::SteamDeck, LeftTrigger) => "L2",
+            (PadStyle::SteamDeck, RightTrigger) => "R2",
+            (PadStyle::SteamDeck, LeftStick) => "L3",
+            (PadStyle::SteamDeck, RightStick) => "R3",
+            (PadStyle::SteamDeck, Back) => "VIEW",
+            (PadStyle::SteamDeck, Start) => "MENU",
+            (PadStyle::Generic, South) => "BOTTOM",
+            (PadStyle::Generic, East) => "RIGHT",
+            (PadStyle::Generic, West) => "LEFT",
+            (PadStyle::Generic, North) => "TOP",
+            (PadStyle::Generic, LeftShoulder) => "L1",
+            (PadStyle::Generic, RightShoulder) => "R1",
+            (PadStyle::Generic, LeftTrigger) => "L2",
+            (PadStyle::Generic, RightTrigger) => "R2",
+            (PadStyle::Generic, LeftStick) => "L3",
+            (PadStyle::Generic, RightStick) => "R3",
+            (PadStyle::Generic, Back) => "SELECT",
+            (_, South) => "A",
+            (_, East) => "B",
+            (_, West) => "X",
+            (_, North) => "Y",
+            (_, LeftShoulder) => "LB",
+            (_, RightShoulder) => "RB",
+            (_, LeftTrigger) => "LT",
+            (_, RightTrigger) => "RT",
+            (_, LeftStick) => "LS",
+            (_, RightStick) => "RS",
+            (_, Back) => "BACK",
+            (_, Start) => "START",
+            (_, DpadUp) => "UP",
+            (_, DpadDown) => "DOWN",
+            (_, DpadLeft) => "LEFT",
+            (_, DpadRight) => "RIGHT",
+        }
+    }
+
+    /// The buttons a game action can be bound to (not the menus' D-pad,
+    /// START or BACK).
+    pub const BINDABLE: [PadButton; 10] = [
+        PadButton::South,
+        PadButton::East,
+        PadButton::West,
+        PadButton::North,
+        PadButton::LeftShoulder,
+        PadButton::RightShoulder,
+        PadButton::LeftTrigger,
+        PadButton::RightTrigger,
+        PadButton::LeftStick,
+        PadButton::RightStick,
+    ];
+
     /// The buttons a trigger map indexes (physical button n), in order.
     pub const TRIGGERS: [PadButton; 10] = [
         PadButton::South,
@@ -315,8 +441,27 @@ pub struct RawInput {
     /// The device the player used last (a key or button pressed, the
     /// mouse moved or clicked, a finger down, a stick pushed).
     pub last_device: Device,
+    /// The kind of the gamepad used last, for its buttons' names.
+    pub pad_style: PadStyle,
     /// The window's size in pixels, for pointer positions.
     pub window: (u32, u32),
+}
+
+/// A family of gamepads, whose buttons have their own names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PadStyle {
+    /// A gamepad of no known family: the buttons by place.
+    Generic,
+    /// Xbox (and the many that pass for one): A B X Y, LB LT. Also the
+    /// names before any gamepad is seen.
+    #[default]
+    Xbox,
+    /// The Steam Deck: A B X Y, L1 L2, VIEW and MENU.
+    SteamDeck,
+    /// DualShock and DualSense: CROSS CIRCLE SQUARE TRIANGLE, L1 L2.
+    PlayStation,
+    /// Switch: B A Y X at the south, east, west and north, L ZL.
+    Nintendo,
 }
 
 impl RawInput {

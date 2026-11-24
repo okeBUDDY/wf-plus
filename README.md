@@ -191,7 +191,7 @@ Options:
 | `--fullscreen`, `--borderless`, `--windowed` | Window mode. |
 | `--render-scale K` | Render at K times the window's pixels, then stretch. |
 | `--show-fps` | Show the frame rate. |
-| `--caps desktop\|android` | Show the options as on another platform (Android omits WINDOW MODE and RESOLUTION). |
+| `--caps desktop\|android` | Show the options as on another platform (Android omits WINDOW MODE, ASPECT RATIO and RESOLUTION). |
 | `--bench SECONDS` | With `--headless`: measure the uncapped frame rate offscreen. |
 | `--replay rec/<file>.rec` | Play a replay (relative to the home folder). |
 | `--headless` | No window and no audio device: run frames as fast as possible. |
@@ -215,7 +215,15 @@ last one used picks the prompts.
   the wheel also selects the weapon, and the back button (X1) resets to
   the title.
 * Gamepad (SDL_Gamepad, hot-plugged): left stick or d-pad, with a dead zone;
-  buttons are triggers. A gamepad touchpad drags the ship.
+  A, RB and RT shoot, B moves slowly, Y, LB and LT select the weapon (each
+  action takes up to three buttons, rebindable). START pauses when GAME
+  PAUSE is on and otherwise goes back to the title; on a menu it is a step
+  back (it never quits). The menus' buttons are fixed: A confirms, B goes
+  back, LB/RB change tabs. Buttons are named for the gamepad in use (Xbox,
+  PlayStation, Nintendo, Steam Deck, or by place for others), or as
+  OPTIONS > PAD > BUTTON NAMES says. A new game played on a gamepad shows
+  its controls along the bottom for its first seconds. A gamepad touchpad
+  drags the ship.
 * Touch: drag anywhere to move the ship relative to the finger; a finger
   down shoots, and a quick tap of a second finger anywhere selects the
   weapon. Android's Back (the button or the gesture) goes back to the title
@@ -228,12 +236,18 @@ last one used picks the prompts.
   the slow move) or SLOW DRAG (a slow, careful drag holds the shot; a second
   finger held is the slow move).
 
-The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS,
+The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS, PAD,
 RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel
-over the strip, or a sideways swipe change tabs. Keys and pad buttons are
-remapped separately there, along with the mouse buttons, mouse steering,
-the pad dead zone and the touch speed; the display settings (window mode,
-resolution, render scale, FPS cap, show FPS) apply at once.
+over the strip, or a sideways swipe change tabs. Keys are remapped under
+CONTROLS, along with the mouse buttons, mouse steering and the touch speed;
+PAD has the three button slots of SHOT, SLOW MOVE and WEAPON (press a
+button on a slot to bind it, BACK/SELECT clears it), the dead zone and the
+button names. The display settings (window mode, aspect ratio, resolution,
+render scale, FPS cap, show FPS) apply at once. ASPECT RATIO and RESOLUTION
+list the display's own modes (each ratio, then the sizes of the chosen
+one): the window's size, or in FULLSCREEN the display mode to switch to
+(switching to FULLSCREEN starts at the display's current mode); BORDERLESS
+always takes the display's resolution.
 
 Every menu also works with the mouse alone, and the same targets take
 taps. On the title, hover and click the item to choose it and the arrows

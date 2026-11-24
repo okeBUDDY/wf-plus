@@ -480,6 +480,10 @@ pub struct FnOption {
     slide_dir: f32,
     /// The gamepad family the pad rows name their buttons for.
     pad_style: wf_engine::platform::PadStyle,
+    /// The kind of gamepad detected, for AUTO under BUTTON NAMES.
+    detected: wf_engine::platform::PadStyle,
+    /// The window's size RENDER SCALE's text was made for.
+    output: Option<(u32, u32)>,
 }
 
 const FLAG_EXIT: u32 = 0x1;
@@ -500,6 +504,8 @@ impl FnOption {
             slide: 0,
             slide_dir: 1.0,
             pad_style: Default::default(),
+            detected: Default::default(),
+            output: None,
         }
     }
 
@@ -597,7 +603,12 @@ impl FnOption {
                 let (w, h) = cx.options.sizes.get(v).copied().unwrap_or(Self::chosen_size(cx));
                 format!("{w}X{h}")
             }
-            x if x == Item::RenderScale as usize => format!("{}%", (settings::RENDER_SCALES[v] * 100.0) as i32),
+            x if x == Item::RenderScale as usize => {
+                let scale = settings::RENDER_SCALES[v];
+                let pct = (scale * 100.0) as i32;
+                let (w, h) = wf_engine::gfx::scale::scaled_size(cx.window_size, scale);
+                format!("{pct}% ({w}X{h})")
+            }
             x if x == Item::FpsCap as usize => match FpsCap::PRESETS.get(v) {
                 Some(cap) => cap.label(),
                 None if v == FpsCap::PRESETS.len() => match settings::max_refresh_cap() {
@@ -612,7 +623,15 @@ impl FnOption {
             x if x == Item::DeadZone as usize => format!("{}%", (settings::DEAD_ZONES[v] * 100.0).round() as i32),
             x if x == Item::TouchScale as usize => format!("{}X", settings::TOUCH_SCALES[v]),
             x if x == Item::TouchAim as usize => settings::TOUCH_AIMS[v].0.into(),
-            x if x == Item::PadNames as usize => settings::PAD_NAMES[v].0.into(),
+            // AUTO names the kind it detected.
+            x if x == Item::PadNames as usize => match settings::PAD_NAMES[v].2 {
+                Some(_) => settings::PAD_NAMES[v].0.into(),
+                None => {
+                    let detected = cx.input.raw.pad_style;
+                    let name = settings::PAD_NAMES.iter().find(|n| n.2 == Some(detected)).map_or("GENERIC", |n| n.0);
+                    format!("{} ({name})", settings::PAD_NAMES[v].0)
+                }
+            },
             _ => String::new(),
         }
     }
@@ -1042,6 +1061,16 @@ impl Stage for FnOption {
             for i in (Item::PadShot1 as usize)..=(Item::PadWeapon3 as usize) {
                 self.update_button_text(cx, i);
             }
+        }
+        if cx.input.raw.pad_style != self.detected {
+            self.detected = cx.input.raw.pad_style;
+            self.update_choice_text(cx, Item::PadNames as usize);
+        }
+        // RENDER SCALE shows the size it draws at, from the window's.
+        let output = Some(cx.window_size);
+        if output != self.output {
+            self.output = output;
+            self.update_choice_text(cx, Item::RenderScale as usize);
         }
         if cx.fade.fade_frames() != 0 {
             return;

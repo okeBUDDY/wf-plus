@@ -134,7 +134,7 @@ const OPTION_ITEMS: [OptionItem; ITEMS] = [
     formatted(settings::MOUSE_ACTIONS.len() as i16, "MOUSE MIDDLE    : "),
     formatted(settings::MOUSE_ACTIONS.len() as i16, "MOUSE RIGHT     : "),
     formatted(2, "MOUSE STEERING  : "),
-    formatted(settings::DEAD_ZONES.len() as i16, "PAD DEADZONE    : "),
+    formatted(settings::DEAD_ZONES.len() as i16, "DEADZONE        : "),
     formatted(settings::TOUCH_SCALES.len() as i16, "TOUCH SPEED     : "),
     formatted(settings::TOUCH_AIMS.len() as i16, "TOUCH AIM       : "),
     // param: action * PAD_SLOTS + slot.

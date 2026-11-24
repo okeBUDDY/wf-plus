@@ -124,7 +124,13 @@ impl FnGameState {
 pub struct FnGame {
     background: Option<TaskId>,
     hud: Option<TaskId>,
+    /// The frame until which a new game played on a gamepad shows the
+    /// controls' legend.
+    legend_until: u32,
 }
+
+/// How long the legend shows at the start of a game (frames).
+const LEGEND_FRAMES: u32 = 600;
 
 impl FnGame {
     pub fn new() -> Self {
@@ -168,6 +174,7 @@ impl Stage for FnGame {
         let rules = cx.global.rules;
         cx.game.start(&rules);
         actor::player::reset_weapon(cx);
+        self.legend_until = cx.app.frame_count + LEGEND_FRAMES;
         let g = &mut cx.fn_game;
         g.stage_score = 0;
         g.exit_time = 0;
@@ -418,7 +425,13 @@ impl Stage for FnGame {
             cx.guide = if cx.app.flags & super::AppFlags::TIME_STOPPED != 0 {
                 Some(Guide::Paused)
             } else {
+                let legend = cx.fn_game.mode == FnGameState::MODE_RECORD
+                    && cx.app.frame_count < self.legend_until
+                    && super::guide::device(cx) == wf_engine::platform::Device::Gamepad;
                 match cx.hud.mode {
+                    // A new game on a gamepad: its controls for a while
+                    // (over the first WARNING's skip, which is SHOT).
+                    super::hud::MODE_WARNING | super::hud::MODE_NONE if legend => Some(Guide::Play),
                     super::hud::MODE_RESULT | super::hud::MODE_WARNING => Some(Guide::Skip),
                     super::hud::MODE_NAME_ENTRY => Some(Guide::NameEntry),
                     _ => None,

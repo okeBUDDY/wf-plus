@@ -626,8 +626,8 @@ pub fn run_windowed(
             game.file_dropped(path);
         }
         if let Some(d) = game.display_request() {
-            if d.mode != cfg.mode {
-                platform.set_window_mode(d.mode);
+            if d.mode != cfg.mode || (d.mode == WindowMode::Fullscreen && d.fullscreen_size != cfg.fullscreen_size) {
+                platform.set_window_mode(d.mode, d.fullscreen_size);
             }
             if d.mode == WindowMode::Windowed && (d.width, d.height) != (cfg.width, cfg.height) {
                 platform.set_window_size(d.width, d.height);
@@ -737,8 +737,8 @@ pub fn bench(game: &mut dyn Game, renderer: &mut gfx::gpu::Renderer, size: (u32,
 
 /// Applies the window mode at start-up.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn apply_window_mode(platform: &mut platform::sdl::Platform, mode: WindowMode) {
-    if mode != WindowMode::Windowed {
-        platform.set_window_mode(mode);
+pub fn apply_window_mode(platform: &mut platform::sdl::Platform, d: &DisplayConfig) {
+    if d.mode != WindowMode::Windowed {
+        platform.set_window_mode(d.mode, d.fullscreen_size);
     }
 }

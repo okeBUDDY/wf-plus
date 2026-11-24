@@ -154,15 +154,19 @@ impl App {
         // back to the title. A paused game's back button resumes it
         // instead (below).
         let in_game = !cx.draw.menu;
+        // A gamepad's START is a phone's Back that never quits: in a game
+        // it goes to the title, unless GAME PAUSE makes it the pause
+        // button (its trigger 7); on a menu it is a step back, and on the
+        // title's menu nothing.
+        let start = cx.ui.start;
+        let start_back = in_game && start && cx.input.time_stop_mask == 0;
         let phone_back = in_game && cx.input.quit_pressed && cx.settings.caps == Capabilities::MOBILE;
         // A phone's Back on a menu other than the title's (the arena choice,
         // the options) is the back button there: a step back toward the
         // title. Only the title's menu quits.
-        let phone_menu_back = !in_game
-            && cx.input.quit_pressed
-            && cx.settings.caps == Capabilities::MOBILE
-            && cx.guide != Some(super::guide::Guide::Menu);
-        if phone_menu_back {
+        let on_title = cx.guide == Some(super::guide::Guide::Menu);
+        let phone_menu_back = !in_game && cx.input.quit_pressed && cx.settings.caps == Capabilities::MOBILE && !on_title;
+        if phone_menu_back || (!in_game && start && !on_title) {
             cx.ui.back = true;
         }
         let mouse_back = in_game
@@ -172,7 +176,7 @@ impl App {
         if cx.input.quit_pressed && !phone_back && !phone_menu_back {
             cx.app.finish(None);
         }
-        if cx.input.reset_pressed || phone_back || mouse_back {
+        if cx.input.reset_pressed || phone_back || mouse_back || start_back {
             cx.app.request_reset();
         }
         // InputTask::IsProtected (0x405f30): the pause button of any pad,

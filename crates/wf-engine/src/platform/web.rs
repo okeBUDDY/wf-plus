@@ -246,13 +246,15 @@ fn key_of(code: &str) -> Option<Key> {
 }
 
 /// The Gamepad API's standard mapping: button index of each PadButton.
-const PAD_INDEX: [(PadButton, u32); 14] = [
+const PAD_INDEX: [(PadButton, u32); 16] = [
     (PadButton::South, 0),
     (PadButton::East, 1),
     (PadButton::West, 2),
     (PadButton::North, 3),
     (PadButton::LeftShoulder, 4),
     (PadButton::RightShoulder, 5),
+    (PadButton::LeftTrigger, 6),
+    (PadButton::RightTrigger, 7),
     (PadButton::Back, 8),
     (PadButton::Start, 9),
     (PadButton::LeftStick, 10),
@@ -262,6 +264,23 @@ const PAD_INDEX: [(PadButton, u32); 14] = [
     (PadButton::DpadLeft, 14),
     (PadButton::DpadRight, 15),
 ];
+
+/// The family of a gamepad, from the browser's id (its name, and vendor
+/// 054c Sony, 057e Nintendo or 045e Microsoft).
+fn pad_style(id: &str) -> super::PadStyle {
+    let id = id.to_ascii_lowercase();
+    if id.contains("054c") || id.contains("dualsense") || id.contains("dualshock") || id.contains("playstation") {
+        super::PadStyle::PlayStation
+    } else if id.contains("057e") || id.contains("nintendo") || id.contains("pro controller") || id.contains("joy-con") {
+        super::PadStyle::Nintendo
+    } else if id.contains("steam deck") {
+        super::PadStyle::SteamDeck
+    } else if id.contains("045e") || id.contains("xbox") || id.contains("xinput") {
+        super::PadStyle::Xbox
+    } else {
+        super::PadStyle::Generic
+    }
+}
 
 /// What the page's events say. A key, button or finger that went down and
 /// up again between two reads is still seen by one read (`pressed`,
@@ -278,6 +297,7 @@ struct State {
     fingers: Vec<Finger>,
     tapped: Vec<Finger>,
     last_device: Device,
+    pad_style: super::PadStyle,
 }
 
 /// The page's input, read once per tick with [`Input::read`].
@@ -450,11 +470,13 @@ impl Input {
                 g.stick = [axis(0), axis(1)];
                 if g.buttons != 0 || g.stick[0].abs() > 0.5 || g.stick[1].abs() > 0.5 {
                     s.last_device = Device::Gamepad;
+                    s.pad_style = pad_style(&pad.id());
                 }
                 raw.gamepads.push(g);
             }
         }
         raw.last_device = s.last_device;
+        raw.pad_style = s.pad_style;
         raw
     }
 }

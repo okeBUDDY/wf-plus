@@ -20,6 +20,8 @@ pub struct Platform {
     pub window: sdl3::video::Window,
     fingers: Vec<Finger>,
     last_device: Device,
+    /// The kind of the gamepad used last.
+    pad_style: super::PadStyle,
     mouse_inside: bool,
     wheel: f32,
     /// Android's Back was pressed since the last input read.
@@ -116,8 +118,9 @@ const ALL_KEYS: [Key; Key::COUNT] = [
     Key::PageDown,
 ];
 
-fn padmap(b: PadButton) -> Button {
-    match b {
+/// SDL's button of a pad button (the triggers are axes: none).
+fn padmap(b: PadButton) -> Option<Button> {
+    Some(match b {
         PadButton::South => Button::South,
         PadButton::East => Button::East,
         PadButton::West => Button::West,
@@ -132,10 +135,30 @@ fn padmap(b: PadButton) -> Button {
         PadButton::DpadDown => Button::DPadDown,
         PadButton::DpadLeft => Button::DPadLeft,
         PadButton::DpadRight => Button::DPadRight,
+        PadButton::LeftTrigger | PadButton::RightTrigger => return None,
+    })
+}
+
+/// The family of a gamepad. The Steam Deck's own controls are an Xbox
+/// pad to SDL: they are known by their name, or under Steam (which sets
+/// SteamDeck=1 on a Deck) by its virtual gamepad's.
+fn pad_style(pad: &Gamepad) -> super::PadStyle {
+    use super::PadStyle as S;
+    use sdl3::gamepad::GamepadType as T;
+    let name = pad.name().unwrap_or_default().to_ascii_lowercase();
+    let on_deck = std::env::var("SteamDeck").is_ok_and(|v| v == "1");
+    if name.contains("steam deck") || (on_deck && name.contains("steam")) {
+        return S::SteamDeck;
+    }
+    match pad.r#type() {
+        T::Xbox360 | T::XboxOne => S::Xbox,
+        T::PS3 | T::PS4 | T::PS5 => S::PlayStation,
+        T::NintendoSwitchPro | T::NintendoSwitchJoyconLeft | T::NintendoSwitchJoyconRight | T::NintendoSwitchJoyconPair => S::Nintendo,
+        _ => S::Generic,
     }
 }
 
-const ALL_PAD: [PadButton; PadButton::COUNT] = [
+const ALL_PAD: [PadButton; 14] = [
     PadButton::South,
     PadButton::East,
     PadButton::West,
@@ -206,6 +229,7 @@ impl Platform {
             dropped: Vec::new(),
             // A phone's first input is a finger (the prompts say so).
             last_device: if cfg!(target_os = "android") { Device::Touch } else { Device::Keyboard },
+            pad_style: Default::default(),
             mouse_inside: false,
             wheel: 0.0,
             #[cfg(target_os = "android")]
@@ -294,6 +318,7 @@ impl Platform {
                     if let Some(sys) = &self.gamepad_sys
                         && !self.gamepads.iter().any(|p| p.id().ok() == Some(which))
                         && let Ok(pad) = sys.open(which) {
+                            self.pad_style = pad_style(&pad);
                             self.gamepads.push(pad);
                             self.last_device = Device::Gamepad;
                         }
@@ -319,7 +344,13 @@ impl Platform {
                     self.wheel += y;
                     self.last_device = Device::Mouse;
                 }
-                SdlEvent::GamepadButtonDown { .. } | SdlEvent::GamepadTouchpadDown { .. } => self.last_device = Device::Gamepad,
+                SdlEvent::GamepadButtonDown { which, .. } => {
+                    self.last_device = Device::Gamepad;
+                    if let Some(pad) = self.gamepads.iter().find(|p| p.id().ok() == Some(which)) {
+                        self.pad_style = pad_style(pad);
+                    }
+                }
+                SdlEvent::GamepadTouchpadDown { .. } => self.last_device = Device::Gamepad,
                 SdlEvent::GamepadAxisMotion { value, .. } if value.unsigned_abs() > 16000 => self.last_device = Device::Gamepad,
                 SdlEvent::FingerDown { finger_id, x, y, .. } => {
                     self.last_device = Device::Touch;
@@ -355,7 +386,12 @@ impl Platform {
         for pad in &self.gamepads {
             let mut g = GamepadState::default();
             for b in ALL_PAD {
-                if pad.button(padmap(b)) {
+                if padmap(b).is_some_and(|b| pad.button(b)) {
+                    g.buttons |= 1 << b as u32;
+                }
+            }
+            for (axis, b) in [(Axis::TriggerLeft, PadButton::LeftTrigger), (Axis::TriggerRight, PadButton::RightTrigger)] {
+                if pad.axis(axis) > 16384 {
                     g.buttons |= 1 << b as u32;
                 }
             }
@@ -376,6 +412,7 @@ impl Platform {
         };
         raw.fingers = self.fingers.clone();
         raw.last_device = self.last_device;
+        raw.pad_style = self.pad_style;
         raw.window = self.window.size_in_pixels();
         raw
     }
@@ -460,11 +497,23 @@ impl Platform {
         let _ = self.window.set_title(title);
     }
 
-    /// Shows the window windowed, exclusive fullscreen (the desktop's
-    /// mode) or borderless over the display.
-    pub fn set_window_mode(&mut self, mode: WindowMode) {
+    /// Shows the window windowed, exclusive fullscreen (at the display's
+    /// mode of `fullscreen_size` pixels, else the desktop's) or borderless
+    /// over the display.
+    pub fn set_window_mode(&mut self, mode: WindowMode, fullscreen_size: Option<(u32, u32)>) {
         use sdl3::sys::video::{SDL_GetDesktopDisplayMode, SDL_GetDisplayForWindow, SDL_SetWindowFullscreenMode};
         let raw = self.window.raw();
+        // The display's mode of that size, the first SDL lists (its best
+        // refresh rate).
+        let picked = fullscreen_size.filter(|_| mode == WindowMode::Fullscreen).and_then(|size| {
+            let modes = self.window.get_display().ok()?.get_fullscreen_modes().ok()?;
+            modes.into_iter().find(|m| mode_pixels(m) == size)
+        });
+        if let Some(m) = picked {
+            let _ = self.window.set_display_mode(Some(m));
+            let _ = self.window.set_fullscreen(true);
+            return;
+        }
         match mode {
             WindowMode::Windowed => {
                 let _ = self.window.set_fullscreen(false);
@@ -487,19 +536,31 @@ impl Platform {
     }
 }
 
-/// Records the resolution of the window's display, in pixels (the size a
-/// borderless or fullscreen window takes; the options show it).
-/// Notes the window's display's desktop mode: its size, and on the desktop
+/// Notes the window's display's modes (the options' RESOLUTION list) and
+/// its desktop mode: its size, and on the desktop
 /// its refresh rate, the one the window is shown at (windowed, borderless
 /// and fullscreen all use the desktop mode), not the fastest mode the
 /// panel could be switched to.
 fn note_display_size(window: &sdl3::video::Window) {
-    if let Ok(mode) = window.get_display().and_then(|d| d.get_mode()) {
-        let px = |v: i32| (v as f32 * mode.pixel_density.max(1.0)).round() as u32;
-        super::set_display_size(px(mode.w), px(mode.h));
+    let Ok(display) = window.get_display() else { return };
+    let px = mode_pixels;
+    if let Ok(mode) = display.get_mode() {
+        let (w, h) = px(&mode);
+        super::set_display_size(w, h);
         #[cfg(not(target_os = "android"))]
         super::set_max_refresh(mode.refresh_rate);
     }
+    // The sizes the display offers (the options' RESOLUTION list), its
+    // desktop size among them.
+    let mut modes: Vec<(u32, u32)> = display.get_fullscreen_modes().unwrap_or_default().iter().map(px).collect();
+    modes.extend(super::display_size());
+    super::set_display_modes(modes);
+}
+
+/// A display mode's size in pixels (SDL gives points and the density).
+fn mode_pixels(m: &sdl3::video::DisplayMode) -> (u32, u32) {
+    let px = |v: i32| (v as f32 * m.pixel_density.max(1.0)).round() as u32;
+    (px(m.w), px(m.h))
 }
 
 /// The window's display connection, owned so a GPU instance can keep it.

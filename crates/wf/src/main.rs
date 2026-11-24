@@ -1049,7 +1049,7 @@ mod tests {
         // The manifest's assemblyIdentity: the four-part form.
         let identity = format!("version=\"{}.0\"", super::app_info::VERSION_TEXT);
         assert!(super::app_info::WINDOWS_MANIFEST.contains(&identity), "{identity}");
-        assert_eq!(super::app_info::version_line(), "Warning Forever+ 1.1.2 (based on Warning Forever 1.08)");
+        assert_eq!(super::app_info::version_line(), "Warning Forever+ 1.2.0 (based on Warning Forever 1.08)");
         let based_on = format!("(based on Warning Forever {})", super::app_info::BASED_ON);
         assert!(super::app_info::COMMENTS.ends_with(&based_on), "{}", super::app_info::COMMENTS);
     }

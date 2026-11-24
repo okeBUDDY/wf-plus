@@ -229,20 +229,20 @@ last one used picks the prompts.
   weapon. Android's Back (the button or the gesture) goes back to the title
   from a game, the arena choice or the options, and quits from the title's
   menu. The laser's cone turns only while the shot is up, so OPTIONS >
-  CONTROLS > TOUCH AIM picks how a finger stops shooting to aim: 2ND FINGER
+  TOUCH > TOUCH AIM picks how a finger stops shooting to aim: 2ND FINGER
   (the default; a second finger held holds the shot, and the steering
   finger's double-tap-and-hold is the slow move), FIRE BUTTON (a button in
   the bottom right corner turns the shot off and on; a second finger held is
   the slow move) or SLOW DRAG (a slow, careful drag holds the shot; a second
   finger held is the slow move).
 
-The options screen is a tab strip (GAME, DISPLAY, AUDIO, CONTROLS, PAD,
+The options screen is a tab strip (GAME, DISPLAY, AUDIO, KB/M, PAD, TOUCH,
 RECORDS): Q/E, PageUp/PageDown, the shoulder buttons, a click or the wheel
-over the strip, or a sideways swipe change tabs. Keys are remapped under
-CONTROLS, along with the mouse buttons, mouse steering and the touch speed;
-PAD has the three button slots of SHOT, SLOW MOVE and WEAPON (press a
-button on a slot to bind it, BACK/SELECT clears it), the dead zone and the
-button names. The display settings (window mode, aspect ratio, resolution,
+over the strip, or a sideways swipe change tabs. KB/M remaps the keys and
+the mouse buttons and sets mouse steering; PAD has the three button slots
+of SHOT, SLOW MOVE and WEAPON (press a button on a slot to bind it,
+BACK/SELECT clears it), the dead zone and the button names; each has a
+RESET TO DEFAULTS. TOUCH has the touch speed and aim. The display settings (window mode, aspect ratio, resolution,
 render scale, FPS cap, show FPS) apply at once. ASPECT RATIO and RESOLUTION
 list the display's own modes (each ratio, then the sizes of the chosen
 one): the window's size, or in FULLSCREEN the display mode to switch to

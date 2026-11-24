@@ -167,19 +167,15 @@ const WIDTHS: [i16; ITEMS] = {
 };
 
 /// The tabs and their items, top to bottom (EXIT ends each).
-const TABS: [(&str, &[Item]); 6] = {
+const TABS: [(&str, &[Item]); 7] = {
     use Item::*;
     [
         ("GAME", &[GameMode, StartTime, TimerMode, Ships, Extend, Pause, DefaultArena, Exit]),
         ("DISPLAY", &[WindowMode, AspectRatio, Resolution, RenderScale, FpsCap, ShowFps, HideNames, BossName, Exit]),
         ("AUDIO", &[BgmVolume, SeVolume, BgmMode, Exit]),
-        (
-            "CONTROLS",
-            &[
-                ShotKey, SlowKey, WeaponKey, PauseKey, MouseLeft, MouseMiddle, MouseRight, MouseSteering, TouchScale, TouchAim, ResetKeys, Exit,
-            ],
-        ),
+        ("KB/M", &[ShotKey, SlowKey, WeaponKey, PauseKey, MouseLeft, MouseMiddle, MouseRight, MouseSteering, ResetKeys, Exit]),
         ("PAD", &[PadShot1, PadShot2, PadShot3, PadSlow1, PadSlow2, PadSlow3, PadWeapon1, PadWeapon2, PadWeapon3, DeadZone, PadNames, ResetPad, Exit]),
+        ("TOUCH", &[TouchScale, TouchAim, Exit]),
         ("RECORDS", &[StageReplay, ScoreReset, Exit]),
     ]
 };
@@ -233,7 +229,7 @@ pub struct OptionState {
     /// The tab shown, and the cursor row of each tab (kept while the game
     /// runs).
     tab: usize,
-    rows: [usize; 6],
+    rows: [usize; 7],
     /// ASPECT RATIO's choices: the ratios of the display's sizes (and of
     /// the window's size, if it is none of them), narrowest first.
     aspects: Vec<(u32, u32)>,
@@ -472,7 +468,7 @@ fn sys_locale_is_japanese() -> bool {
 
 
 /// The option screen (FnOption as a stage), as a tab strip: GAME, DISPLAY,
-/// AUDIO, CONTROLS and RECORDS, each tab's items below it.
+/// AUDIO, KB/M, PAD, TOUCH and RECORDS, each tab's items below it.
 pub struct FnOption {
     flags: u32,
     blink: i16,
@@ -528,17 +524,20 @@ impl FnOption {
 
     /// Each tab's left edge on the strip.
     fn tab_x(cx: &Cx, tab: usize) -> f32 {
-        let gap = Self::tab_gap(cx);
-        TAB_X0 + cx.options.tabs[..tab].iter().map(|(n, _)| n.len() as f32 * 8.0 + gap).sum::<f32>()
+        let (x0, gap) = Self::tab_strip(cx);
+        x0 + cx.options.tabs[..tab].iter().map(|(n, _)| n.len() as f32 * 8.0 + gap).sum::<f32>()
     }
 
-    /// The gap between the tabs: `TAB_GAP`, less if the strip would pass
-    /// the screen's right edge.
-    fn tab_gap(cx: &Cx) -> f32 {
+    /// The tab strip's left edge and the gap between the tabs: `TAB_X0`
+    /// and `TAB_GAP`, the gap closing to a character and then the strip
+    /// moving left while it would pass the screen's right edge.
+    fn tab_strip(cx: &Cx) -> (f32, f32) {
+        const RIGHT: f32 = 636.0;
         let tabs = &cx.options.tabs;
         let text: f32 = tabs.iter().map(|(n, _)| n.len() as f32 * 8.0).sum();
         let gaps = tabs.len().saturating_sub(1).max(1) as f32;
-        TAB_GAP.min(((640.0 - 4.0 - TAB_X0 - text) / gaps).floor()).max(8.0)
+        let gap = TAB_GAP.min(((RIGHT - TAB_X0 - text) / gaps).floor()).max(8.0);
+        (TAB_X0.min(RIGHT - text - gap * gaps), gap)
     }
 
     /// The item under the cursor.
@@ -886,7 +885,7 @@ impl FnOption {
         }
         if let Some(p) = ui.cursor
             && ui.wheel != 0.0
-            && Self::tab_at(cx, [p[0].max(TAB_X0), p[1]]).is_some()
+            && Self::tab_at(cx, [p[0].max(Self::tab_x(cx, 0)), p[1]]).is_some()
         {
             let dir = if ui.wheel < 0.0 { 1 } else { -1 };
             let to = (tab as i32 + dir).rem_euclid(n as i32) as usize;
@@ -1310,13 +1309,13 @@ mod tests {
     #[test]
     fn pointer_hits_tabs_rows_and_value_arrows() {
         let cx = super::super::tests::cx();
-        // The desktop strip: GAME DISPLAY AUDIO CONTROLS PAD RECORDS,
-        // closer than TAB_GAP to fit the screen.
-        let xs: Vec<f32> = (0..6).map(|i| FnOption::tab_x(&cx, i)).collect();
-        assert_eq!(xs, [320.0, 360.0, 424.0, 472.0, 544.0, 576.0]);
-        assert!(xs[5] + 7.0 * 8.0 <= 640.0);
-        assert_eq!(FnOption::tab_at(&cx, [328.0, TAB_Y + 4.0]), Some(0));
-        assert_eq!(FnOption::tab_at(&cx, [584.0, TAB_Y + 4.0]), Some(5));
+        // The desktop strip: GAME DISPLAY AUDIO KB/M PAD TOUCH RECORDS,
+        // a character apart and moved left to fit the screen.
+        let xs: Vec<f32> = (0..7).map(|i| FnOption::tab_x(&cx, i)).collect();
+        assert_eq!(xs, [308.0, 348.0, 412.0, 460.0, 500.0, 532.0, 580.0]);
+        assert!(xs[6] + 7.0 * 8.0 <= 640.0);
+        assert_eq!(FnOption::tab_at(&cx, [316.0, TAB_Y + 4.0]), Some(0));
+        assert_eq!(FnOption::tab_at(&cx, [584.0, TAB_Y + 4.0]), Some(6));
         assert_eq!(FnOption::tab_at(&cx, [448.0, TAB_Y + 40.0]), None);
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + 2.0]), Some(0));
         assert_eq!(FnOption::row_at(&cx, [330.0, ROW_Y + ROW_H * 2.0 + 2.0]), Some(2));
@@ -1387,9 +1386,9 @@ mod tests {
         let display = |caps: &Capabilities| build_tabs(caps).into_iter().find(|(n, _)| *n == "DISPLAY").unwrap().1;
         assert_eq!(display(&Capabilities::DESKTOP), TABS[1].1);
         assert_eq!(display(&Capabilities::MOBILE), [Item::RenderScale, Item::FpsCap, Item::ShowFps, Item::HideNames, Item::BossName, Item::Exit]);
-        // No tab is left empty, so all six stay; the other tabs are as on a desktop.
+        // No tab is left empty, so all seven stay; the other tabs are as on a desktop.
         let tabs = build_tabs(&Capabilities::MOBILE);
-        assert_eq!(tabs.len(), 6);
+        assert_eq!(tabs.len(), 7);
         assert!(tabs.iter().zip(TABS).all(|((a, items), (b, all))| a == &b && (a == &"DISPLAY" || items == all)));
 
         // The cursor on RESOLUTION moves to EXIT when the row goes; on
